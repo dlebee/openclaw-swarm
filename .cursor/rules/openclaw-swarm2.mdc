@@ -11,7 +11,7 @@ alwaysApply: true
 ## CLI
 
 - Use **github.com/spf13/cobra** for commands, flags, and subcommands (same as openclaw-swarm `claws`).
-- Use the **Charm** stack for interactive UX and terminal presentation only: Bubble Tea, Huh, Lip Gloss, Bubbles, and Charm Log as needed.
+- Use the **Charm** stack for interactive UX and terminal presentation only: Bubble Tea, Huh, Lip Gloss, Bubbles, and Charm Log as needed (e.g. `claws manifest show` uses Lip Gloss tables + Bubble Tea viewport).
 - Do **not** add alternate terminal/table/progress “format” libraries for user-facing CLI output; keep presentation on Charm unless there is an explicit exception.
 
 ## Layout
