@@ -1,0 +1,24 @@
+---
+description: openclaw-swarm2 project home and CLI stack conventions
+alwaysApply: true
+---
+
+# openclaw-swarm2
+
+- Treat this repository as the primary workspace for new work (refactor successor to openclaw-swarm).
+- Prefer feature-oriented packages under `internal/` (e.g. manifests, ssh, configuration) with thin `cmd/cli` entrypoint (binary: build with `go build -o claws ./cmd/cli`).
+
+## CLI
+
+- Use **github.com/spf13/cobra** for commands, flags, and subcommands (same as openclaw-swarm `claws`).
+- Use the **Charm** stack for interactive UX and terminal presentation only: Bubble Tea, Huh, Lip Gloss, Bubbles, and Charm Log as needed.
+- Do **not** add alternate terminal/table/progress “format” libraries for user-facing CLI output; keep presentation on Charm unless there is an explicit exception.
+
+## Layout
+
+- **Manifest** YAML (`internal/manifests`) describes infrastructure only; **SSH identities** are Ed25519 PEM keys under `%APPDATA%/claws/ssh/keys/<name>/` (see `internal/ssh`), registered in **state** as `auth.ssh.identities` + `auth.ssh.current` (default `~/.config/claws/config.yaml`). CLI: `claws auth generate|use|list|delete`.
+- `internal/state` holds the kubeconfig-style registry (named manifests + `current` manifest) plus SSH auth; `DialSSH` uses the active identity from state.
+
+## Tests
+
+- Unit tests live next to code (`*_test.go`, `testdata/`). Keep slow or external integration tests in a separate tree or build tags, not in default `go test ./...`.

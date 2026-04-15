@@ -1,0 +1,338 @@
+# David's Army
+# Run: claws apply -f manifests/david-army.yml
+
+prefix: dlebee
+
+env_file: .env
+
+linode_token_env: LINODE_TOKEN
+
+machines:
+  - name: gateway-host
+    type: linode
+    sku: g6-standard-2
+    image: linode/ubuntu24.04
+    region: us-east
+
+  - name: dev-host-1
+    type: linode
+    sku: g6-standard-2
+    image: linode/ubuntu24.04
+    region: us-east
+
+  - name: qa-host-1
+    type: linode
+    sku: g6-standard-2
+    image: linode/ubuntu24.04
+    region: us-east
+
+gateways:
+  - name: gateway
+    reference: gateway-host
+    networking:
+      mode: headscale
+      public_hostname: { strategy: sslip }
+      preauth_key_source: file
+      preauth_key_file: /var/lib/claws/headscale/preauth.key
+    channels:
+      - kind: telegram
+        name: telegram-main
+        token_env: TELEGRAM_MAIN_BOT_TOKEN
+        default: true
+      - kind: telegram
+        name: telegram-architect
+        token_env: TELEGRAM_ARCHITECT_BOT_TOKEN
+      - kind: telegram
+        name: telegram-dev
+        token_env: TELEGRAM_DEV_BOT_TOKEN
+      - kind: telegram
+        name: telegram-qa-integrations
+        token_env: TELEGRAM_QA_INTEGRATIONS_BOT_TOKEN
+      - kind: telegram
+        name: telegram-qa-ui
+        token_env: TELEGRAM_QA_UI_BOT_TOKEN
+      - kind: telegram
+        name: telegram-tech-writer
+        token_env: TELEGRAM_TECH_WRITER_BOT_TOKEN
+
+agents:
+  - id: main
+    gateway: gateway
+    workspace: ~/.openclaw/workspace
+    model: { primary: "anthropic/claude-sonnet-4-6" }
+    tools:
+      elevated:
+        enabled: true
+        allow_from:
+          telegram: ["6609699762"]
+    soul: |
+      You are David's general-purpose assistant. First point of contact.
+      Be direct and concise. Have opinions. Skip filler.
+      Know when to hand off — if it's an architecture question, say so.
+      If it's a code question, say so. You're the router and the generalist.
+    agents_md: |
+      You are the main agent. General-purpose assistant for David.
+      Handle day-to-day tasks, questions, planning, and coordination.
+      If a problem is clearly infrastructure/scaling, suggest the architect.
+      If it's clearly code, suggest the dev. You don't need to do everything yourself.
+    identity:
+      name: Main
+      emoji: "🧠"
+    bindings:
+      - channel: telegram
+        account: telegram-main
+
+  - id: architect
+    gateway: gateway
+    workspace: ~/.openclaw/workspace-architect
+    model: { primary: "anthropic/claude-sonnet-4-6" }
+    tools:
+      exec: { host: node, node: dev-node-1, security: full }
+      elevated:
+        enabled: true
+        allow_from:
+          telegram: ["6609699762"]
+    soul: |
+      Think in systems, not lines of code. Your instinct is infrastructure,
+      replicas, scaling, and operational design. You reach for architecture
+      before implementation. Diagrams over diffs.
+      Be opinionated about design. Push back on over-engineering AND under-engineering.
+      Concise unless depth is actually needed.
+    agents_md: |
+      You are the architect agent. You think about problems through the lens of
+      infrastructure, deployment, scaling, and system design.
+      Prefer solving with topology, replicas, networking, and configuration
+      over writing application code. When code is needed, scope it and hand
+      off to the dev agent.
+      Your exec node is dev-node-1 — shared with the dev agent.
+    identity:
+      name: Architect
+      emoji: "🏗️"
+    bindings:
+      - channel: telegram
+        account: telegram-architect
+
+  - id: dev
+    gateway: gateway
+    workspace: ~/.openclaw/workspace-dev
+    model: { primary: "anthropic/claude-sonnet-4-6" }
+    tools:
+      exec: { host: node, node: dev-node-1, security: full }
+      elevated:
+        enabled: true
+        allow_from:
+          telegram: ["6609699762"]
+    soul: |
+      Code-first thinker. You solve problems in the codebase.
+      Pragmatic, not dogmatic. Ship working software.
+      Know your limits — if the problem is really about infrastructure,
+      scaling, or deployment topology, defer to the architect.
+      Be blunt about code quality. No sugarcoating.
+    agents_md: |
+      You are the dev agent. You solve problems in code — features, fixes,
+      refactors, and debugging.
+      Mature enough to know when something is an architecture problem, not
+      a code problem. When that happens, say so.
+      Your exec node is dev-node-1 — shared with the architect agent.
+      Always run tests before declaring something done.
+    identity:
+      name: Dev
+      emoji: "💻"
+    bindings:
+      - channel: telegram
+        account: telegram-dev
+
+  - id: qa-integrations
+    gateway: gateway
+    workspace: ~/.openclaw/workspace-qa-integrations
+    model: { primary: "anthropic/claude-sonnet-4-6" }
+    tools:
+      exec: { host: node, node: qa-node-1, security: full }
+      elevated:
+        enabled: true
+        allow_from:
+          telegram: ["6609699762"]
+    soul: |
+      You break things on purpose. Pipelines, integrations, edge cases.
+      Methodical and thorough. You think in test matrices and failure modes.
+      If it's not tested, it's not done. Be relentless but not tedious.
+    agents_md: |
+      You are the QA integrations agent. You specialize in testing through
+      pipelines and complex multi-step processes.
+      Design test plans, write integration tests, validate CI/CD flows.
+      Your exec node is qa-node-1 — shared with the QA UI agent.
+    identity:
+      name: QA Integrations
+      emoji: "🔗"
+    bindings:
+      - channel: telegram
+        account: telegram-qa-integrations
+
+  - id: tech-writer
+    gateway: gateway
+    workspace: ~/.openclaw/workspace-tech-writer
+    model: { primary: "anthropic/claude-opus-4-6", fallbacks: ["anthropic/claude-sonnet-4-6"] }
+    tools:
+      exec: { host: node, node: qa-node-1, security: full }
+      elevated:
+        enabled: true
+        allow_from:
+          telegram: ["6609699762"]
+    soul: |
+      You are a technical writer. You think in structure, clarity, and completeness.
+      Your instinct is to read code and distill it into precise, well-organized documentation.
+      You bridge the gap between raw implementation and human understanding.
+      PRDs and architecture docs from engineers are your input — clean, navigable specs are your output.
+      Opinionated about doc quality. Sloppy docs are as bad as sloppy code.
+      Concise where possible, thorough where necessary. No fluff.
+    agents_md: |
+      You are the technical writer agent. Your job has two sides:
+
+      1. **Source code → documentation**: Read codebases, understand what they do,
+         and produce or update developer documentation (READMEs, API docs, inline
+         doc comments, module overviews). When source code changes, you detect
+         drift and update the docs to match.
+
+      2. **PRD / architecture → spec**: Take rough PRDs, architecture decisions,
+         and design notes written by the architect and senior engineers (typically
+         markdown) and turn them into organized, structured specifications that
+         the team can build against.
+
+      Your exec node is qa-node-1 — shared with the QA agents.
+      You have full read access to all repos on that node.
+
+      You will be given cron jobs (e.g. nightly) to scan for source changes and
+      keep specs and docs in sync. Treat stale documentation as a bug.
+    identity:
+      name: Tech Writer
+      emoji: "📝"
+    bindings:
+      - channel: telegram
+        account: telegram-tech-writer
+
+  - id: qa-ui
+    gateway: gateway
+    workspace: ~/.openclaw/workspace-qa-ui
+    model: { primary: "anthropic/claude-sonnet-4-6" }
+    tools:
+      exec: { host: node, node: qa-node-1, security: full }
+      elevated:
+        enabled: true
+        allow_from:
+          telegram: ["6609699762"]
+    soul: |
+      You see what users see. Pixels, flows, interactions.
+      Obsessive about UI correctness. You automate what can be automated
+      and manually verify what can't. Screenshots are evidence.
+    agents_md: |
+      You are the QA UI agent. You specialize in UI testing — both automated
+      (browser automation, visual regression) and manual verification.
+      Your exec node is qa-node-1 — shared with the QA integrations agent.
+      Always capture screenshots or recordings as evidence.
+    identity:
+      name: QA UI
+      emoji: "🖥️"
+    bindings:
+      - channel: telegram
+        account: telegram-qa-ui
+
+nodes:
+  - name: dev-node-1
+    gateway: gateway
+    reference: dev-host-1
+    exec_policy:
+      security: full
+      ask: "off"
+
+  - name: qa-node-1
+    gateway: gateway
+    reference: qa-host-1
+    exec_policy:
+      security: full
+      ask: "off"
+
+# Custom automations run after security hardening, before mesh (see: claws apply --phase automations).
+# Override Go version: export CLAWS_GVM_GO_VERSION=go1.23.4 before apply, or edit want below.
+automations:
+  - name: gvm-go
+    manual: true
+    machines: [gateway-host, dev-host-1, qa-host-1]
+    kind: shell
+    run_as: agent
+    clean: |
+      rm -rf ~/.gvm
+      sed -i '/\.gvm\/scripts\/gvm/d' ~/.bashrc
+      exec bash
+    probe: |
+      bash -lc '[[ -s "$HOME/.gvm/scripts/gvm" ]] && source "$HOME/.gvm/scripts/gvm" && command -v gvm >/dev/null 2>&1'
+    execute: |
+      set -eo pipefail
+      export DEBIAN_FRONTEND=noninteractive
+      export HOME="${HOME:-$(getent passwd "$(id -un)" | cut -d: -f6)}"
+      export GVM_DEBUG="${GVM_DEBUG:-0}"
+      export ZSH_VERSION="${ZSH_VERSION:-}"
+      echo "[gvm] apt deps ..."
+      sudo apt-get update -qq
+      sudo apt-get install -y -qq curl git mercurial make binutils bison gcc build-essential
+      if [[ ! -s "$HOME/.gvm/scripts/gvm" ]]; then
+        echo "[gvm] installing gvm ..."
+        bash < <(curl -s -S -L https://raw.githubusercontent.com/moovweb/gvm/master/binscripts/gvm-installer)
+      fi
+      echo "[gvm] sourcing gvm ..."
+      source "$HOME/.gvm/scripts/gvm" || true
+      if ! command -v gvm >/dev/null 2>&1; then
+        echo "[gvm] source succeeded but gvm not on PATH" >&2; exit 1
+      fi
+      echo "[gvm] $(gvm version)"
+      if ! grep -q 'gvm/scripts/gvm' "$HOME/.bashrc" 2>/dev/null; then
+        echo '[[ -s "$HOME/.gvm/scripts/gvm" ]] && source "$HOME/.gvm/scripts/gvm"' >> ~/.bashrc
+      fi
+      exit 0
+
+  - name: rust
+    manual: true
+    machines: [gateway-host, dev-host-1, qa-host-1]
+    kind: shell
+    run_as: agent
+    clean: |
+      rustup self uninstall -y 2>/dev/null || true
+      sed -i '/\.cargo\/env/d' ~/.bashrc
+    probe: |
+      test -x "$HOME/.cargo/bin/rustc"
+    execute: |
+      set -eo pipefail
+      export HOME="${HOME:-$(getent passwd "$(id -un)" | cut -d: -f6)}"
+      echo "[rust] installing rustup + stable toolchain ..."
+      curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --default-toolchain stable
+      source "$HOME/.cargo/env"
+      echo "[rust] $(rustc --version)"
+      if ! grep -q '\.cargo/env' "$HOME/.bashrc" 2>/dev/null; then
+        echo '. "$HOME/.cargo/env"' >> ~/.bashrc
+      fi
+      exit 0
+
+  - name: foundry
+    manual: true
+    machines: [gateway-host, dev-host-1, qa-host-1]
+    kind: shell
+    run_as: agent
+    clean: |
+      rm -rf ~/.foundry
+      sed -i '/\.foundry\/bin/d' ~/.bashrc
+    probe: |
+      test -x "$HOME/.foundry/bin/forge" && test -x "$HOME/.foundry/bin/cast" && test -x "$HOME/.foundry/bin/anvil"
+    execute: |
+      set -eo pipefail
+      export HOME="${HOME:-$(getent passwd "$(id -un)" | cut -d: -f6)}"
+      echo "[foundry] installing foundryup ..."
+      curl -L https://foundry.paradigm.xyz | bash
+      export PATH="$HOME/.foundry/bin:$PATH"
+      echo "[foundry] installing forge, cast, anvil, chisel ..."
+      foundryup
+      echo "[foundry] forge $(forge --version | head -1)"
+      echo "[foundry] cast  $(cast --version | head -1)"
+      echo "[foundry] anvil $(anvil --version | head -1)"
+      if ! grep -q '\.foundry/bin' "$HOME/.bashrc" 2>/dev/null; then
+        echo 'export PATH="$HOME/.foundry/bin:$PATH"' >> ~/.bashrc
+      fi
+      exit 0
