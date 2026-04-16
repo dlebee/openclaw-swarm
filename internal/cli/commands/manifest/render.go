@@ -313,10 +313,14 @@ func automationsTable(rows []data.Automation, w int) string {
 	t := table.New().
 		Border(lipgloss.RoundedBorder()).
 		BorderStyle(lipgloss.NewStyle().Foreground(lipgloss.Color("99"))).
-		Headers("Name", "Kind", "Machines").
+		Headers("Name", "Steps", "Machines", "Manual").
 		Width(w)
 	for _, r := range rows {
-		t.Row(r.Name, emptyDash(r.Kind), strings.Join(r.Machines, ", "))
+		manual := "no"
+		if r.Manual {
+			manual = "yes"
+		}
+		t.Row(r.Name, fmt.Sprintf("%d", len(r.Steps)), strings.Join(r.Machines, ", "), manual)
 	}
 	return t.String()
 }

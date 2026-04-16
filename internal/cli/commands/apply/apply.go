@@ -22,7 +22,7 @@ import (
 
 // ApplyCmd returns the `claws apply` command.
 func ApplyCmd(manifestFile *string) *cobra.Command {
-	var dryRun, prettyPlan bool
+	var dryRun, prettyPlan, includeManualAutomations bool
 	cmd := &cobra.Command{
 		Use:   "apply",
 		Short: "Apply manifest infrastructure",
@@ -71,11 +71,12 @@ func ApplyCmd(manifestFile *string) *cobra.Command {
 			}
 
 			plan, err := planapply.BuildPlan(planapply.BuildOptions{
-				Manifest:     m,
-				ManifestPath: abs,
-				Provider:     prov,
-				SSHPubKey:    sshPub,
-				SSHDial:      sshDial,
+				Manifest:                 m,
+				ManifestPath:             abs,
+				Provider:                 prov,
+				SSHPubKey:                sshPub,
+				SSHDial:                  sshDial,
+				IncludeManualAutomations: includeManualAutomations,
 			})
 			if err != nil {
 				return err
@@ -106,6 +107,7 @@ func ApplyCmd(manifestFile *string) *cobra.Command {
 	}
 	cmd.Flags().BoolVar(&dryRun, "dry-run", false, "print plan and skip cloud mutations")
 	cmd.Flags().BoolVar(&prettyPlan, "pretty-plan", false, "show plan in a scrollable Bubble Tea viewport (TTY only; falls back to inline)")
+	cmd.Flags().BoolVar(&includeManualAutomations, "include-manual-automations", false, "also run automations flagged manual: true")
 	return cmd
 }
 

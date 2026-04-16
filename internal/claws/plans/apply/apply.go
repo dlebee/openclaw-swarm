@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
 	"strings"
 
 	"github.com/gluwa/openclaw-swarm2/internal/claws/plans/apply/agents"
@@ -16,6 +17,7 @@ import (
 	"github.com/gluwa/openclaw-swarm2/internal/claws/plans/apply/node"
 	"github.com/gluwa/openclaw-swarm2/internal/claws/plans/apply/provisioning"
 	"github.com/gluwa/openclaw-swarm2/internal/claws/plans/apply/security"
+	"github.com/gluwa/openclaw-swarm2/internal/claws/plans/automations"
 	"github.com/gluwa/openclaw-swarm2/internal/hosting"
 	"github.com/gluwa/openclaw-swarm2/internal/hosting/linode"
 	manifestdata "github.com/gluwa/openclaw-swarm2/internal/manifests/data"
@@ -33,6 +35,9 @@ type BuildOptions struct {
 	SSHPubKey    string
 	// SSHDial is required when the manifest has any Linode machine (authorize-ssh-key step).
 	SSHDial provisioning.SSHDialFunc
+	// IncludeManualAutomations also injects automations with manual=true into
+	// the pipeline. By default only non-manual ones are included.
+	IncludeManualAutomations bool
 }
 
 // BuildPlan returns a scaffold plan: phases are appended in apply order (provisioning first).
@@ -55,6 +60,18 @@ func BuildPlan(o BuildOptions) (*scaffold.Plan, error) {
 	security.AddPhase(p, targets, security.Options{
 		SSHDial: security.SSHDialFunc(o.SSHDial),
 	})
+	if len(o.Manifest.Automations) > 0 {
+		autoOpts := automations.Options{
+			SSHDial:             automations.SSHDialFunc(o.SSHDial),
+			ManifestDir:         manifestDir(o.ManifestPath),
+			MachineTargets:      targets,
+			AssumeWillProvision: true,
+		}
+		automations.AddPhases(p, o.Manifest.Automations, autoOpts, false)
+		if o.IncludeManualAutomations {
+			automations.AddPhases(p, o.Manifest.Automations, autoOpts, true)
+		}
+	}
 	mesh.AddPhase(p, targets, mesh.Options{
 		SSHDial:  mesh.SSHDialFunc(o.SSHDial),
 		Machines: o.Manifest.Machines,
@@ -161,6 +178,13 @@ func Run(ctx context.Context, plan *scaffold.Plan, o RunOptions) error {
 		PrettyPlan:        o.PrettyPlan,
 		TeaProgressWriter: teaWriter,
 	})
+}
+
+func manifestDir(manifestPath string) string {
+	if manifestPath == "" {
+		return ""
+	}
+	return filepath.Dir(manifestPath)
 }
 
 func needsLinodeToken(machines []manifestdata.Machine) bool {

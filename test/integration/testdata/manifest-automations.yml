@@ -1,0 +1,52 @@
+# Test manifest for automations dry-run verification.
+# Two machines, two automations (one auto, one manual).
+
+prefix: auto-test
+
+machines:
+  - name: gateway-host
+    type: ssh
+    host: 127.0.0.1
+    ssh_port: 2222
+    arch: linux-x64
+    agent_user: agent
+
+  - name: scraper-host
+    type: ssh
+    host: 127.0.0.1
+    ssh_port: 2223
+    arch: linux-x64
+    agent_user: agent
+
+gateways:
+  - name: gateway
+    reference: gateway-host
+    networking:
+      mode: docker
+    openclaw_version: latest
+
+automations:
+  - name: setup-monitoring
+    machines: [gateway-host, scraper-host]
+    concurrency: 2
+    steps:
+      - name: install-prometheus
+        kind: bash
+        check: systemctl is-active --quiet prometheus
+        execute: |
+          apt-get update && apt-get install -y prometheus
+        verify: curl -sf http://localhost:9090/-/healthy
+      - name: configure-alertmanager
+        kind: bash
+        execute: |
+          echo "alertmanager configured"
+
+  - name: run-migration
+    machines: [gateway-host]
+    manual: true
+    steps:
+      - name: migrate-db
+        kind: python
+        check: python3 -c "import sys; sys.exit(0)"
+        execute: |
+          print("migration complete")

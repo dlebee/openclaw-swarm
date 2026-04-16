@@ -43,19 +43,33 @@ type Manifest struct {
 	Automations        []Automation        `yaml:"automations,omitempty"`
 }
 
-// Automation runs custom probe/execute scripts on selected machines.
+// Automation is a user-defined phase with custom steps. Each automation
+// becomes one scaffold phase targeting the listed machines.
+// Non-manual automations are included in `claws apply`; manual ones
+// run only via `claws automations apply`.
 type Automation struct {
-	Name        string   `yaml:"name"`
-	Machines    []string `yaml:"machines"`
-	Kind        string   `yaml:"kind,omitempty"`
-	RunAs       string   `yaml:"run_as,omitempty"`
-	Manual      bool     `yaml:"manual,omitempty"`
-	Probe       string   `yaml:"probe,omitempty"`
-	Execute     string   `yaml:"execute,omitempty"`
-	Clean       string   `yaml:"clean,omitempty"`
-	ProbeFile   string   `yaml:"probe_file,omitempty"`
-	ExecuteFile string   `yaml:"execute_file,omitempty"`
-	CleanFile   string   `yaml:"clean_file,omitempty"`
+	Name        string           `yaml:"name"`
+	Machines    []string         `yaml:"machines"`
+	Manual      bool             `yaml:"manual,omitempty"`
+	Concurrency int              `yaml:"concurrency,omitempty"`
+	RunAs       string           `yaml:"run_as,omitempty"`
+	Steps       []AutomationStep `yaml:"steps"`
+}
+
+// AutomationStep is one unit of work inside an automation phase.
+// Lifecycle scripts map directly to scaffold step methods.
+type AutomationStep struct {
+	Name           string `yaml:"name"`
+	Kind           string `yaml:"kind,omitempty"`
+	RunAs          string `yaml:"run_as,omitempty"`
+	Applicable     string `yaml:"applicable,omitempty"`
+	ApplicableFile string `yaml:"applicable_file,omitempty"`
+	Check          string `yaml:"check,omitempty"`
+	CheckFile      string `yaml:"check_file,omitempty"`
+	Execute        string `yaml:"execute,omitempty"`
+	ExecuteFile    string `yaml:"execute_file,omitempty"`
+	Verify         string `yaml:"verify,omitempty"`
+	VerifyFile     string `yaml:"verify_file,omitempty"`
 }
 
 // Machine is a host entry (cloud or static SSH).
