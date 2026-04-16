@@ -38,7 +38,7 @@ Items are grouped by area; checked items are implemented in swarm2.
 Items from v1 that manipulated JSON files directly instead of using `openclaw` CLI commands. Suspected problems from bypassing the CLI. Re-evaluate once we confirm whether the CLI covers these use cases natively.
 
 - [x] **Node exec-policy** — `openclaw exec-policy set --security <val> --ask <val>` (clean CLI, no JSON manipulation)
-- [ ] **Exec-approvals on gateway** — per-agent security overrides in `~/.openclaw/exec-approvals.json` (v1 wrote raw JSON; testing whether `agents.list[N].tools.exec.security` via `openclaw config set` is sufficient)
+- [x] **Exec-approvals on gateway** — NOT NEEDED. `agents.list[N].tools.exec.security` via `openclaw config set` is sufficient. Integration test confirms full exec pipeline works without `exec-approvals.json`. See `docs/missconceptions/exec-policy.md`.
 - [ ] **Auth-profiles** — ensure `<agentDir>/auth-profiles.json` exists (v1 copied from main agent or seeded empty JSON; unclear if the CLI handles this automatically now)
 - [ ] **Memory notice** — write a dated memory notice on first workspace creation (nice-to-have, low priority)
 
