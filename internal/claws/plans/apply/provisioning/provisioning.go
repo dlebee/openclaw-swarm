@@ -1,4 +1,5 @@
-// Package provisioning is the provisioning phase of the apply plan (create-machine, then authorize-ssh-key).
+// Package provisioning is the provisioning phase of the apply plan
+// (create-machine, authorize-ssh-key, ensure-agent-user).
 package provisioning
 
 import (
@@ -47,6 +48,7 @@ func AddPhase(p *scaffold.Plan, targets []scaffold.Target, opts Options) *scaffo
 
 	ph.AddStep(NewCreateMachineStep(opts))
 	ph.AddStep(NewAuthorizeSSHKeyStep(opts))
+	ph.AddStep(NewEnsureAgentUserStep(opts))
 
 	return ph
 }
