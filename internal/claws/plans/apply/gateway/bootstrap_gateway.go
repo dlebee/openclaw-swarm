@@ -35,17 +35,17 @@ func (s *BootstrapGatewayStep) Applicable(ctx context.Context, t scaffold.Target
 	m := gt.Machine
 	client, key, err := borrowSSH(ctx, s.dial, machineHost(m), machineSSHPort(m), machineSSHUser(m))
 	if err != nil {
-		return false, nil
+		return true, nil // host unreachable → assume not yet bootstrapped
 	}
 	defer returnSSH(ctx, key, client)
 
 	home, err := ResolveHome(client)
 	if err != nil {
-		return false, fmt.Errorf("bootstrap-gateway: %w", err)
+		return true, nil
 	}
 	exists, err := ConfigExists(client, home)
 	if err != nil {
-		return false, fmt.Errorf("bootstrap-gateway: %w", err)
+		return true, nil
 	}
 	return !exists, nil
 }

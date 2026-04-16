@@ -3,6 +3,7 @@ package systemd
 import (
 	"context"
 	"fmt"
+	"sort"
 	"strings"
 	"time"
 
@@ -212,6 +213,99 @@ func WaitActive(ctx context.Context, client *xssh.Client, unit string, userMode 
 		}
 	}
 	return fmt.Errorf("systemd: %s not active after %d checks", unit, retries)
+}
+
+// dropInDir returns the drop-in directory for a unit's override fragments.
+func dropInDir(unit string, userMode bool) string {
+	svc := unit + ".service.d"
+	if userMode {
+		return "$HOME/.config/systemd/user/" + svc
+	}
+	return "/etc/systemd/system/" + svc
+}
+
+// WriteEnvDropIn writes (or overwrites) an environment drop-in override for an
+// existing unit. The drop-in adds [Service] Environment= lines for each key in
+// env. Pass an empty map to remove the drop-in. After writing, daemon-reload is
+// issued automatically.
+func WriteEnvDropIn(client *xssh.Client, unit string, userMode bool, env map[string]string) error {
+	if err := validateUnit(unit); err != nil {
+		return err
+	}
+	ctl, xdg := ctlPrefix(userMode)
+	dir := dropInDir(unit, userMode)
+
+	if len(env) == 0 {
+		script := fmt.Sprintf(`set -euo pipefail
+%srm -f %s/env.conf
+%s daemon-reload
+`, xdg, dir, ctl)
+		return sshutil.RunBashStdin(client, script)
+	}
+
+	keys := make([]string, 0, len(env))
+	for k := range env {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+
+	var body strings.Builder
+	body.WriteString("[Service]\n")
+	for _, k := range keys {
+		fmt.Fprintf(&body, "Environment=%s=%s\n", k, env[k])
+	}
+
+	var mkdirCmd string
+	if userMode {
+		mkdirCmd = fmt.Sprintf("mkdir -p %s", dir)
+	} else {
+		mkdirCmd = fmt.Sprintf("sudo mkdir -p %s", dir)
+	}
+
+	var writeCmd string
+	if userMode {
+		writeCmd = fmt.Sprintf("cat > %s/env.conf << 'ENVEOF'\n%sENVEOF", dir, body.String())
+	} else {
+		writeCmd = fmt.Sprintf("sudo tee %s/env.conf > /dev/null << 'ENVEOF'\n%sENVEOF", dir, body.String())
+	}
+
+	script := fmt.Sprintf(`set -euo pipefail
+%s%s
+%s
+%s daemon-reload
+`, xdg, mkdirCmd, writeCmd, ctl)
+	return sshutil.RunBashStdin(client, script)
+}
+
+// ReadEnvDropIn reads the env.conf drop-in for a unit and returns the
+// environment variables as a map. Returns an empty map if no drop-in exists.
+func ReadEnvDropIn(client *xssh.Client, unit string, userMode bool) (map[string]string, error) {
+	if err := validateUnit(unit); err != nil {
+		return nil, err
+	}
+	_, xdg := ctlPrefix(userMode)
+	dir := dropInDir(unit, userMode)
+
+	script := fmt.Sprintf(`set -uo pipefail
+%scat %s/env.conf 2>/dev/null || true
+`, xdg, dir)
+	out, err := sshutil.RunBashStdinOutput(client, script)
+	if err != nil {
+		return nil, err
+	}
+
+	env := make(map[string]string)
+	for _, line := range strings.Split(out, "\n") {
+		line = strings.TrimSpace(line)
+		if !strings.HasPrefix(line, "Environment=") {
+			continue
+		}
+		kv := strings.TrimPrefix(line, "Environment=")
+		if idx := strings.IndexByte(kv, '='); idx > 0 {
+			env[kv[:idx]] = kv[idx+1:]
+		}
+	}
+	return env, nil
 }
 
 // EnableLingering enables user lingering so user services start without a login session.

@@ -133,22 +133,22 @@ func HealthCheck(client *xssh.Client, retries int, delay time.Duration) error {
 	return fmt.Errorf("gateway not listening on :%d after %d attempts", gatewayPort, retries)
 }
 
-// RestartAndWait restarts the gateway systemd unit and waits until it is
-// active. userMode controls --user vs sudo systemctl.
+// RestartAndWait restarts the gateway systemd unit and waits until port
+// 18789 is listening (more reliable than systemd is-active in containers).
 func RestartAndWait(ctx context.Context, client *xssh.Client, userMode bool) error {
 	if err := systemd.Restart(client, gatewayUnit, userMode); err != nil {
 		return fmt.Errorf("restart %s: %w", gatewayUnit, err)
 	}
-	return systemd.WaitActive(ctx, client, gatewayUnit, userMode, waitRetries, waitDelay)
+	return HealthCheck(client, waitRetries, waitDelay)
 }
 
 // StartAndWait enables and starts the gateway systemd unit, then waits
-// until it is active.
+// until port 18789 is listening.
 func StartAndWait(ctx context.Context, client *xssh.Client, userMode bool) error {
 	if err := systemd.EnableNow(client, gatewayUnit, userMode); err != nil {
 		return fmt.Errorf("enable+start %s: %w", gatewayUnit, err)
 	}
-	return systemd.WaitActive(ctx, client, gatewayUnit, userMode, waitRetries, waitDelay)
+	return HealthCheck(client, waitRetries, waitDelay)
 }
 
 // ReadConfigValue reads a single openclaw config value from the remote host.

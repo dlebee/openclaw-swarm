@@ -6,7 +6,9 @@ import (
 	"fmt"
 	"strings"
 
+	manifestdata "github.com/gluwa/openclaw-swarm2/internal/manifests/data"
 	"github.com/gluwa/openclaw-swarm2/internal/platformutil/bash"
+	"github.com/gluwa/openclaw-swarm2/internal/platformutil/systemd"
 	"github.com/gluwa/openclaw-swarm2/internal/scaffold"
 )
 
@@ -56,12 +58,34 @@ func (s *ConfigureGatewayStep) Check(ctx context.Context, t scaffold.Target) (bo
 	if currentMode != "local" || currentBind != desiredBind {
 		return false, nil
 	}
+
+	desiredEnv := gatewayEnv(gt.Spec)
+	currentEnv, err := systemd.ReadEnvDropIn(client, gatewayUnit, true)
+	if err != nil {
+		return false, nil
+	}
+	for k, v := range desiredEnv {
+		if currentEnv[k] != v {
+			return false, nil
+		}
+	}
+
 	return true, nil
 }
 
 type batchEntry struct {
 	Path  string      `json:"path"`
 	Value interface{} `json:"value"`
+}
+
+// gatewayEnv returns the desired systemd environment variables for the
+// gateway unit based on the manifest networking configuration.
+func gatewayEnv(gw manifestdata.Gateway) map[string]string {
+	env := make(map[string]string)
+	if NeedsInsecureWS(gw) {
+		env["OPENCLAW_ALLOW_INSECURE_PRIVATE_WS"] = "1"
+	}
+	return env
 }
 
 // Execute applies the correct gateway.mode and gateway.bind via
@@ -85,22 +109,21 @@ func (s *ConfigureGatewayStep) Execute(ctx context.Context, t scaffold.Target) e
 		return fmt.Errorf("configure-gateway: marshal batch: %w", err)
 	}
 
-	var envPrefix string
-	if NeedsInsecureWS(gt.Spec) {
-		envPrefix = "OPENCLAW_ALLOW_INSECURE_PRIVATE_WS=1 "
-	}
-
 	script := fmt.Sprintf(`set -euo pipefail
-%sopenclaw config set --batch-json '%s'
-`, envPrefix, string(batchJSON))
+openclaw config set --batch-json '%s'
+`, string(batchJSON))
 
 	out, err := bash.RunOutput(client, script)
 	if err != nil {
 		return fmt.Errorf("configure-gateway: config set: %w\n%s", err, out)
 	}
 
-	userMode := true
-	if err := RestartAndWait(ctx, client, userMode); err != nil {
+	desiredEnv := gatewayEnv(gt.Spec)
+	if err := systemd.WriteEnvDropIn(client, gatewayUnit, true, desiredEnv); err != nil {
+		return fmt.Errorf("configure-gateway: write env drop-in: %w", err)
+	}
+
+	if err := RestartAndWait(ctx, client, true); err != nil {
 		return fmt.Errorf("configure-gateway: %w", err)
 	}
 
@@ -134,6 +157,15 @@ func (s *ConfigureGatewayStep) Verify(ctx context.Context, t scaffold.Target) er
 	if currentBind != desiredBind {
 		drifts = append(drifts, fmt.Sprintf("gateway.bind=%q want %q", currentBind, desiredBind))
 	}
+
+	desiredEnv := gatewayEnv(gt.Spec)
+	currentEnv, _ := systemd.ReadEnvDropIn(client, gatewayUnit, true)
+	for k, v := range desiredEnv {
+		if currentEnv[k] != v {
+			drifts = append(drifts, fmt.Sprintf("env %s=%q want %q", k, currentEnv[k], v))
+		}
+	}
+
 	if len(drifts) > 0 {
 		return fmt.Errorf("configure-gateway verify: still drifted: %s", strings.Join(drifts, "; "))
 	}
