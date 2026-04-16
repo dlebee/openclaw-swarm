@@ -80,6 +80,29 @@ func RunWithConflictRetry(client *xssh.Client, script string) error {
 	return fmt.Errorf("config conflict after %d retries: %w", conflictRetries, lastErr)
 }
 
+// PairChannel approves a channel pairing request on the gateway via
+// `openclaw pairing approve <kind> <code>`.
+func PairChannel(client *xssh.Client, kind, code string) error {
+	script := fmt.Sprintf(`openclaw pairing approve %s %q`, kind, code)
+	out, err := bash.RunOutput(client, script)
+	if err != nil {
+		return fmt.Errorf("pair channel %s: %w\n%s", kind, err, out)
+	}
+	return nil
+}
+
+// RemoveChannelAccount removes a channel account via
+// `openclaw channels remove --channel <kind> --account <name> --delete`.
+func RemoveChannelAccount(client *xssh.Client, kind, name string) error {
+	script := fmt.Sprintf(
+		`openclaw channels remove --channel %s --account %q --delete`,
+		kind, name)
+	if err := RunWithConflictRetry(client, script); err != nil {
+		return fmt.Errorf("remove channel %s/%s: %w", kind, name, err)
+	}
+	return nil
+}
+
 // extractJSON finds the first occurrence of startChar in the output and
 // returns from there onward. Handles non-JSON preamble from the CLI.
 func extractJSON(s string, startChar byte) string {

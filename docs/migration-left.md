@@ -15,9 +15,9 @@ Items are grouped by area; checked items are implemented in swarm2.
 ## Channels
 
 - [x] `openclaw channels add` — register Telegram/Slack/Discord bot accounts from `token_env`
-- [ ] `openclaw channels remove` — tear down channel accounts (part of `claws clean`)
+- [x] `openclaw channels remove` — tear down channel accounts (`claws clean channels`)
 - [x] Default account selection (`channels.<kind>.defaultAccount`)
-- [ ] Channel pairing / approval (`openclaw pairing approve`) — separate from apply, interactive
+- [x] Channel pairing / approval (`claws channels pair` — interactive, `openclaw pairing approve`)
 - [x] `ConfigMutationConflictError` retry logic
 
 ## Automations
@@ -47,11 +47,12 @@ Items from v1 that manipulated JSON files directly instead of using `openclaw` C
 
 - [x] `claws apply`
 - [x] `claws destroy` (plan exists)
-- [ ] `claws clean` — remove orphaned machines/nodes/agents/channels not in manifest
+- [x] `claws clean channels` — remove orphaned channel accounts (extensible to machines/nodes/agents)
 - [ ] `claws status` — live dashboard of all resources
 - [ ] `claws ssh` — SSH into a manifest machine
 - [ ] `claws run` — execute manual automations
-- [ ] `claws machines` / `gateways` / `nodes` / `channels` — list subcommands
+- [x] `claws channels pair` — interactive channel pairing
+- [ ] `claws machines` / `gateways` / `nodes` — list subcommands
 
 ## Intentionally dropped
 
