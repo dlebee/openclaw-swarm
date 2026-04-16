@@ -9,8 +9,10 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/charmbracelet/huh"
 	gwsvc "github.com/gluwa/openclaw-swarm2/internal/claws/plans/apply/gateway"
@@ -39,13 +41,17 @@ func GatewaysCmd(manifestFile *string) *cobra.Command {
 func dashboardCmd(manifestFile *string) *cobra.Command {
 	var localPort int
 	var name string
+	var openBrowser bool
+	var printURL bool
 	cmd := &cobra.Command{
 		Use:   "dashboard [gateway]",
 		Short: "Open the gateway dashboard via SSH port forward",
 		Long: strings.TrimSpace(`
-Forwards the gateway's HTTP port (18789) to a local port via SSH and prints
-the dashboard URL (including #token=... when the gateway auth token can be
-read from openclaw.json). Keep the command running; press Ctrl+C to stop.`),
+Forwards the gateway's HTTP port (18789) to a local port via SSH. By default
+launches the system browser at http://localhost:<port>#token=... once the
+tunnel is ready, and keeps the forward open until you press Ctrl+C. Pass
+--no-open to skip the browser launch, or --print-url to also echo the URL
+(with the auth token) to the console.`),
 		Args: cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			m, err := loadManifest(manifestFile)
@@ -76,7 +82,6 @@ read from openclaw.json). Keep the command running; press Ctrl+C to stop.`),
 			}
 
 			token := readGatewayToken(store, host, port, user)
-
 			dashURL := fmt.Sprintf("http://localhost:%d", localPort)
 			if token != "" {
 				dashURL = fmt.Sprintf("%s#token=%s", dashURL, token)
@@ -85,11 +90,9 @@ read from openclaw.json). Keep the command running; press Ctrl+C to stop.`),
 			out := cmd.OutOrStdout()
 			fmt.Fprintf(out, "⟳ forwarding %s (%s) port %d → localhost:%d ...\n",
 				gw.Name, host, gatewayHTTPPort, localPort)
-			fmt.Fprintf(out, "  Dashboard: %s\n", dashURL)
 			if token == "" {
 				fmt.Fprintln(out, "  (no gateway auth token yet — run 'claws apply' first)")
 			}
-			fmt.Fprintln(out, "  Press Ctrl+C to stop.")
 
 			sshArgs := []string{
 				"-o", "StrictHostKeyChecking=no",
@@ -104,11 +107,42 @@ read from openclaw.json). Keep the command running; press Ctrl+C to stop.`),
 			c.Stdin = os.Stdin
 			c.Stdout = os.Stdout
 			c.Stderr = os.Stderr
-			return c.Run()
+			if err := c.Start(); err != nil {
+				return fmt.Errorf("start ssh: %w", err)
+			}
+
+			// Wait for the local forward to accept connections before launching
+			// the browser. On failure, still surface the URL so the user can
+			// retry manually.
+			ready := waitLocalPort(localPort, 10*time.Second)
+			switch {
+			case !ready:
+				fmt.Fprintln(out, "  (tunnel did not become ready within 10s — check ssh output above)")
+				if !printURL {
+					fmt.Fprintf(out, "  Dashboard: %s\n", dashURL)
+				}
+			case openBrowser:
+				if err := openInBrowser(dashURL); err != nil {
+					fmt.Fprintf(out, "  could not open browser: %v\n", err)
+					fmt.Fprintf(out, "  Dashboard: %s\n", dashURL)
+				} else {
+					fmt.Fprintln(out, "  Dashboard opened in browser.")
+				}
+			default:
+				fmt.Fprintf(out, "  Dashboard: %s\n", dashURL)
+			}
+			if printURL && (ready && openBrowser) {
+				fmt.Fprintf(out, "  Dashboard: %s\n", dashURL)
+			}
+			fmt.Fprintln(out, "  Press Ctrl+C to stop.")
+
+			return c.Wait()
 		},
 	}
 	cmd.Flags().IntVarP(&localPort, "port", "p", 18789, "local port to bind")
 	cmd.Flags().StringVar(&name, "name", "", "gateway name (overrides positional arg)")
+	cmd.Flags().BoolVar(&openBrowser, "open", true, "open the dashboard in the system browser")
+	cmd.Flags().BoolVar(&printURL, "print-url", false, "print the dashboard URL (with token) even when the browser is opened")
 	return cmd
 }
 
@@ -269,6 +303,44 @@ func sshEndpoint(mach *manifestdata.Machine) (host string, port int, user string
 		user = "root"
 	}
 	return host, port, user, nil
+}
+
+// waitLocalPort polls 127.0.0.1:port until a TCP connection succeeds, or the
+// timeout elapses. Returns true on success.
+func waitLocalPort(port int, timeout time.Duration) bool {
+	addr := net.JoinHostPort("127.0.0.1", strconv.Itoa(port))
+	deadline := time.Now().Add(timeout)
+	for time.Now().Before(deadline) {
+		conn, err := net.DialTimeout("tcp", addr, 500*time.Millisecond)
+		if err == nil {
+			_ = conn.Close()
+			return true
+		}
+		time.Sleep(200 * time.Millisecond)
+	}
+	return false
+}
+
+// openInBrowser launches the platform default browser at the given URL.
+// The returned error is non-nil when the launcher itself fails to start;
+// success only guarantees that the helper command was invoked, not that the
+// user's browser actually rendered the page.
+func openInBrowser(url string) error {
+	var bin string
+	var args []string
+	switch runtime.GOOS {
+	case "darwin":
+		bin = "open"
+		args = []string{url}
+	case "windows":
+		bin = "rundll32"
+		args = []string{"url.dll,FileProtocolHandler", url}
+	default:
+		bin = "xdg-open"
+		args = []string{url}
+	}
+	c := exec.Command(bin, args...)
+	return c.Start()
 }
 
 // readGatewayToken opens a short-lived SSH session to read the gateway auth
