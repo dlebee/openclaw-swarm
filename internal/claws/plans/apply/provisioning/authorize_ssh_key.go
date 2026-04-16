@@ -9,6 +9,8 @@ import (
 	manifestdata "github.com/gluwa/openclaw-swarm2/internal/manifests/data"
 	"github.com/gluwa/openclaw-swarm2/internal/platformutil/sshkeys"
 	"github.com/gluwa/openclaw-swarm2/internal/scaffold"
+	clawssh "github.com/gluwa/openclaw-swarm2/internal/ssh"
+	xssh "golang.org/x/crypto/ssh"
 )
 
 // AuthorizeSSHKeyStep ensures the active CLI public key is present in the target
@@ -62,14 +64,17 @@ func (a *AuthorizeSSHKeyStep) Check(ctx context.Context, t scaffold.Target) (sat
 	if host == "" {
 		return false, nil
 	}
-	client, err := a.dial(ctx, host, sshPort(mt.Spec), sshLoginUser(mt.Spec))
+	port := sshPort(mt.Spec)
+	user := sshLoginUser(mt.Spec)
+	client, key, err := a.borrowSSH(ctx, host, port, user)
 	if err != nil {
 		return false, nil
 	}
-	defer client.Close()
 	if err := sshkeys.VerifyAuthorizedKeyLinePOSIX(client, a.sshPubKey); err != nil {
+		a.returnSSH(ctx, key, client)
 		return false, nil
 	}
+	a.returnSSH(ctx, key, client)
 	return true, nil
 }
 
@@ -91,10 +96,10 @@ func (a *AuthorizeSSHKeyStep) Execute(ctx context.Context, t scaffold.Target) er
 		if err := ctx.Err(); err != nil {
 			return err
 		}
-		client, err := a.dial(ctx, host, port, user)
+		client, key, err := a.borrowSSH(ctx, host, port, user)
 		if err == nil {
 			err = sshkeys.AppendAuthorizedKeyLinePOSIX(client, a.sshPubKey)
-			client.Close()
+			a.returnSSH(ctx, key, client)
 			if err != nil {
 				return fmt.Errorf("authorize-ssh-key: %w", err)
 			}
@@ -125,15 +130,43 @@ func (a *AuthorizeSSHKeyStep) Verify(ctx context.Context, t scaffold.Target) err
 	host := strings.TrimSpace(mt.Instance.PublicIPv4)
 	port := sshPort(mt.Spec)
 	user := sshLoginUser(mt.Spec)
-	client, err := a.dial(ctx, host, port, user)
+	client, key, err := a.borrowSSH(ctx, host, port, user)
 	if err != nil {
 		return fmt.Errorf("authorize-ssh-key verify: dial: %w", err)
 	}
-	defer client.Close()
 	if err := sshkeys.VerifyAuthorizedKeyLinePOSIX(client, a.sshPubKey); err != nil {
+		a.returnSSH(ctx, key, client)
 		return fmt.Errorf("authorize-ssh-key verify: %w", err)
 	}
+	a.returnSSH(ctx, key, client)
 	return nil
+}
+
+// borrowSSH gets a client from the plan-scoped SSH pool (or dials directly if
+// no pool is registered). Returns the pool key for the subsequent Return call.
+func (a *AuthorizeSSHKeyStep) borrowSSH(ctx context.Context, host string, port int, user string) (*xssh.Client, string, error) {
+	key := clawssh.HostKey(host, port, user)
+	if pool := SSHPool(ctx); pool != nil {
+		dial := a.dial
+		c, err := pool.Borrow(ctx, key, func(ctx context.Context) (*xssh.Client, error) {
+			return dial(ctx, host, port, user)
+		})
+		return c, key, err
+	}
+	c, err := a.dial(ctx, host, port, user)
+	return c, key, err
+}
+
+// returnSSH puts a client back into the pool (or closes it if no pool).
+func (a *AuthorizeSSHKeyStep) returnSSH(ctx context.Context, key string, c *xssh.Client) {
+	if c == nil {
+		return
+	}
+	if pool := SSHPool(ctx); pool != nil {
+		pool.Return(key, c)
+		return
+	}
+	c.Close()
 }
 
 func sshPort(m manifestdata.Machine) int {

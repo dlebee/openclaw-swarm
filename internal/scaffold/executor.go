@@ -10,6 +10,7 @@ import (
 
 func runPlan(ctx context.Context, compiled []compiledPhase, opts ExecuteOptions) error {
 	ctx = EnsurePlanCache(ctx)
+	defer ClosePlanResources(ctx)
 	obs := opts.Progress
 	if obs == nil {
 		obs = progress.Noop{}

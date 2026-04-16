@@ -3,50 +3,80 @@ package scaffold
 import (
 	"context"
 	"fmt"
+	"io"
 	"strings"
+	"sync"
 )
 
 type planCacheCtxKey struct{}
 
-// WithPlanCache attaches a mutable map to ctx for plan-scoped data (probe and/or execute).
-// The same map can be shared across Applicable/Check/Execute for all cells in one run.
-func WithPlanCache(ctx context.Context, data map[string]any) context.Context {
-	if data == nil {
-		data = make(map[string]any)
-	}
-	return context.WithValue(ctx, planCacheCtxKey{}, data)
+// planCache wraps the data map with a mutex for safe concurrent access and
+// tracks io.Closer resources that are cleaned up when the plan finishes.
+type planCache struct {
+	mu       sync.Mutex
+	data     map[string]any
+	closers  []io.Closer
 }
 
-// EnsurePlanCache returns ctx unchanged if a plan cache is already present; otherwise attaches a new empty map.
+func newPlanCache() *planCache {
+	return &planCache{data: make(map[string]any)}
+}
+
+// WithPlanCache attaches a [planCache] to ctx for plan-scoped data (probe
+// and/or execute). The same cache is shared across all cells in one run.
+// Deprecated: prefer [EnsurePlanCache] which creates one if absent.
+func WithPlanCache(ctx context.Context, data map[string]any) context.Context {
+	pc := newPlanCache()
+	for k, v := range data {
+		pc.data[k] = v
+	}
+	return context.WithValue(ctx, planCacheCtxKey{}, pc)
+}
+
+// EnsurePlanCache returns ctx unchanged if a plan cache is already present;
+// otherwise attaches a new empty cache.
 func EnsurePlanCache(ctx context.Context) context.Context {
-	if _, ok := PlanCache(ctx); ok {
+	if pc := getPlanCache(ctx); pc != nil {
 		return ctx
 	}
-	return WithPlanCache(ctx, make(map[string]any))
+	return context.WithValue(ctx, planCacheCtxKey{}, newPlanCache())
 }
 
-// PlanCache returns the map attached with [WithPlanCache] / [EnsurePlanCache], if any.
+func getPlanCache(ctx context.Context) *planCache {
+	pc, _ := ctx.Value(planCacheCtxKey{}).(*planCache)
+	return pc
+}
+
+// PlanCache returns the data map for backward compatibility. Callers that need
+// concurrency safety should use PlanCacheGet / PlanCacheSet instead.
 func PlanCache(ctx context.Context) (map[string]any, bool) {
-	m, ok := ctx.Value(planCacheCtxKey{}).(map[string]any)
-	return m, ok
+	pc := getPlanCache(ctx)
+	if pc == nil {
+		return nil, false
+	}
+	return pc.data, true
 }
 
 // PlanCacheSet assigns key in the plan cache. It is a no-op if ctx has no cache.
 func PlanCacheSet(ctx context.Context, key string, value any) {
-	m, ok := PlanCache(ctx)
-	if !ok {
+	pc := getPlanCache(ctx)
+	if pc == nil {
 		return
 	}
-	m[key] = value
+	pc.mu.Lock()
+	pc.data[key] = value
+	pc.mu.Unlock()
 }
 
 // PlanCacheGet returns a cache entry. The bool is false if missing or if ctx has no cache.
 func PlanCacheGet(ctx context.Context, key string) (any, bool) {
-	m, ok := PlanCache(ctx)
-	if !ok {
+	pc := getPlanCache(ctx)
+	if pc == nil {
 		return nil, false
 	}
-	v, ok := m[key]
+	pc.mu.Lock()
+	v, ok := pc.data[key]
+	pc.mu.Unlock()
 	return v, ok
 }
 
@@ -58,6 +88,34 @@ func PlanCacheBool(ctx context.Context, key string) (bool, bool) {
 	}
 	b, ok := v.(bool)
 	return b, ok
+}
+
+// RegisterPlanCloser adds an io.Closer that will be closed by [ClosePlanResources].
+// Typically used for connection pools or other plan-scoped resources.
+func RegisterPlanCloser(ctx context.Context, c io.Closer) {
+	pc := getPlanCache(ctx)
+	if pc == nil {
+		return
+	}
+	pc.mu.Lock()
+	pc.closers = append(pc.closers, c)
+	pc.mu.Unlock()
+}
+
+// ClosePlanResources closes all io.Closers registered with [RegisterPlanCloser].
+// Call once when the plan run finishes.
+func ClosePlanResources(ctx context.Context) {
+	pc := getPlanCache(ctx)
+	if pc == nil {
+		return
+	}
+	pc.mu.Lock()
+	closers := pc.closers
+	pc.closers = nil
+	pc.mu.Unlock()
+	for _, c := range closers {
+		c.Close()
+	}
 }
 
 func planCacheMachineExistsKey(targetID string) string {

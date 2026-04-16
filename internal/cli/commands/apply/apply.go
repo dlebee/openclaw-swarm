@@ -11,7 +11,9 @@ import (
 
 	"github.com/charmbracelet/huh"
 	planapply "github.com/gluwa/openclaw-swarm2/internal/claws/plans/apply"
+	"github.com/gluwa/openclaw-swarm2/internal/claws/plans/apply/provisioning"
 	manifestsvc "github.com/gluwa/openclaw-swarm2/internal/manifests/service"
+	"github.com/gluwa/openclaw-swarm2/internal/scaffold"
 	clawssh "github.com/gluwa/openclaw-swarm2/internal/ssh"
 	"github.com/gluwa/openclaw-swarm2/internal/state"
 	"github.com/spf13/cobra"
@@ -78,7 +80,10 @@ func ApplyCmd(manifestFile *string) *cobra.Command {
 				return err
 			}
 
-			return planapply.Run(cmd.Context(), plan, planapply.RunOptions{
+			ctx := scaffold.EnsurePlanCache(cmd.Context())
+			provisioning.SetSSHPool(ctx, clawssh.NewPool())
+
+			return planapply.Run(ctx, plan, planapply.RunOptions{
 				DryRun:      dryRun,
 				PrettyPlan:  prettyPlan,
 				Out:         cmd.OutOrStdout(),
