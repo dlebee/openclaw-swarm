@@ -12,7 +12,7 @@ prefix: mesh-test
 machines:
   - name: gateway-host
     type: ssh
-    container: true
+    container: false
     host: 127.0.0.1
     internal_host: oc-gateway-mesh-test
     ssh_port: 2222
@@ -21,7 +21,7 @@ machines:
 
   - name: scraper-host
     type: ssh
-    container: true
+    container: false
     host: 127.0.0.1
     internal_host: oc-scraper-mesh-test
     ssh_port: 2223

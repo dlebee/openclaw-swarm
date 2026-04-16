@@ -824,38 +824,61 @@ func TestMeshPhase(t *testing.T) {
 	ctx = scaffold.EnsurePlanCache(ctx)
 
 	// --- Verify Applicable/Check before Execute ---
-	meshPhase := p.Phases[0] // only phase is "mesh"
-	for _, target := range meshPhase.Targets {
-		for _, step := range meshPhase.Steps {
+	// AddPhase creates two phases: mesh-gateway (gateway setup) and mesh-join
+	// (tailscale join on all targets). Find them by name.
+	findPhase := func(name string) *scaffold.Phase {
+		for _, ph := range p.Phases {
+			if ph.Name == name {
+				return ph
+			}
+		}
+		return nil
+	}
+	gwPhase := findPhase("mesh-gateway")
+	if gwPhase == nil {
+		t.Fatal("pre-execute: mesh-gateway phase not found")
+	}
+	joinPhase := findPhase("mesh-join")
+	if joinPhase == nil {
+		t.Fatal("pre-execute: mesh-join phase not found")
+	}
+
+	// Check gateway-phase steps on the gateway target.
+	for _, target := range gwPhase.Targets {
+		for _, step := range gwPhase.Steps {
 			applicable, err := step.Applicable(ctx, target)
 			if err != nil {
-				t.Errorf("pre-execute: phase=mesh target=%s step=%s: Applicable error: %v",
+				t.Errorf("pre-execute: phase=mesh-gateway target=%s step=%s: Applicable error: %v",
 					target.ID, step.Name(), err)
 				continue
 			}
-			switch step.Name() {
-			case "install-headscale":
-				if target.ID == "gateway-host" {
-					if !applicable {
-						t.Errorf("pre-execute: install-headscale: expected applicable on gateway-host, got not applicable")
-					}
-					// Check should be false initially (headscale not yet configured)
-					satisfied, err := step.Check(ctx, target)
-					if err != nil {
-						t.Errorf("pre-execute: install-headscale Check error: %v", err)
-					}
-					if satisfied {
-						t.Error("pre-execute: install-headscale: expected not satisfied initially")
-					}
-				} else {
-					if applicable {
-						t.Errorf("pre-execute: install-headscale: expected not applicable on non-gateway %s", target.ID)
-					}
-				}
-			case "install-tailscale":
+			if step.Name() == "install-headscale" && target.ID == "gateway-host" {
 				if !applicable {
-					t.Errorf("pre-execute: install-tailscale: expected applicable on all mesh targets, got not applicable for %s", target.ID)
+					t.Errorf("pre-execute: install-headscale: expected applicable on gateway-host")
 				}
+				// Check should be false initially (headscale not yet configured).
+				satisfied, err := step.Check(ctx, target)
+				if err != nil {
+					t.Errorf("pre-execute: install-headscale Check error: %v", err)
+				}
+				if satisfied {
+					t.Error("pre-execute: install-headscale: expected not satisfied initially")
+				}
+			}
+		}
+	}
+
+	// Check join-phase: install-tailscale must be applicable on all mesh targets.
+	for _, target := range joinPhase.Targets {
+		for _, step := range joinPhase.Steps {
+			applicable, err := step.Applicable(ctx, target)
+			if err != nil {
+				t.Errorf("pre-execute: phase=mesh-join target=%s step=%s: Applicable error: %v",
+					target.ID, step.Name(), err)
+				continue
+			}
+			if step.Name() == "install-tailscale" && !applicable {
+				t.Errorf("pre-execute: install-tailscale: expected applicable on all mesh targets, got not applicable for %s", target.ID)
 			}
 		}
 	}

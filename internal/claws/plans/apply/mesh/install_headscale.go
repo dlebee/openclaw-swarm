@@ -71,9 +71,12 @@ case "$ARCH" in
   aarch64) HS_ARCH=arm64 ;;
   *) echo "unsupported architecture: $ARCH" >&2; exit 1 ;;
 esac
-URL="https://github.com/juanfont/headscale/releases/download/v%s/headscale_%s_linux_${HS_ARCH}"
-sudo curl -fsSL "$URL" -o /usr/local/bin/headscale
-sudo chmod +x /usr/local/bin/headscale
+# Download only if headscale is not already installed at the right version.
+if ! /usr/local/bin/headscale version 2>/dev/null | grep -qF "%s"; then
+  URL="https://github.com/juanfont/headscale/releases/download/v%s/headscale_%s_linux_${HS_ARCH}"
+  sudo curl -fsSL "$URL" -o /usr/local/bin/headscale
+  sudo chmod +x /usr/local/bin/headscale
+fi
 
 cat > /tmp/claws-headscale-config.yaml << 'HSCONFIG'
 %sHSCONFIG
@@ -119,7 +122,7 @@ if ! sudo test -S /var/run/headscale/headscale.sock; then
 fi
 
 sudo /usr/local/bin/headscale users create default 2>/dev/null || true
-`, ver, ver, string(cfgYAML), aclJSON)
+`, ver, ver, ver, string(cfgYAML), aclJSON)
 
 	out, err := bash.RunOutput(client, script)
 	if err != nil {

@@ -105,12 +105,16 @@ func BuildMeshTargets(machines []manifestdata.Machine, gateways []manifestdata.G
 	return targets
 }
 
-// AddPhase registers the "mesh" phase. If no headscale targets exist, a noop
-// placeholder is used so the phase slot still appears in the plan.
+// AddPhase registers the mesh phases. Two phases are used so that gateway
+// setup (resolve URL, install headscale/caddy, resolve preauth key) always
+// completes before install-tailscale runs on any target:
+//
+//   - "mesh-gateway": gateway target only; runs control-plane setup steps.
+//   - "mesh-join":    all mesh targets; joins every machine to the mesh.
+//
+// If no headscale targets exist, a single noop "configure-mesh" phase is
+// added so the phase slot still appears in the plan.
 func AddPhase(p *scaffold.Plan, machineTargets []scaffold.Target, opts Options) *scaffold.Phase {
-	ph := p.AddPhase("mesh")
-	ph.Concurrency = 1
-
 	machines := opts.Machines
 	if len(machines) == 0 {
 		machines = extractMachines(machineTargets)
@@ -122,18 +126,31 @@ func AddPhase(p *scaffold.Plan, machineTargets []scaffold.Target, opts Options) 
 	)
 
 	if len(meshTargets) == 0 {
+		ph := p.AddPhase("mesh")
 		ph.AddTargets(machineTargets...)
 		ph.AddStep(scaffold.NoopStep{StepName: "configure-mesh"})
 		return ph
 	}
 
-	ph.AddTargets(meshTargets...)
-	ph.AddStep(NewResolveControlURLStep(opts))
-	ph.AddStep(NewInstallHeadscaleStep(opts))
-	ph.AddStep(NewInstallCaddyStep(opts))
-	ph.AddStep(NewResolvePreauthKeyStep(opts))
-	ph.AddStep(NewInstallTailscaleStep(opts))
-	return ph
+	// Phase 1: gateway-only control-plane setup.
+	var gatewayTargets []scaffold.Target
+	for _, t := range meshTargets {
+		if mt, ok := t.Payload.(*MeshTarget); ok && mt.IsGatewayHost {
+			gatewayTargets = append(gatewayTargets, t)
+		}
+	}
+	phGW := p.AddPhase("mesh-gateway")
+	phGW.AddTargets(gatewayTargets...)
+	phGW.AddStep(NewResolveControlURLStep(opts))
+	phGW.AddStep(NewInstallHeadscaleStep(opts))
+	phGW.AddStep(NewInstallCaddyStep(opts))
+	phGW.AddStep(NewResolvePreauthKeyStep(opts))
+
+	// Phase 2: join all mesh targets (gateway + nodes).
+	phJoin := p.AddPhase("mesh-join")
+	phJoin.AddTargets(meshTargets...)
+	phJoin.AddStep(NewInstallTailscaleStep(opts))
+	return phJoin
 }
 
 func isHeadscale(gw *manifestdata.Gateway) bool {
