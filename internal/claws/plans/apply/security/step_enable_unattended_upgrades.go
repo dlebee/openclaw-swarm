@@ -5,7 +5,7 @@ import (
 	"fmt"
 
 	"github.com/gluwa/openclaw-swarm2/internal/platformutil/apt"
-	"github.com/gluwa/openclaw-swarm2/internal/platformutil/systemctl"
+	"github.com/gluwa/openclaw-swarm2/internal/platformutil/systemd"
 	"github.com/gluwa/openclaw-swarm2/internal/scaffold"
 )
 
@@ -63,7 +63,7 @@ func (s *EnableUnattendedUpgradesStep) Execute(ctx context.Context, t scaffold.T
 	}
 	defer returnSSH(ctx, key, client)
 
-	if err := systemctl.Enable(client, "unattended-upgrades"); err != nil {
+	if err := systemd.Enable(client, "unattended-upgrades", false); err != nil {
 		return fmt.Errorf("enable-unattended-upgrades: %w", err)
 	}
 	return nil

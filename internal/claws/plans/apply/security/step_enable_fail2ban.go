@@ -4,7 +4,7 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/gluwa/openclaw-swarm2/internal/platformutil/systemctl"
+	"github.com/gluwa/openclaw-swarm2/internal/platformutil/systemd"
 	"github.com/gluwa/openclaw-swarm2/internal/scaffold"
 	xssh "golang.org/x/crypto/ssh"
 )
@@ -50,7 +50,7 @@ func (s *EnableFail2banStep) Check(ctx context.Context, t scaffold.Target) (bool
 	}
 	defer returnSSH(ctx, key, client)
 
-	active, err := systemctl.IsActive(client, "fail2ban")
+	active, err := systemd.IsActive(client, "fail2ban", false)
 	if err != nil || !active {
 		return false, nil
 	}
@@ -75,7 +75,7 @@ func (s *EnableFail2banStep) Execute(ctx context.Context, t scaffold.Target) err
 	if err := ensureFail2banJailLocal(client); err != nil {
 		return fmt.Errorf("enable-fail2ban: write jail.local: %w", err)
 	}
-	if err := systemctl.EnableNow(client, "fail2ban"); err != nil {
+	if err := systemd.EnableNow(client, "fail2ban", false); err != nil {
 		diag := diagFail2ban(client)
 		return fmt.Errorf("enable-fail2ban: %w\n%s", err, diag)
 	}

@@ -9,7 +9,7 @@ import (
 
 	"github.com/gluwa/openclaw-swarm2/internal/claws/plans/apply/provisioning"
 	manifestdata "github.com/gluwa/openclaw-swarm2/internal/manifests/data"
-	"github.com/gluwa/openclaw-swarm2/internal/platformutil/systemctl"
+	"github.com/gluwa/openclaw-swarm2/internal/platformutil/systemd"
 	"github.com/gluwa/openclaw-swarm2/internal/platformutil/ufw"
 	clawssh "github.com/gluwa/openclaw-swarm2/internal/ssh"
 	xssh "golang.org/x/crypto/ssh"
@@ -97,22 +97,10 @@ const (
 	serviceActiveDelay   = 2 * time.Second
 )
 
-// waitServiceActive polls systemctl is-active until the unit is running or
-// retries are exhausted. Handles the race where `enable --now` returns before
-// the service is fully up.
+// waitServiceActive polls systemd.IsActive until the unit is running or
+// retries are exhausted. Security-phase services are system-level (not user-mode).
 func waitServiceActive(ctx context.Context, client *xssh.Client, unit string) error {
-	for attempt := 0; attempt < serviceActiveRetries; attempt++ {
-		active, err := systemctl.IsActive(client, unit)
-		if err == nil && active {
-			return nil
-		}
-		select {
-		case <-ctx.Done():
-			return ctx.Err()
-		case <-time.After(serviceActiveDelay):
-		}
-	}
-	return fmt.Errorf("%s is not active after %d checks", unit, serviceActiveRetries)
+	return systemd.WaitActive(ctx, client, unit, false, serviceActiveRetries, serviceActiveDelay)
 }
 
 // waitUFWActive polls ufw status until it reports active.
