@@ -248,8 +248,21 @@ func TestApplyPlan(t *testing.T) {
 		}
 	}
 
+	// Build an SSH dial func so gateway steps can reach the containers.
+	sshDial := func(ctx context.Context, host string, port int, user string) (*xssh.Client, error) {
+		addr := net.JoinHostPort(host, fmt.Sprintf("%d", port))
+		cfg := &xssh.ClientConfig{
+			User:            user,
+			Auth:            []xssh.AuthMethod{xssh.PublicKeys(signer)},
+			HostKeyCallback: xssh.InsecureIgnoreHostKey(),
+			Timeout:         5 * time.Second,
+		}
+		return xssh.Dial("tcp", addr, cfg)
+	}
+
 	plan, err := apply.BuildPlan(apply.BuildOptions{
 		Manifest: m,
+		SSHDial:  sshDial,
 	})
 	if err != nil {
 		t.Fatalf("build plan: %v", err)
@@ -260,23 +273,41 @@ func TestApplyPlan(t *testing.T) {
 		t.Fatalf("plan.Build: %v", err)
 	}
 
-	// Every step in provisioning and security must be "not applicable"
-	// for ssh+container machines.
 	ctx := context.Background()
 	ctx = scaffold.EnsurePlanCache(ctx)
 
 	for _, phase := range plan.Phases {
 		for _, target := range phase.Targets {
 			for _, step := range phase.Steps {
-				ok, err := step.Applicable(ctx, target)
+				applicable, err := step.Applicable(ctx, target)
 				if err != nil {
 					t.Errorf("phase=%s target=%s step=%s: Applicable error: %v",
 						phase.Name, target.ID, step.Name(), err)
 					continue
 				}
-				if ok {
-					t.Errorf("phase=%s target=%s step=%s: expected not applicable for ssh+container, got applicable",
-						phase.Name, target.ID, step.Name())
+
+				switch phase.Name {
+				case "provisioning", "security", "mesh":
+					if applicable {
+						t.Errorf("phase=%s target=%s step=%s: expected not applicable, got applicable",
+							phase.Name, target.ID, step.Name())
+					}
+				case "gateway":
+					if !applicable {
+						t.Errorf("phase=%s target=%s step=%s: expected applicable, got not applicable",
+							phase.Name, target.ID, step.Name())
+						continue
+					}
+					satisfied, err := step.Check(ctx, target)
+					if err != nil {
+						t.Errorf("phase=%s target=%s step=%s: Check error: %v",
+							phase.Name, target.ID, step.Name(), err)
+						continue
+					}
+					if !satisfied {
+						t.Errorf("phase=%s target=%s step=%s: expected satisfied (already installed), got not satisfied",
+							phase.Name, target.ID, step.Name())
+					}
 				}
 			}
 		}

@@ -2,8 +2,10 @@
 # No channels, no bindings.
 # Gateway + scraper node, two agents: assistant (exec on gateway) and scraper (exec on scraper-node).
 #
-# Start infra first:
-#   docker compose -f test/infra/docker-compose.yml --profile full up -d --build
+# host          = how the CLI reaches the machine (localhost + mapped port)
+# internal_host = how containers reach each other on the Docker bridge (container name)
+#
+# Build images first: ./test/infra/build.sh
 
 prefix: integration
 
@@ -12,6 +14,7 @@ machines:
     type: ssh
     container: true
     host: 127.0.0.1
+    internal_host: oc-gateway-test
     ssh_port: 2222
     arch: linux-x64
     agent_user: agent
@@ -20,6 +23,7 @@ machines:
     type: ssh
     container: true
     host: 127.0.0.1
+    internal_host: oc-scraper-test
     ssh_port: 2223
     arch: linux-x64
     agent_user: agent
@@ -27,6 +31,8 @@ machines:
 gateways:
   - name: gateway
     reference: gateway-host
+    networking:
+      mode: docker
     openclaw_version: latest
 
 agents:
