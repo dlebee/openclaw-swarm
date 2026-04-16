@@ -46,6 +46,50 @@ func NeedsInsecureWS(gw manifestdata.Gateway) bool {
 	return NeedsLANBind(gw)
 }
 
+// NodeCompileCacheDir is the path openclaw recommends for Node's V8 module
+// compile cache (see openclaw/docs/vps.md, openclaw/docs/platforms/raspberry-pi.md
+// and openclaw/src/commands/doctor-platform-notes.ts). /var/tmp is preferred
+// over /tmp so the cache survives reboots and warms repeated CLI invocations
+// reliably; `openclaw doctor` actively nags when this is unset or lives under
+// /tmp.
+const NodeCompileCacheDir = "/var/tmp/openclaw-compile-cache"
+
+// StartupOptimEnv returns the environment variables openclaw recommends for
+// fastest CLI startup on hosts that repeatedly respawn short-lived node
+// processes (gateway crons, node exec, agents list, doctor, ...):
+//
+//   - NODE_COMPILE_CACHE persists V8-compiled module bytecode across runs so
+//     the ts-node/typescript tax isn't paid on every invocation.
+//   - OPENCLAW_NO_RESPAWN avoids the extra cold-start hit from openclaw's
+//     self-respawn path (only useful for long-lived daemons; for one-shot
+//     CLIs the respawn is pure overhead).
+//
+// These are always safe to set and materially improve cron/node exec latency
+// on small VMs and ARM hosts, so we bake them into every systemd unit we
+// manage rather than treating them as a low-power opt-in.
+func StartupOptimEnv() map[string]string {
+	return map[string]string{
+		"NODE_COMPILE_CACHE":  NodeCompileCacheDir,
+		"OPENCLAW_NO_RESPAWN": "1",
+	}
+}
+
+// EnsureNodeCompileCacheDir creates the compile-cache directory on the remote
+// host if it doesn't exist. /var/tmp is world-writable with sticky bit on
+// every standard Linux distro so this does not need sudo; the directory ends
+// up owned by whichever user runs the apply, which is the same user the
+// openclaw systemd --user services run as. Idempotent.
+func EnsureNodeCompileCacheDir(client *xssh.Client) error {
+	script := fmt.Sprintf(`set -euo pipefail
+mkdir -p %s
+`, NodeCompileCacheDir)
+	out, err := bash.RunOutput(client, script)
+	if err != nil {
+		return fmt.Errorf("ensure compile cache dir: %w\n%s", err, out)
+	}
+	return nil
+}
+
 // DesiredBind returns "lan" or "loopback" for the gateway.
 func DesiredBind(gw manifestdata.Gateway) string {
 	if NeedsLANBind(gw) {

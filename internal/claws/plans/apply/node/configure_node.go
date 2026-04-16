@@ -62,8 +62,13 @@ func (s *ConfigureNodeStep) Check(ctx context.Context, t scaffold.Target) (bool,
 	return true, nil
 }
 
+// nodeEnv returns the desired systemd environment variables for the
+// openclaw-node unit. Always includes the openclaw startup-optimisation env
+// (NODE_COMPILE_CACHE, OPENCLAW_NO_RESPAWN) — the node daemon respawns
+// short-lived workers per tool invocation, so a persistent V8 compile cache
+// materially cuts exec latency.
 func nodeEnv(nt *NodeTarget) map[string]string {
-	env := make(map[string]string)
+	env := gwService.StartupOptimEnv()
 	if gwService.NeedsInsecureWS(nt.Gateway) {
 		env["OPENCLAW_ALLOW_INSECURE_PRIVATE_WS"] = "1"
 	}
@@ -78,6 +83,12 @@ func (s *ConfigureNodeStep) Execute(ctx context.Context, t scaffold.Target) erro
 		return fmt.Errorf("configure-node: %w", err)
 	}
 	defer common.ReturnSSH(ctx, key, client)
+
+	// NODE_COMPILE_CACHE is set in the drop-in below; the target directory
+	// must exist before the unit starts or Node silently disables caching.
+	if err := gwService.EnsureNodeCompileCacheDir(client); err != nil {
+		return fmt.Errorf("configure-node: %w", err)
+	}
 
 	desiredEnv := nodeEnv(nt)
 	if err := systemd.WriteEnvDropIn(client, nodeUnit, true, desiredEnv); err != nil {

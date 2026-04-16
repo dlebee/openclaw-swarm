@@ -111,7 +111,16 @@ export OPENCLAW_GATEWAY_TOKEN=%q
 
 	// The unit now exists. Write the env drop-in and restart so the service
 	// picks up OPENCLAW_ALLOW_INSECURE_PRIVATE_WS (not captured by the
-	// upstream install — see docs/issues/01-insecure-private-ws-not-bootstrapable.md).
+	// upstream install — see docs/issues/01-insecure-private-ws-not-bootstrapable.md)
+	// plus the startup-optimisation env (NODE_COMPILE_CACHE, OPENCLAW_NO_RESPAWN).
+	//
+	// The cache directory must exist before the restart below or Node will
+	// silently disable caching for this session. configure-node would normally
+	// mkdir it later, but its Check() sees no drift after bootstrap already
+	// wrote the env and skips Execute — so we have to create it here too.
+	if err := gwService.EnsureNodeCompileCacheDir(client); err != nil {
+		return fmt.Errorf("bootstrap-node: %w", err)
+	}
 	desiredEnv := nodeEnv(nt)
 	if len(desiredEnv) > 0 {
 		if err := systemd.WriteEnvDropIn(client, nodeUnit, true, desiredEnv); err != nil {

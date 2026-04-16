@@ -1,0 +1,57 @@
+# Integration manifest for cron tests.
+# ONE agent ("reporter") with exec mapped to a remote node (not the gateway).
+# The agent uses the pre-baked ollama qwen2.5:0.5b model served by the
+# oc-ollama-test container on the shared Docker network.
+
+prefix: integration-cron
+
+machines:
+  - name: gateway-host
+    type: ssh
+    container: true
+    host: 127.0.0.1
+    internal_host: oc-gateway-test
+    ssh_port: 2222
+    arch: linux-x64
+    agent_user: agent
+
+  - name: scraper-host
+    type: ssh
+    container: true
+    host: 127.0.0.1
+    internal_host: oc-scraper-test
+    ssh_port: 2223
+    arch: linux-x64
+    agent_user: agent
+
+gateways:
+  - name: gateway
+    reference: gateway-host
+    networking:
+      mode: docker
+    openclaw_version: latest
+
+agents:
+  # Single agent whose exec tools are bound to the remote scraper-node (NOT
+  # the gateway host). When the cron fires, the gateway dispatches the
+  # generate call to Ollama and any exec tool-calls are forwarded over the
+  # node websocket pipeline to scraper-node.
+  - id: reporter
+    gateway: gateway
+    workspace: ~/.openclaw/workspace
+    model: { primary: "ollama/qwen2.5:0.5b" }
+    tools:
+      exec: { host: node, node: scraper-node, security: full }
+    soul: |
+      You are a terse reporter for integration testing.
+      When asked for a sentence, reply with exactly one short English sentence.
+    identity:
+      name: Reporter
+
+nodes:
+  - name: scraper-node
+    gateway: gateway
+    reference: scraper-host
+    exec_policy:
+      security: full
+      ask: "off"

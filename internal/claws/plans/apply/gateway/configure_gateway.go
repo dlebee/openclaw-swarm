@@ -79,9 +79,12 @@ type batchEntry struct {
 }
 
 // gatewayEnv returns the desired systemd environment variables for the
-// gateway unit based on the manifest networking configuration.
+// gateway unit. Always includes openclaw's recommended startup-optimisation
+// env (NODE_COMPILE_CACHE, OPENCLAW_NO_RESPAWN) so isolated cron runs and
+// other short-lived node subprocesses spawned by the gateway don't pay full
+// cold-start cost every invocation.
 func gatewayEnv(gw manifestdata.Gateway) map[string]string {
-	env := make(map[string]string)
+	env := StartupOptimEnv()
 	if NeedsInsecureWS(gw) {
 		env["OPENCLAW_ALLOW_INSECURE_PRIVATE_WS"] = "1"
 	}
@@ -116,6 +119,12 @@ openclaw config set --batch-json '%s'
 	out, err := bash.RunOutput(client, script)
 	if err != nil {
 		return fmt.Errorf("configure-gateway: config set: %w\n%s", err, out)
+	}
+
+	// NODE_COMPILE_CACHE lands in the drop-in below; the directory has to
+	// exist on disk before the unit starts or Node silently skips caching.
+	if err := EnsureNodeCompileCacheDir(client); err != nil {
+		return fmt.Errorf("configure-gateway: %w", err)
 	}
 
 	desiredEnv := gatewayEnv(gt.Spec)
