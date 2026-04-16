@@ -672,7 +672,19 @@ func TestApplyExecute(t *testing.T) {
 		t.Logf("exec-approvals.json state:\n%s", execApprovals)
 	}
 
-	// 19. End-to-end exec: gateway dispatches system.which to the scraper node
+	// 19. Automations phase: touch-marker must have executed on both machines.
+	for label, c := range map[string]*xssh.Client{"gateway": client, "scraper": nodeClient} {
+		markerOut, err := bash.RunOutput(c, `cat /tmp/claws-automation-marker 2>/dev/null || echo "(not found)"`)
+		if err != nil {
+			t.Fatalf("read marker on %s: %v", label, err)
+		}
+		if !strings.Contains(markerOut, "created-by-claws-automation") {
+			t.Fatalf("expected marker file on %s, got:\n%s", label, markerOut)
+		}
+		t.Logf("verified: automation marker present on %s", label)
+	}
+
+	// 20. End-to-end exec: gateway dispatches system.which to the scraper node
 	//     over the WebSocket pipeline. This proves exec-policy, node pairing,
 	//     and agent exec config all work without raw exec-approvals.json writes.
 

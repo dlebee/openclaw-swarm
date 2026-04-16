@@ -71,3 +71,12 @@ nodes:
     exec_policy:
       security: full
       ask: "off"
+
+automations:
+  - name: touch-marker
+    machines: [gateway-host, scraper-host]
+    steps:
+      - name: ensure-marker-file
+        check: test -f /tmp/claws-automation-marker
+        execute: |
+          echo "created-by-claws-automation" > /tmp/claws-automation-marker
