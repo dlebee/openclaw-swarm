@@ -53,7 +53,14 @@ type Automation struct {
 	Manual      bool             `yaml:"manual,omitempty"`
 	Concurrency int              `yaml:"concurrency,omitempty"`
 	RunAs       string           `yaml:"run_as,omitempty"`
-	Steps       []AutomationStep `yaml:"steps"`
+	// Env is a phase-wide allowlist of environment-variable names that should
+	// be exported into every lifecycle script for every step. Values are
+	// resolved from the process env first, then the manifest's env_file (same
+	// precedence as LookupEnvFromManifest). Per-step Env entries extend this
+	// list. Default empty: nothing is leaked into scripts unless explicitly
+	// listed.
+	Env   []string         `yaml:"env,omitempty"`
+	Steps []AutomationStep `yaml:"steps"`
 }
 
 // AutomationStep is one unit of work inside an automation phase.
@@ -62,14 +69,17 @@ type AutomationStep struct {
 	Name           string `yaml:"name"`
 	Kind           string `yaml:"kind,omitempty"`
 	RunAs          string `yaml:"run_as,omitempty"`
-	Applicable     string `yaml:"applicable,omitempty"`
-	ApplicableFile string `yaml:"applicable_file,omitempty"`
-	Check          string `yaml:"check,omitempty"`
-	CheckFile      string `yaml:"check_file,omitempty"`
-	Execute        string `yaml:"execute,omitempty"`
-	ExecuteFile    string `yaml:"execute_file,omitempty"`
-	Verify         string `yaml:"verify,omitempty"`
-	VerifyFile     string `yaml:"verify_file,omitempty"`
+	// Env is a per-step allowlist of env-var names, unioned with the parent
+	// Automation.Env. See Automation.Env for precedence rules.
+	Env            []string `yaml:"env,omitempty"`
+	Applicable     string   `yaml:"applicable,omitempty"`
+	ApplicableFile string   `yaml:"applicable_file,omitempty"`
+	Check          string   `yaml:"check,omitempty"`
+	CheckFile      string   `yaml:"check_file,omitempty"`
+	Execute        string   `yaml:"execute,omitempty"`
+	ExecuteFile    string   `yaml:"execute_file,omitempty"`
+	Verify         string   `yaml:"verify,omitempty"`
+	VerifyFile     string   `yaml:"verify_file,omitempty"`
 }
 
 // Machine is a host entry (cloud or static SSH).

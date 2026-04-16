@@ -82,10 +82,15 @@ func applyCmd(manifestFile *string) *cobra.Command {
 				}
 			}
 
+			resolvedEnv, err := manifestsvc.LoadEnvFile(abs, m)
+			if err != nil {
+				return fmt.Errorf("load env_file for automations: %w", err)
+			}
 			plan := planaut.BuildPlan(m.Automations, m.Machines, planaut.Options{
 				SSHDial:        sshDial,
 				ManifestDir:    filepath.Dir(abs),
 				MachineTargets: targets,
+				ResolvedEnv:    resolvedEnv,
 			}, names)
 
 			return planaut.Run(ctx, plan, planaut.RunOptions{

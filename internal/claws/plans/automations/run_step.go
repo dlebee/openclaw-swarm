@@ -20,15 +20,19 @@ import (
 // over SSH using bash or python depending on the step's Kind.
 type DynamicStep struct {
 	step        manifestdata.AutomationStep
-	defaultUser string // automation-level run_as
+	defaultUser string   // automation-level run_as
+	autoEnv     []string // automation-level env allowlist
 	opts        Options
 }
 
 // NewDynamicStep creates a DynamicStep from an AutomationStep definition.
-func NewDynamicStep(step manifestdata.AutomationStep, defaultRunAs string, opts Options) *DynamicStep {
+// defaultRunAs/autoEnv are the phase-level defaults (Automation.RunAs /
+// Automation.Env) that each step inherits unless it overrides them.
+func NewDynamicStep(step manifestdata.AutomationStep, defaultRunAs string, autoEnv []string, opts Options) *DynamicStep {
 	return &DynamicStep{
 		step:        step,
 		defaultUser: defaultRunAs,
+		autoEnv:     autoEnv,
 		opts:        opts,
 	}
 }
@@ -203,10 +207,43 @@ func (d *DynamicStep) dial(ctx context.Context, t scaffold.Target) (*xssh.Client
 }
 
 func (d *DynamicStep) run(client *xssh.Client, script string) error {
-	switch d.kind() {
+	kind := d.kind()
+	envNames := d.effectiveEnvAllowlist()
+	envValues := resolveEnvValues(envNames, d.opts.ResolvedEnv)
+	switch kind {
 	case "python":
-		return python.Run(client, script)
+		return python.Run(client, pythonEnvPreamble(envValues)+script)
 	default:
-		return bash.Run(client, script)
+		return bash.Run(client, bashEnvPreamble(envValues)+script)
 	}
+}
+
+// effectiveEnvAllowlist returns the union of the automation-level and
+// step-level `env:` lists, preserving declaration order and removing dups.
+// Listing the same variable at both levels is fine and idempotent — the
+// step list simply reaffirms it.
+func (d *DynamicStep) effectiveEnvAllowlist() []string {
+	if len(d.autoEnv) == 0 && len(d.step.Env) == 0 {
+		return nil
+	}
+	seen := make(map[string]struct{}, len(d.autoEnv)+len(d.step.Env))
+	out := make([]string, 0, len(d.autoEnv)+len(d.step.Env))
+	add := func(name string) {
+		name = strings.TrimSpace(name)
+		if name == "" {
+			return
+		}
+		if _, ok := seen[name]; ok {
+			return
+		}
+		seen[name] = struct{}{}
+		out = append(out, name)
+	}
+	for _, n := range d.autoEnv {
+		add(n)
+	}
+	for _, n := range d.step.Env {
+		add(n)
+	}
+	return out
 }

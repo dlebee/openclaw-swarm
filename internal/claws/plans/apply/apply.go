@@ -61,10 +61,15 @@ func BuildPlan(o BuildOptions) (*scaffold.Plan, error) {
 		SSHDial: security.SSHDialFunc(o.SSHDial),
 	})
 	if len(o.Manifest.Automations) > 0 {
+		resolvedEnv, err := manifestsvc.LoadEnvFile(o.ManifestPath, o.Manifest)
+		if err != nil {
+			return nil, fmt.Errorf("apply plan: load env_file for automations: %w", err)
+		}
 		autoOpts := automations.Options{
 			SSHDial:             automations.SSHDialFunc(o.SSHDial),
 			ManifestDir:         manifestDir(o.ManifestPath),
 			MachineTargets:      targets,
+			ResolvedEnv:         resolvedEnv,
 			AssumeWillProvision: true,
 		}
 		automations.AddPhases(p, o.Manifest.Automations, autoOpts, false)

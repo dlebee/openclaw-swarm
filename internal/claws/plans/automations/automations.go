@@ -58,6 +58,13 @@ type Options struct {
 	ManifestDir    string
 	MachineTargets []scaffold.Target // shared provisioning targets (for dynamic host resolution)
 
+	// ResolvedEnv is the merged process+env_file variable map that
+	// automation steps can opt into exposing via their `env:` allowlist.
+	// Populated once at plan-build time (see BuildPlan). When empty, steps
+	// with an `env:` list log a warning per missing variable but don't fail
+	// — the script will just see an undefined var.
+	ResolvedEnv map[string]string
+
 	// AssumeWillProvision affects behavior when a target's host is not yet
 	// resolvable (e.g. Linode without an Instance during plan probe inside
 	// `claws apply`):
@@ -108,7 +115,7 @@ func addAutomationPhase(p *scaffold.Plan, auto manifestdata.Automation, mtByName
 	ph.Concurrency = effectiveConcurrency(auto)
 	ph.AddTargets(targets...)
 	for _, step := range auto.Steps {
-		ph.AddStep(NewDynamicStep(step, auto.RunAs, opts))
+		ph.AddStep(NewDynamicStep(step, auto.RunAs, auto.Env, opts))
 	}
 }
 
