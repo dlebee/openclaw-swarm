@@ -310,6 +310,11 @@ func TestApplyPlan(t *testing.T) {
 						t.Errorf("phase=%s target=%s step=%s: expected applicable, got not applicable",
 							phase.Name, target.ID, stepName)
 					}
+				case "exec-policy":
+					if !applicable {
+						t.Errorf("phase=%s target=%s step=%s: expected applicable (exec_policy set in manifest), got not applicable",
+							phase.Name, target.ID, stepName)
+					}
 				default:
 					t.Errorf("phase=%s target=%s step=%s: unexpected step name",
 						phase.Name, target.ID, stepName)
@@ -532,7 +537,26 @@ func TestApplyExecute(t *testing.T) {
 	}
 	t.Log("verified: OPENCLAW_ALLOW_INSECURE_PRIVATE_WS=1 in node systemd env drop-in")
 
-	// 10. Node must be paired on the gateway (device approved with displayName=scraper-node).
+	// 10. Node exec-policy must be set (security=full, ask=off).
+	execSec, err := bash.RunOutput(nodeClient, `openclaw config get tools.exec.security 2>/dev/null || echo ""`)
+	if err != nil {
+		t.Fatalf("read node exec security: %v", err)
+	}
+	if strings.TrimSpace(execSec) != "full" {
+		t.Fatalf("node tools.exec.security: got %q, want %q", strings.TrimSpace(execSec), "full")
+	}
+	t.Log("verified: node exec-policy security=full")
+
+	execAsk, err := bash.RunOutput(nodeClient, `openclaw config get tools.exec.ask 2>/dev/null || echo ""`)
+	if err != nil {
+		t.Fatalf("read node exec ask: %v", err)
+	}
+	if strings.TrimSpace(execAsk) != "off" {
+		t.Fatalf("node tools.exec.ask: got %q, want %q", strings.TrimSpace(execAsk), "off")
+	}
+	t.Log("verified: node exec-policy ask=off")
+
+	// 11. Node must be paired on the gateway (device approved with displayName=scraper-node).
 	dl, err := gwService.ListDevices(client)
 	if err != nil {
 		t.Fatalf("list devices on gateway: %v", err)
@@ -623,4 +647,57 @@ func TestApplyExecute(t *testing.T) {
 		t.Fatalf("tools.elevated.allowFrom.telegram missing admin-chat-123, got:\n%s", elevAllowFrom)
 	}
 	t.Log("verified: tools.elevated.allowFrom.telegram contains admin-chat-123")
+
+	// 17. Agent exec tools config on gateway (per-agent in openclaw.json).
+	assistantExecSec, err := bash.RunOutput(client, `openclaw config get agents.list --json 2>/dev/null || echo "[]"`)
+	if err != nil {
+		t.Fatalf("read agents.list: %v", err)
+	}
+	if !strings.Contains(assistantExecSec, `"security"`) {
+		t.Fatalf("expected agents.list to contain exec security config, got:\n%s", assistantExecSec)
+	}
+	t.Log("verified: agent exec tools config set in openclaw.json")
+
+	// 18. Log exec-approvals.json state for diagnostics.
+	execApprovals, err := bash.RunOutput(client, fmt.Sprintf(`cat %s/.openclaw/exec-approvals.json 2>/dev/null || echo "(not found)"`, gwHome))
+	if err != nil {
+		t.Logf("exec-approvals.json read error (non-fatal): %v", err)
+	} else {
+		t.Logf("exec-approvals.json state:\n%s", execApprovals)
+	}
+
+	// 19. End-to-end exec: gateway dispatches system.which to the scraper node
+	//     over the WebSocket pipeline. This proves exec-policy, node pairing,
+	//     and agent exec config all work without raw exec-approvals.json writes.
+
+	t.Log("waiting for scraper-node WebSocket connection...")
+	waitNodeConnected(t, client, "scraper-node", 90*time.Second)
+
+	invokeScript := `openclaw nodes invoke --node scraper-node --command system.which --params '{"bins":["echo"]}' --json 2>&1`
+	invokeOut, err := bash.RunOutput(client, invokeScript)
+	if err != nil {
+		t.Fatalf("nodes invoke system.which failed: %v\n%s", err, invokeOut)
+	}
+	if !strings.Contains(invokeOut, "echo") {
+		t.Fatalf("system.which response missing 'echo', got:\n%s", invokeOut)
+	}
+	t.Log("verified: gateway→scraper-node exec pipeline works (system.which returned echo)")
+}
+
+// waitNodeConnected polls `openclaw nodes invoke` until the gateway can
+// dispatch to the named node, meaning its WebSocket connection is live.
+func waitNodeConnected(t *testing.T, gwClient *xssh.Client, nodeName string, timeout time.Duration) {
+	t.Helper()
+	deadline := time.Now().Add(timeout)
+	script := fmt.Sprintf(
+		`openclaw nodes invoke --node %s --command system.which --params '{"bins":["echo"]}' --json 2>&1`, nodeName)
+	for time.Now().Before(deadline) {
+		out, err := bash.RunOutput(gwClient, script)
+		if err == nil && strings.Contains(out, "echo") {
+			t.Logf("node %q WebSocket connected (system.which succeeded)", nodeName)
+			return
+		}
+		time.Sleep(5 * time.Second)
+	}
+	t.Fatalf("node %q not connected within %s", nodeName, timeout)
 }

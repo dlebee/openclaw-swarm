@@ -9,7 +9,7 @@ Items are grouped by area; checked items are implemented in swarm2.
 - [x] Security (ufw, fail2ban, unattended-upgrades, security packages)
 - [ ] Mesh — headscale install, tailscale join, Caddy HTTPS reverse proxy, preauth key management
 - [x] Gateway (install nodejs/openclaw, bootstrap, configure, pair device)
-- [x] Node (install nodejs/openclaw, bootstrap, configure, pair)
+- [x] Node (install nodejs/openclaw, bootstrap, configure, exec-policy, pair)
 - [x] Agents (add, ensure-model, configure-workspace, configure-tools, configure-bindings)
 
 ## Channels
@@ -37,8 +37,8 @@ Items are grouped by area; checked items are implemented in swarm2.
 
 Items from v1 that manipulated JSON files directly instead of using `openclaw` CLI commands. Suspected problems from bypassing the CLI. Re-evaluate once we confirm whether the CLI covers these use cases natively.
 
-- [ ] **Node exec-policy** — reconcile `exec_policy.security` and `exec_policy.ask` via `openclaw exec-policy set` (CLI exists, need to verify it works cleanly)
-- [ ] **Exec-approvals on gateway** — per-agent security overrides in `~/.openclaw/exec-approvals.json` (v1 wrote raw JSON; no `openclaw config set` path exists for this file)
+- [x] **Node exec-policy** — `openclaw exec-policy set --security <val> --ask <val>` (clean CLI, no JSON manipulation)
+- [ ] **Exec-approvals on gateway** — per-agent security overrides in `~/.openclaw/exec-approvals.json` (v1 wrote raw JSON; testing whether `agents.list[N].tools.exec.security` via `openclaw config set` is sufficient)
 - [ ] **Auth-profiles** — ensure `<agentDir>/auth-profiles.json` exists (v1 copied from main agent or seeded empty JSON; unclear if the CLI handles this automatically now)
 - [ ] **Memory notice** — write a dated memory notice on first workspace creation (nice-to-have, low priority)
 

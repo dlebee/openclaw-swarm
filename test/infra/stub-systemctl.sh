@@ -43,10 +43,25 @@ extract_exec_start() {
   done
 }
 
+do_stop() {
+  case "$1" in
+    openclaw-gateway*)
+      pkill -f "openclaw/dist/index.js gateway" 2>/dev/null || true
+      pkill -f "openclaw gateway" 2>/dev/null || true
+      sleep 1
+    ;;
+    openclaw-node*)
+      pkill -f "openclaw/dist/index.js node" 2>/dev/null || true
+      pkill -f "openclaw node" 2>/dev/null || true
+      sleep 1
+    ;;
+  esac
+}
+
 do_start() {
   case "$UNIT" in
     openclaw-gateway*)
-      pkill -f "openclaw gateway" 2>/dev/null || true; sleep 1
+      do_stop "$UNIT"
       load_unit_env "openclaw-gateway"
       EXEC=$(extract_exec_start "openclaw-gateway")
       if [ -n "$EXEC" ]; then
@@ -57,7 +72,7 @@ do_start() {
       fi
     ;;
     openclaw-node*)
-      pkill -f "openclaw node" 2>/dev/null || true; sleep 1
+      do_stop "$UNIT"
       load_unit_env "openclaw-node"
       EXEC=$(extract_exec_start "openclaw-node")
       if [ -n "$EXEC" ]; then
@@ -76,9 +91,6 @@ case "$SUBCMD" in
   status) printf "● %s - stub\n   Active: active (running)\n" "$UNIT"; exit 0 ;;
   start|restart) do_start; exit 0 ;;
   enable) $NOW && do_start; exit 0 ;;
-  stop)
-    pkill -f "openclaw gateway" 2>/dev/null || true
-    pkill -f "openclaw node" 2>/dev/null || true
-    exit 0 ;;
+  stop) do_stop "$UNIT"; exit 0 ;;
   *) exit 0 ;;
 esac

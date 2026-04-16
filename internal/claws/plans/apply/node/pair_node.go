@@ -7,6 +7,7 @@ import (
 
 	"github.com/gluwa/openclaw-swarm2/internal/claws/plans/apply/common"
 	gwService "github.com/gluwa/openclaw-swarm2/internal/claws/plans/apply/gateway"
+	"github.com/gluwa/openclaw-swarm2/internal/platformutil/systemd"
 	"github.com/gluwa/openclaw-swarm2/internal/scaffold"
 )
 
@@ -63,6 +64,7 @@ func (s *PairNodeStep) Execute(ctx context.Context, t scaffold.Target) error {
 
 	// Poll for the node's pending device entry and approve it.
 	const maxAttempts = 15
+	approved := false
 	for i := 0; i < maxAttempts; i++ {
 		dl, err := gwService.ListDevices(client)
 		if err != nil {
@@ -71,7 +73,8 @@ func (s *PairNodeStep) Execute(ctx context.Context, t scaffold.Target) error {
 		}
 
 		if isNodePaired(dl, nt.Spec.Name) {
-			return nil
+			approved = true
+			break
 		}
 
 		for _, p := range dl.Pending {
@@ -79,13 +82,34 @@ func (s *PairNodeStep) Execute(ctx context.Context, t scaffold.Target) error {
 				if err := gwService.ApproveDevice(client, p.RequestID); err != nil {
 					return fmt.Errorf("pair-node: approve %s: %w", nt.Spec.Name, err)
 				}
-				return nil
+				approved = true
+				break
 			}
+		}
+		if approved {
+			break
 		}
 
 		time.Sleep(2 * time.Second)
 	}
-	return fmt.Errorf("pair-node: node %q did not appear as pending device after %d attempts", nt.Spec.Name, maxAttempts)
+	if !approved {
+		return fmt.Errorf("pair-node: node %q did not appear as pending device after %d attempts", nt.Spec.Name, maxAttempts)
+	}
+
+	// The node daemon may have exited after its initial connection was
+	// rejected (pairing required). Restart it so it reconnects now that
+	// the device is approved.
+	m := nt.Machine
+	nodeClient, nodeKey, err := common.BorrowSSH(ctx, s.dial, common.MachineHost(m), common.MachineSSHPort(m), common.MachineSSHUser(m))
+	if err != nil {
+		return fmt.Errorf("pair-node: dial node for restart: %w", err)
+	}
+	defer common.ReturnSSH(ctx, nodeKey, nodeClient)
+
+	if err := systemd.Restart(nodeClient, nodeUnit, true); err != nil {
+		return fmt.Errorf("pair-node: restart node daemon: %w", err)
+	}
+	return nil
 }
 
 func (s *PairNodeStep) Verify(ctx context.Context, t scaffold.Target) error {
