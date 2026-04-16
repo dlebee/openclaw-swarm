@@ -430,14 +430,14 @@ func TestApplyExecute(t *testing.T) {
 	}
 	t.Log("verified: gateway listening on :18789")
 
-	// 6. OPENCLAW_ALLOW_INSECURE_PRIVATE_WS=1 must be set on the running
-	//    gateway process (required for networking.mode=docker / LAN bind).
-	envOut, err := bash.RunOutput(client, `tr '\0' '\n' < /proc/$(pgrep -f "openclaw gateway")/environ 2>/dev/null | grep OPENCLAW_ALLOW_INSECURE_PRIVATE_WS || echo missing`)
+	// 6. Systemd env drop-in must contain OPENCLAW_ALLOW_INSECURE_PRIVATE_WS=1
+	//    (required for networking.mode=docker / LAN bind).
+	dropInEnv, err := bash.RunOutput(client, `cat ~/.config/systemd/user/openclaw-gateway.service.d/env.conf 2>/dev/null || echo "(not found)"`)
 	if err != nil {
-		t.Fatalf("read gateway process env: %v", err)
+		t.Fatalf("read env drop-in: %v", err)
 	}
-	if !strings.Contains(envOut, "OPENCLAW_ALLOW_INSECURE_PRIVATE_WS=1") {
-		t.Fatalf("expected OPENCLAW_ALLOW_INSECURE_PRIVATE_WS=1 in gateway process env, got: %q", strings.TrimSpace(envOut))
+	if !strings.Contains(dropInEnv, "OPENCLAW_ALLOW_INSECURE_PRIVATE_WS=1") {
+		t.Fatalf("expected OPENCLAW_ALLOW_INSECURE_PRIVATE_WS=1 in env drop-in, got:\n%s", dropInEnv)
 	}
-	t.Log("verified: OPENCLAW_ALLOW_INSECURE_PRIVATE_WS=1 set on gateway process")
+	t.Log("verified: OPENCLAW_ALLOW_INSECURE_PRIVATE_WS=1 in systemd env drop-in")
 }
