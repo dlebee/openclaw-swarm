@@ -9,6 +9,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/charmbracelet/huh"
 	planapply "github.com/gluwa/openclaw-swarm2/internal/claws/plans/apply"
 	manifestsvc "github.com/gluwa/openclaw-swarm2/internal/manifests/service"
 	clawssh "github.com/gluwa/openclaw-swarm2/internal/ssh"
@@ -83,18 +84,16 @@ func ApplyCmd(manifestFile *string) *cobra.Command {
 				Out:         cmd.OutOrStdout(),
 				ProgressOut: os.Stderr,
 				Confirm: func() (bool, error) {
-					fmt.Fprint(cmd.OutOrStdout(), "Proceed? [y/N]: ")
-					var line string
-					_, scanErr := fmt.Scanln(&line)
-					if scanErr != nil {
-						return false, scanErr
+					var confirm bool
+					if err := huh.NewConfirm().
+						Title("Apply this plan?").
+						Affirmative("Yes").
+						Negative("No").
+						Value(&confirm).
+						Run(); err != nil {
+						return false, err
 					}
-					switch strings.ToLower(strings.TrimSpace(line)) {
-					case "y", "yes":
-						return true, nil
-					default:
-						return false, nil
-					}
+					return confirm, nil
 				},
 			})
 		},

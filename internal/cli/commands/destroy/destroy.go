@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/charmbracelet/huh"
 	clawdestroy "github.com/gluwa/openclaw-swarm2/internal/claws/plans/destroy"
 	"github.com/gluwa/openclaw-swarm2/internal/hosting"
 	"github.com/gluwa/openclaw-swarm2/internal/hosting/linode"
@@ -86,14 +87,16 @@ Requires manifest linode_token_env and a reachable Linode API token.`),
 			}
 
 			if !yes {
-				fmt.Fprintf(out, "Proceed? [y/N]: ")
-				var line string
-				if _, scanErr := fmt.Scanln(&line); scanErr != nil {
-					return scanErr
+				var confirm bool
+				if err := huh.NewConfirm().
+					Title("Destroy selected instances?").
+					Affirmative("Yes").
+					Negative("No").
+					Value(&confirm).
+					Run(); err != nil {
+					return err
 				}
-				switch strings.ToLower(strings.TrimSpace(line)) {
-				case "y", "yes":
-				default:
+				if !confirm {
 					fmt.Fprintln(out, "Aborted.")
 					return nil
 				}
