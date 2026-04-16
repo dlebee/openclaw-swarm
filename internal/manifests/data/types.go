@@ -72,6 +72,7 @@ type Machine struct {
 	AgentUser    string      `yaml:"agent_user"`
 	SSHKeyEnv    string      `yaml:"ssh_key_env"`
 	Arch         Arch        `yaml:"arch"`
+	Container    bool        `yaml:"container,omitempty"`
 }
 
 // KubernetesCluster references a kubeconfig for optional K8s automation.

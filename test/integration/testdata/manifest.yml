@@ -1,0 +1,63 @@
+# Docker integration test manifest.
+# No channels, no bindings.
+# Gateway + scraper node, two agents: assistant (exec on gateway) and scraper (exec on scraper-node).
+#
+# Start infra first:
+#   docker compose -f test/infra/docker-compose.yml --profile full up -d --build
+
+prefix: integration
+
+machines:
+  - name: gateway-host
+    type: ssh
+    container: true
+    host: 127.0.0.1
+    ssh_port: 2222
+    arch: linux-x64
+    agent_user: agent
+
+  - name: scraper-host
+    type: ssh
+    container: true
+    host: 127.0.0.1
+    ssh_port: 2223
+    arch: linux-x64
+    agent_user: agent
+
+gateways:
+  - name: gateway
+    reference: gateway-host
+    openclaw_version: latest
+
+agents:
+  - id: assistant
+    gateway: gateway
+    workspace: ~/.openclaw/workspace
+    model: { primary: "ollama/qwen2.5:0.5b" }
+    tools:
+      exec: { host: gateway, security: full }
+    soul: |
+      You are an assistant for integration testing.
+      Execute commands when asked. Be concise.
+    identity:
+      name: Assistant
+
+  - id: scraper
+    gateway: gateway
+    workspace: ~/.openclaw/workspace
+    model: { primary: "ollama/qwen2.5:0.5b" }
+    tools:
+      exec: { host: scraper, node: scraper-node, security: full }
+    soul: |
+      You are a scraper agent for integration testing.
+      Scrape and process data when asked. Be concise.
+    identity:
+      name: Scraper
+
+nodes:
+  - name: scraper-node
+    gateway: gateway
+    reference: scraper-host
+    exec_policy:
+      security: full
+      ask: "off"

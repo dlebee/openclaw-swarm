@@ -1,0 +1,12 @@
+FROM ollama/ollama:latest
+
+# Pre-pull the integration test model so test runs don't need a network download.
+# Rebuild when you want a newer model version:
+#   docker build -t oc-ollama-test -f test/infra/Dockerfile.ollama test/infra/
+RUN ollama serve & \
+    OLLAMA_PID=$! && \
+    sleep 5 && \
+    ollama pull qwen2.5:0.5b; \
+    PULL_EXIT=$?; \
+    kill $OLLAMA_PID 2>/dev/null; \
+    exit $PULL_EXIT

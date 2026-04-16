@@ -1,0 +1,70 @@
+# Integration test infrastructure.
+#
+# Profiles:
+#   gateway   - gateway container only
+#   full      - gateway + node on a shared bridge network
+#   ollama    - add Ollama with pre-pulled qwen2.5:0.5b for agent exec tests
+#
+# Build images:
+#   docker compose -f test/infra/docker-compose.yml build
+#
+# Start gateway only:
+#   docker compose -f test/infra/docker-compose.yml --profile gateway up -d
+#
+# Start full (gateway + node):
+#   docker compose -f test/infra/docker-compose.yml --profile full up -d
+#
+# Start full + ollama:
+#   docker compose -f test/infra/docker-compose.yml --profile full --profile ollama up -d
+#
+# SSH into gateway:  ssh -p 2222 agent@localhost
+# SSH into scraper:  ssh -p 2223 agent@localhost
+
+services:
+  gateway:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: oc-test:latest
+    container_name: oc-gateway-test
+    profiles: [gateway, full]
+    networks:
+      - oc-test-net
+    ports:
+      - "2222:22"
+    volumes:
+      - ${OC_TEST_PUBKEY:-./id_test.pub}:/tmp/authorized_key.pub:ro
+
+  scraper:
+    image: oc-test:latest
+    container_name: oc-scraper-test
+    profiles: [full]
+    depends_on:
+      - gateway
+    networks:
+      - oc-test-net
+    ports:
+      - "2223:22"
+    volumes:
+      - ${OC_TEST_PUBKEY:-./id_test.pub}:/tmp/authorized_key.pub:ro
+
+  ollama:
+    build:
+      context: .
+      dockerfile: Dockerfile.ollama
+    image: oc-ollama-test:latest
+    container_name: oc-ollama-test
+    profiles: [ollama]
+    networks:
+      - oc-test-net
+    volumes:
+      - ollama_data:/root/.ollama
+    ports:
+      - "11434:11434"
+
+networks:
+  oc-test-net:
+    driver: bridge
+
+volumes:
+  ollama_data:
