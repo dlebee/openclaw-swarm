@@ -67,7 +67,7 @@ func (s *ResolvePreauthKeyStep) Execute(ctx context.Context, t scaffold.Target) 
 			return "", fmt.Errorf("preauth_key_file is empty")
 		}
 		m := mt.Machine
-		client, key, err := common.BorrowSSHWithRetry(ctx, s.dial, common.MachineHost(m), common.MachineSSHPort(m), common.MachineSSHUser(m))
+		client, key, err := common.BorrowSSHWithRetry(ctx, s.dial, common.ResolveMachineHost(ctx, m), common.MachineSSHPort(m), common.MachineSSHUser(m))
 		if err != nil {
 			return "", fmt.Errorf("dial gateway for preauth key: %w", err)
 		}

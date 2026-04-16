@@ -31,7 +31,7 @@ func (s *AddChannelStep) Applicable(_ context.Context, t scaffold.Target) (bool,
 func (s *AddChannelStep) Check(ctx context.Context, t scaffold.Target) (bool, error) {
 	ct := t.Payload.(*ChannelTarget)
 	m := ct.Machine
-	client, key, err := common.BorrowSSH(ctx, s.dial, common.MachineHost(m), common.MachineSSHPort(m), common.MachineSSHUser(m))
+	client, key, err := common.BorrowSSH(ctx, s.dial, common.ResolveMachineHost(ctx, m), common.MachineSSHPort(m), common.MachineSSHUser(m))
 	if err != nil {
 		return false, nil
 	}
@@ -53,7 +53,7 @@ func (s *AddChannelStep) Check(ctx context.Context, t scaffold.Target) (bool, er
 func (s *AddChannelStep) Execute(ctx context.Context, t scaffold.Target) error {
 	ct := t.Payload.(*ChannelTarget)
 	m := ct.Machine
-	client, key, err := common.BorrowSSHWithRetry(ctx, s.dial, common.MachineHost(m), common.MachineSSHPort(m), common.MachineSSHUser(m))
+	client, key, err := common.BorrowSSHWithRetry(ctx, s.dial, common.ResolveMachineHost(ctx, m), common.MachineSSHPort(m), common.MachineSSHUser(m))
 	if err != nil {
 		return fmt.Errorf("add-channels: %w", err)
 	}
@@ -88,7 +88,7 @@ func (s *AddChannelStep) Execute(ctx context.Context, t scaffold.Target) error {
 func (s *AddChannelStep) Verify(ctx context.Context, t scaffold.Target) error {
 	ct := t.Payload.(*ChannelTarget)
 	m := ct.Machine
-	client, key, err := common.BorrowSSH(ctx, s.dial, common.MachineHost(m), common.MachineSSHPort(m), common.MachineSSHUser(m))
+	client, key, err := common.BorrowSSH(ctx, s.dial, common.ResolveMachineHost(ctx, m), common.MachineSSHPort(m), common.MachineSSHUser(m))
 	if err != nil {
 		return fmt.Errorf("add-channels verify: dial: %w", err)
 	}

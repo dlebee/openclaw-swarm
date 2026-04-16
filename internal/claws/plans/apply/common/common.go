@@ -8,8 +8,9 @@ import (
 	"strings"
 	"time"
 
-	manifestdata "github.com/gluwa/openclaw-swarm2/internal/manifests/data"
 	"github.com/gluwa/openclaw-swarm2/internal/claws/plans/apply/provisioning"
+	manifestdata "github.com/gluwa/openclaw-swarm2/internal/manifests/data"
+	"github.com/gluwa/openclaw-swarm2/internal/scaffold"
 	clawssh "github.com/gluwa/openclaw-swarm2/internal/ssh"
 	xssh "golang.org/x/crypto/ssh"
 )
@@ -41,6 +42,23 @@ const (
 
 func MachineHost(m manifestdata.Machine) string {
 	return strings.TrimSpace(m.Host)
+}
+
+// ResolveMachineHost returns the reachable SSH address for m, preferring the
+// plan-cache entry recorded by create-machine (for Linode instances, both
+// existing-discovered in Check and fresh-created in Execute) over the
+// manifest's static Spec.Host. Falls back to Spec.Host when no cache entry
+// exists — which is exactly how non-Linode (static SSH) machines work today.
+//
+// This lets every downstream phase — mesh, gateway, channels, node, agents,
+// automations — dial Linode machines by their freshly resolved IP without
+// each phase having to thread a *provisioning.MachineTarget pointer through
+// its own target struct.
+func ResolveMachineHost(ctx context.Context, m manifestdata.Machine) string {
+	if h, ok := scaffold.LookupPlanMachineHost(ctx, m.Name); ok && h != "" {
+		return h
+	}
+	return MachineHost(m)
 }
 
 func MachineSSHPort(m manifestdata.Machine) int {

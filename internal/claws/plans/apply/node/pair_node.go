@@ -31,7 +31,7 @@ func (s *PairNodeStep) Applicable(_ context.Context, t scaffold.Target) (bool, e
 func (s *PairNodeStep) Check(ctx context.Context, t scaffold.Target) (bool, error) {
 	nt := t.Payload.(*NodeTarget)
 	gwMach := nt.GWMach
-	client, key, err := common.BorrowSSH(ctx, s.dial, common.MachineHost(gwMach), common.MachineSSHPort(gwMach), common.MachineSSHUser(gwMach))
+	client, key, err := common.BorrowSSH(ctx, s.dial, common.ResolveMachineHost(ctx, gwMach), common.MachineSSHPort(gwMach), common.MachineSSHUser(gwMach))
 	if err != nil {
 		return false, nil
 	}
@@ -56,7 +56,7 @@ func isNodePaired(dl *gwService.DeviceList, displayName string) bool {
 func (s *PairNodeStep) Execute(ctx context.Context, t scaffold.Target) error {
 	nt := t.Payload.(*NodeTarget)
 	gwMach := nt.GWMach
-	client, key, err := common.BorrowSSHWithRetry(ctx, s.dial, common.MachineHost(gwMach), common.MachineSSHPort(gwMach), common.MachineSSHUser(gwMach))
+	client, key, err := common.BorrowSSHWithRetry(ctx, s.dial, common.ResolveMachineHost(ctx, gwMach), common.MachineSSHPort(gwMach), common.MachineSSHUser(gwMach))
 	if err != nil {
 		return fmt.Errorf("pair-node: dial gateway: %w", err)
 	}
@@ -100,7 +100,7 @@ func (s *PairNodeStep) Execute(ctx context.Context, t scaffold.Target) error {
 	// rejected (pairing required). Restart it so it reconnects now that
 	// the device is approved.
 	m := nt.Machine
-	nodeClient, nodeKey, err := common.BorrowSSH(ctx, s.dial, common.MachineHost(m), common.MachineSSHPort(m), common.MachineSSHUser(m))
+	nodeClient, nodeKey, err := common.BorrowSSH(ctx, s.dial, common.ResolveMachineHost(ctx, m), common.MachineSSHPort(m), common.MachineSSHUser(m))
 	if err != nil {
 		return fmt.Errorf("pair-node: dial node for restart: %w", err)
 	}
@@ -115,7 +115,7 @@ func (s *PairNodeStep) Execute(ctx context.Context, t scaffold.Target) error {
 func (s *PairNodeStep) Verify(ctx context.Context, t scaffold.Target) error {
 	nt := t.Payload.(*NodeTarget)
 	gwMach := nt.GWMach
-	client, key, err := common.BorrowSSH(ctx, s.dial, common.MachineHost(gwMach), common.MachineSSHPort(gwMach), common.MachineSSHUser(gwMach))
+	client, key, err := common.BorrowSSH(ctx, s.dial, common.ResolveMachineHost(ctx, gwMach), common.MachineSSHPort(gwMach), common.MachineSSHUser(gwMach))
 	if err != nil {
 		return fmt.Errorf("pair-node verify: dial gateway: %w", err)
 	}

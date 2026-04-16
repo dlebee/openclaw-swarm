@@ -39,7 +39,7 @@ func (s *ConfigureToolsStep) Check(ctx context.Context, t scaffold.Target) (bool
 		return true, nil
 	}
 	m := at.Machine
-	client, key, err := common.BorrowSSH(ctx, s.dial, common.MachineHost(m), common.MachineSSHPort(m), common.MachineSSHUser(m))
+	client, key, err := common.BorrowSSH(ctx, s.dial, common.ResolveMachineHost(ctx, m), common.MachineSSHPort(m), common.MachineSSHUser(m))
 	if err != nil {
 		return false, nil
 	}
@@ -72,7 +72,7 @@ func (s *ConfigureToolsStep) Execute(ctx context.Context, t scaffold.Target) err
 		return nil
 	}
 	m := at.Machine
-	client, key, err := common.BorrowSSHWithRetry(ctx, s.dial, common.MachineHost(m), common.MachineSSHPort(m), common.MachineSSHUser(m))
+	client, key, err := common.BorrowSSHWithRetry(ctx, s.dial, common.ResolveMachineHost(ctx, m), common.MachineSSHPort(m), common.MachineSSHUser(m))
 	if err != nil {
 		return fmt.Errorf("configure-tools: %w", err)
 	}
@@ -111,7 +111,7 @@ func (s *ConfigureToolsStep) Verify(ctx context.Context, t scaffold.Target) erro
 		return nil
 	}
 	m := at.Machine
-	client, key, err := common.BorrowSSH(ctx, s.dial, common.MachineHost(m), common.MachineSSHPort(m), common.MachineSSHUser(m))
+	client, key, err := common.BorrowSSH(ctx, s.dial, common.ResolveMachineHost(ctx, m), common.MachineSSHPort(m), common.MachineSSHUser(m))
 	if err != nil {
 		return fmt.Errorf("configure-tools verify: dial: %w", err)
 	}

@@ -36,7 +36,7 @@ func (s *ConfigureBindingsStep) Check(ctx context.Context, t scaffold.Target) (b
 		return true, nil
 	}
 	m := at.Machine
-	client, key, err := common.BorrowSSH(ctx, s.dial, common.MachineHost(m), common.MachineSSHPort(m), common.MachineSSHUser(m))
+	client, key, err := common.BorrowSSH(ctx, s.dial, common.ResolveMachineHost(ctx, m), common.MachineSSHPort(m), common.MachineSSHUser(m))
 	if err != nil {
 		return false, nil
 	}
@@ -57,7 +57,7 @@ func (s *ConfigureBindingsStep) Execute(ctx context.Context, t scaffold.Target) 
 		return nil
 	}
 	m := at.Machine
-	client, key, err := common.BorrowSSHWithRetry(ctx, s.dial, common.MachineHost(m), common.MachineSSHPort(m), common.MachineSSHUser(m))
+	client, key, err := common.BorrowSSHWithRetry(ctx, s.dial, common.ResolveMachineHost(ctx, m), common.MachineSSHPort(m), common.MachineSSHUser(m))
 	if err != nil {
 		return fmt.Errorf("configure-bindings: %w", err)
 	}
@@ -95,7 +95,7 @@ func (s *ConfigureBindingsStep) Verify(ctx context.Context, t scaffold.Target) e
 		return nil
 	}
 	m := at.Machine
-	client, key, err := common.BorrowSSH(ctx, s.dial, common.MachineHost(m), common.MachineSSHPort(m), common.MachineSSHUser(m))
+	client, key, err := common.BorrowSSH(ctx, s.dial, common.ResolveMachineHost(ctx, m), common.MachineSSHPort(m), common.MachineSSHUser(m))
 	if err != nil {
 		return fmt.Errorf("configure-bindings verify: dial: %w", err)
 	}

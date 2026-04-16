@@ -71,6 +71,10 @@ func (a *CreateMachineStep) Check(ctx context.Context, t scaffold.Target) (satis
 		inst := matches[0]
 		mt.Instance = &inst
 		scaffold.RecordPlanMachineExists(ctx, t.ID, true)
+		// Cache the resolved IP so downstream phases (mesh, gateway, node,
+		// channels, agents, automations) can dial by public IPv4 without
+		// each target struct carrying a pointer back to this MachineTarget.
+		scaffold.RecordPlanMachineHost(ctx, mt.Spec.Name, inst.PublicIPv4)
 		return true, nil
 	default:
 		return false, fmt.Errorf("create-machine: %d instances with label %q under tag %q (want at most 1)",
@@ -113,6 +117,10 @@ func (a *CreateMachineStep) Execute(ctx context.Context, t scaffold.Target) erro
 		return err
 	}
 	mt.Instance = inst
+	// Cache the resolved IP so downstream phases (mesh, gateway, node, etc.)
+	// can dial the freshly provisioned machine by PublicIPv4. See the matching
+	// RecordPlanMachineHost call in Check for the existing-instance path.
+	scaffold.RecordPlanMachineHost(ctx, mt.Spec.Name, inst.PublicIPv4)
 	return nil
 }
 

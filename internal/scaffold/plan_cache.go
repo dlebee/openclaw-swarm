@@ -119,10 +119,7 @@ func ClosePlanResources(ctx context.Context) {
 }
 
 func planCacheMachineExistsKey(targetID string) string {
-	key := strings.ToUpper(strings.ReplaceAll(strings.TrimSpace(targetID), "-", "_"))
-	if key == "" {
-		key = "UNKNOWN"
-	}
+	key := normalizeMachineCacheID(targetID)
 	return fmt.Sprintf("MACHINE_%s_EXISTS", key)
 }
 
@@ -139,4 +136,65 @@ func RecordPlanMachineExists(ctx context.Context, targetID string, exists bool) 
 // when that phase was skipped or has not run yet on this context.
 func DoesMachineExist(ctx context.Context, targetID string) (exists bool, known bool) {
 	return PlanCacheBool(ctx, planCacheMachineExistsKey(targetID))
+}
+
+func planCacheMachineHostKey(targetID string) string {
+	key := normalizeMachineCacheID(targetID)
+	return fmt.Sprintf("MACHINE_%s_HOST", key)
+}
+
+// RecordPlanMachineHost stores the reachable SSH host for a machine on the
+// plan cache. Called by create-machine Check (when an existing Linode
+// instance is discovered) and Execute (after a fresh instance is created) to
+// make the dynamic IP visible to every downstream phase.
+//
+// Passing an empty host clears the entry — downstream lookups will fall back
+// to the manifest's static Spec.Host via [LookupPlanMachineHost]'s ok=false.
+// Destroy flows should call [ForgetPlanMachineHost] explicitly instead of
+// relying on this shape.
+func RecordPlanMachineHost(ctx context.Context, machineName, host string) {
+	host = strings.TrimSpace(host)
+	if host == "" {
+		ForgetPlanMachineHost(ctx, machineName)
+		return
+	}
+	PlanCacheSet(ctx, planCacheMachineHostKey(machineName), host)
+}
+
+// LookupPlanMachineHost returns the cached host for machineName if one has
+// been recorded in this plan run, plus a bool that distinguishes "not yet
+// recorded" from "recorded as empty". Callers that want a fallback to the
+// static manifest Spec.Host should use common.ResolveMachineHost instead of
+// reaching for this directly.
+func LookupPlanMachineHost(ctx context.Context, machineName string) (string, bool) {
+	v, ok := PlanCacheGet(ctx, planCacheMachineHostKey(machineName))
+	if !ok {
+		return "", false
+	}
+	s, _ := v.(string)
+	return s, true
+}
+
+// ForgetPlanMachineHost removes the cached host for a machine. Destroy flows
+// call this after the instance has been torn down so subsequent plan runs in
+// the same process can't dial a stale address.
+func ForgetPlanMachineHost(ctx context.Context, machineName string) {
+	pc := getPlanCache(ctx)
+	if pc == nil {
+		return
+	}
+	pc.mu.Lock()
+	delete(pc.data, planCacheMachineHostKey(machineName))
+	pc.mu.Unlock()
+}
+
+// normalizeMachineCacheID turns a machine / target name into the uppercase
+// underscore form used by all MACHINE_* cache keys so the key space is stable
+// regardless of the casing/dashes callers happen to use.
+func normalizeMachineCacheID(id string) string {
+	key := strings.ToUpper(strings.ReplaceAll(strings.TrimSpace(id), "-", "_"))
+	if key == "" {
+		return "UNKNOWN"
+	}
+	return key
 }

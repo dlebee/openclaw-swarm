@@ -48,6 +48,10 @@ func ResolveLinodeInstances(ctx context.Context, provider hosting.Provider, pref
 			if instances[i].Label == want {
 				inst := instances[i]
 				mt.Instance = &inst
+				// Mirror create-machine: seed the plan cache so downstream
+				// phases resolve the Linode PublicIPv4 through the usual
+				// common.ResolveMachineHost path.
+				scaffold.RecordPlanMachineHost(ctx, mt.Spec.Name, inst.PublicIPv4)
 				break
 			}
 		}

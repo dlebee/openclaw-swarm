@@ -57,7 +57,7 @@ func desiredDefaults(channels []manifestdata.Channel) map[string]string {
 func (s *EnsureDefaultStep) Check(ctx context.Context, t scaffold.Target) (bool, error) {
 	ct := t.Payload.(*ChannelTarget)
 	m := ct.Machine
-	client, key, err := common.BorrowSSH(ctx, s.dial, common.MachineHost(m), common.MachineSSHPort(m), common.MachineSSHUser(m))
+	client, key, err := common.BorrowSSH(ctx, s.dial, common.ResolveMachineHost(ctx, m), common.MachineSSHPort(m), common.MachineSSHUser(m))
 	if err != nil {
 		return false, nil
 	}
@@ -75,7 +75,7 @@ func (s *EnsureDefaultStep) Check(ctx context.Context, t scaffold.Target) (bool,
 func (s *EnsureDefaultStep) Execute(ctx context.Context, t scaffold.Target) error {
 	ct := t.Payload.(*ChannelTarget)
 	m := ct.Machine
-	client, key, err := common.BorrowSSHWithRetry(ctx, s.dial, common.MachineHost(m), common.MachineSSHPort(m), common.MachineSSHUser(m))
+	client, key, err := common.BorrowSSHWithRetry(ctx, s.dial, common.ResolveMachineHost(ctx, m), common.MachineSSHPort(m), common.MachineSSHUser(m))
 	if err != nil {
 		return fmt.Errorf("ensure-default-account: %w", err)
 	}
@@ -93,7 +93,7 @@ func (s *EnsureDefaultStep) Execute(ctx context.Context, t scaffold.Target) erro
 func (s *EnsureDefaultStep) Verify(ctx context.Context, t scaffold.Target) error {
 	ct := t.Payload.(*ChannelTarget)
 	m := ct.Machine
-	client, key, err := common.BorrowSSH(ctx, s.dial, common.MachineHost(m), common.MachineSSHPort(m), common.MachineSSHUser(m))
+	client, key, err := common.BorrowSSH(ctx, s.dial, common.ResolveMachineHost(ctx, m), common.MachineSSHPort(m), common.MachineSSHUser(m))
 	if err != nil {
 		return fmt.Errorf("ensure-default-account verify: dial: %w", err)
 	}

@@ -87,7 +87,7 @@ func resolveWorkspace(client *xssh.Client, workspace string) (string, error) {
 func (s *ConfigureWorkspaceStep) Check(ctx context.Context, t scaffold.Target) (bool, error) {
 	at := t.Payload.(*AgentTarget)
 	m := at.Machine
-	client, key, err := common.BorrowSSH(ctx, s.dial, common.MachineHost(m), common.MachineSSHPort(m), common.MachineSSHUser(m))
+	client, key, err := common.BorrowSSH(ctx, s.dial, common.ResolveMachineHost(ctx, m), common.MachineSSHPort(m), common.MachineSSHUser(m))
 	if err != nil {
 		return false, nil
 	}
@@ -109,7 +109,7 @@ func (s *ConfigureWorkspaceStep) Check(ctx context.Context, t scaffold.Target) (
 func (s *ConfigureWorkspaceStep) Execute(ctx context.Context, t scaffold.Target) error {
 	at := t.Payload.(*AgentTarget)
 	m := at.Machine
-	client, key, err := common.BorrowSSHWithRetry(ctx, s.dial, common.MachineHost(m), common.MachineSSHPort(m), common.MachineSSHUser(m))
+	client, key, err := common.BorrowSSHWithRetry(ctx, s.dial, common.ResolveMachineHost(ctx, m), common.MachineSSHPort(m), common.MachineSSHUser(m))
 	if err != nil {
 		return fmt.Errorf("configure-workspace: %w", err)
 	}
@@ -143,7 +143,7 @@ func (s *ConfigureWorkspaceStep) Execute(ctx context.Context, t scaffold.Target)
 func (s *ConfigureWorkspaceStep) Verify(ctx context.Context, t scaffold.Target) error {
 	at := t.Payload.(*AgentTarget)
 	m := at.Machine
-	client, key, err := common.BorrowSSH(ctx, s.dial, common.MachineHost(m), common.MachineSSHPort(m), common.MachineSSHUser(m))
+	client, key, err := common.BorrowSSH(ctx, s.dial, common.ResolveMachineHost(ctx, m), common.MachineSSHPort(m), common.MachineSSHUser(m))
 	if err != nil {
 		return fmt.Errorf("configure-workspace verify: dial: %w", err)
 	}

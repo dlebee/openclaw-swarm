@@ -29,7 +29,7 @@ func (s *AddAgentStep) Applicable(_ context.Context, t scaffold.Target) (bool, e
 func (s *AddAgentStep) Check(ctx context.Context, t scaffold.Target) (bool, error) {
 	at := t.Payload.(*AgentTarget)
 	m := at.Machine
-	client, key, err := common.BorrowSSH(ctx, s.dial, common.MachineHost(m), common.MachineSSHPort(m), common.MachineSSHUser(m))
+	client, key, err := common.BorrowSSH(ctx, s.dial, common.ResolveMachineHost(ctx, m), common.MachineSSHPort(m), common.MachineSSHUser(m))
 	if err != nil {
 		return false, nil
 	}
@@ -45,7 +45,7 @@ func (s *AddAgentStep) Check(ctx context.Context, t scaffold.Target) (bool, erro
 func (s *AddAgentStep) Execute(ctx context.Context, t scaffold.Target) error {
 	at := t.Payload.(*AgentTarget)
 	m := at.Machine
-	client, key, err := common.BorrowSSHWithRetry(ctx, s.dial, common.MachineHost(m), common.MachineSSHPort(m), common.MachineSSHUser(m))
+	client, key, err := common.BorrowSSHWithRetry(ctx, s.dial, common.ResolveMachineHost(ctx, m), common.MachineSSHPort(m), common.MachineSSHUser(m))
 	if err != nil {
 		return fmt.Errorf("add-agent: %w", err)
 	}
@@ -65,7 +65,7 @@ func (s *AddAgentStep) Execute(ctx context.Context, t scaffold.Target) error {
 func (s *AddAgentStep) Verify(ctx context.Context, t scaffold.Target) error {
 	at := t.Payload.(*AgentTarget)
 	m := at.Machine
-	client, key, err := common.BorrowSSH(ctx, s.dial, common.MachineHost(m), common.MachineSSHPort(m), common.MachineSSHUser(m))
+	client, key, err := common.BorrowSSH(ctx, s.dial, common.ResolveMachineHost(ctx, m), common.MachineSSHPort(m), common.MachineSSHUser(m))
 	if err != nil {
 		return fmt.Errorf("add-agent verify: dial: %w", err)
 	}
