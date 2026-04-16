@@ -947,8 +947,8 @@ func setupMeshTestInfra(t *testing.T) (*data.Manifest, xssh.Signer, int, int) {
 
 	netName := testNetwork(t)
 
-	gw := ocContainer(t, netName, pubPath, "gateway-mesh", "oc-gateway-mesh-test")
-	scraper := ocContainer(t, netName, pubPath, "scraper-mesh", "oc-scraper-mesh-test")
+	gw := meshContainer(t, netName, pubPath, "gateway-mesh", "oc-gateway-mesh-test")
+	scraper := meshContainer(t, netName, pubPath, "scraper-mesh", "oc-scraper-mesh-test")
 
 	gwPort := mappedPort(t, gw, "22/tcp")
 	scraperPort := mappedPort(t, scraper, "22/tcp")
