@@ -53,7 +53,7 @@ agents:
     workspace: ~/.openclaw/workspace
     model: { primary: "ollama/qwen2.5:0.5b" }
     tools:
-      exec: { host: scraper, node: scraper-node, security: full }
+      exec: { host: node, node: scraper-node, security: full }
     soul: |
       You are a scraper agent for integration testing.
       Scrape and process data when asked. Be concise.

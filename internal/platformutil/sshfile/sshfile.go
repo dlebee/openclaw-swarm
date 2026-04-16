@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
 
 	"github.com/pkg/sftp"
 	xssh "golang.org/x/crypto/ssh"
@@ -35,4 +36,33 @@ func ReadFile(client *xssh.Client, path string) ([]byte, error) {
 		return nil, fmt.Errorf("sshfile: read %s: %w", path, err)
 	}
 	return data, nil
+}
+
+// WriteFile writes data to path on the remote host via SFTP, creating parent
+// directories as needed. The file is created with mode 0644.
+func WriteFile(client *xssh.Client, path string, data []byte) error {
+	if client == nil {
+		return fmt.Errorf("sshfile: client is nil")
+	}
+	sc, err := sftp.NewClient(client)
+	if err != nil {
+		return fmt.Errorf("sshfile: sftp client: %w", err)
+	}
+	defer sc.Close()
+
+	dir := filepath.Dir(path)
+	if err := sc.MkdirAll(dir); err != nil {
+		return fmt.Errorf("sshfile: mkdir %s: %w", dir, err)
+	}
+
+	f, err := sc.Create(path)
+	if err != nil {
+		return fmt.Errorf("sshfile: create %s: %w", path, err)
+	}
+	defer f.Close()
+
+	if _, err := f.Write(data); err != nil {
+		return fmt.Errorf("sshfile: write %s: %w", path, err)
+	}
+	return nil
 }

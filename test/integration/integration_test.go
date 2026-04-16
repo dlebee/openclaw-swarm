@@ -290,7 +290,6 @@ func TestApplyPlan(t *testing.T) {
 				stepName := step.Name()
 				switch stepName {
 				case "install-nodejs", "install-openclaw":
-					// Pre-installed in the Docker image: applicable + satisfied.
 					if !applicable {
 						t.Errorf("phase=%s target=%s step=%s: expected applicable, got not applicable",
 							phase.Name, target.ID, stepName)
@@ -309,6 +308,31 @@ func TestApplyPlan(t *testing.T) {
 				case "bootstrap-node", "configure-node", "pair-node":
 					if !applicable {
 						t.Errorf("phase=%s target=%s step=%s: expected applicable, got not applicable",
+							phase.Name, target.ID, stepName)
+					}
+				default:
+					t.Errorf("phase=%s target=%s step=%s: unexpected step name",
+						phase.Name, target.ID, stepName)
+				}
+			case "agents":
+				stepName := step.Name()
+				switch stepName {
+				case "add-agent", "ensure-model", "configure-workspace":
+					if !applicable {
+						t.Errorf("phase=%s target=%s step=%s: expected applicable, got not applicable",
+							phase.Name, target.ID, stepName)
+					}
+				case "configure-tools":
+					// Only applicable when agent has tools defined.
+					// Both test agents have tools, so expect applicable.
+					if !applicable {
+						t.Errorf("phase=%s target=%s step=%s: expected applicable, got not applicable",
+							phase.Name, target.ID, stepName)
+					}
+				case "configure-bindings":
+					// No bindings in test manifest, so expect not applicable.
+					if applicable {
+						t.Errorf("phase=%s target=%s step=%s: expected not applicable (no bindings), got applicable",
 							phase.Name, target.ID, stepName)
 					}
 				default:
@@ -524,4 +548,51 @@ func TestApplyExecute(t *testing.T) {
 		t.Fatal("expected scraper-node to be paired on the gateway")
 	}
 	t.Log("verified: scraper-node paired on gateway")
+
+	// --- Verify agents state (both agents live on the gateway machine) ---
+
+	// 11. Both agents must appear in `openclaw agents list --json`.
+	agentListOut, err := bash.RunOutput(client, `openclaw agents list --json 2>/dev/null || echo "[]"`)
+	if err != nil {
+		t.Fatalf("agents list: %v", err)
+	}
+	for _, agentID := range []string{"assistant", "scraper"} {
+		if !strings.Contains(agentListOut, agentID) {
+			t.Fatalf("expected agent %q in agents list, got:\n%s", agentID, agentListOut)
+		}
+	}
+	t.Log("verified: both agents registered")
+
+	// 12. Each agent must have the correct model set.
+	if !strings.Contains(agentListOut, "ollama/qwen2.5:0.5b") {
+		t.Fatalf("expected model ollama/qwen2.5:0.5b in agents list, got:\n%s", agentListOut)
+	}
+	t.Log("verified: agent models set correctly")
+
+	// 13. SOUL.md must exist in each agent's workspace with correct content.
+	gwHome, err := gwService.ResolveHome(client)
+	if err != nil {
+		t.Fatalf("resolve gateway home: %v", err)
+	}
+	soulContent, err := bash.RunOutput(client, fmt.Sprintf(`cat %s/.openclaw/workspace/SOUL.md 2>/dev/null || echo "(not found)"`, gwHome))
+	if err != nil {
+		t.Fatalf("read SOUL.md: %v", err)
+	}
+	if strings.Contains(soulContent, "(not found)") {
+		t.Fatal("expected SOUL.md to exist in agent workspace")
+	}
+	if !strings.Contains(soulContent, "integration testing") {
+		t.Fatalf("SOUL.md content mismatch, got:\n%s", soulContent)
+	}
+	t.Log("verified: SOUL.md written to workspace")
+
+	// 14. IDENTITY.md must exist for agents with identity config.
+	identityContent, err := bash.RunOutput(client, fmt.Sprintf(`cat %s/.openclaw/workspace/IDENTITY.md 2>/dev/null || echo "(not found)"`, gwHome))
+	if err != nil {
+		t.Fatalf("read IDENTITY.md: %v", err)
+	}
+	if strings.Contains(identityContent, "(not found)") {
+		t.Fatal("expected IDENTITY.md to exist in agent workspace")
+	}
+	t.Log("verified: IDENTITY.md written to workspace")
 }

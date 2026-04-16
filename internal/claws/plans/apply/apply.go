@@ -9,6 +9,7 @@ import (
 	"os"
 	"strings"
 
+	"github.com/gluwa/openclaw-swarm2/internal/claws/plans/apply/agents"
 	"github.com/gluwa/openclaw-swarm2/internal/claws/plans/apply/gateway"
 	"github.com/gluwa/openclaw-swarm2/internal/claws/plans/apply/mesh"
 	"github.com/gluwa/openclaw-swarm2/internal/claws/plans/apply/node"
@@ -63,6 +64,12 @@ func BuildPlan(o BuildOptions) (*scaffold.Plan, error) {
 		nodeTargets := node.BuildNodeTargets(o.Manifest.Nodes, o.Manifest.Machines, o.Manifest.Gateways)
 		node.AddPhase(p, nodeTargets, node.Options{
 			SSHDial: node.SSHDialFunc(o.SSHDial),
+		})
+	}
+	if len(o.Manifest.Agents) > 0 {
+		agentTargets := agents.BuildAgentTargets(o.Manifest.Agents, o.Manifest.Gateways, o.Manifest.Machines)
+		agents.AddPhase(p, agentTargets, agents.Options{
+			SSHDial: agents.SSHDialFunc(o.SSHDial),
 		})
 	}
 	return p, nil

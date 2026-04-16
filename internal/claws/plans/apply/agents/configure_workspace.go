@@ -1,0 +1,164 @@
+package agents
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"os"
+	"path"
+	"strings"
+
+	"github.com/gluwa/openclaw-swarm2/internal/claws/plans/apply/common"
+	gwService "github.com/gluwa/openclaw-swarm2/internal/claws/plans/apply/gateway"
+	manifestdata "github.com/gluwa/openclaw-swarm2/internal/manifests/data"
+	"github.com/gluwa/openclaw-swarm2/internal/platformutil/bash"
+	"github.com/gluwa/openclaw-swarm2/internal/platformutil/sshfile"
+	"github.com/gluwa/openclaw-swarm2/internal/scaffold"
+	xssh "golang.org/x/crypto/ssh"
+)
+
+// ConfigureWorkspaceStep writes/updates workspace files (SOUL.md, IDENTITY.md,
+// AGENTS.md) and sets identity config via `openclaw agents set-identity`.
+type ConfigureWorkspaceStep struct {
+	dial SSHDialFunc
+}
+
+func NewConfigureWorkspaceStep(opts Options) *ConfigureWorkspaceStep {
+	return &ConfigureWorkspaceStep{dial: opts.SSHDial}
+}
+
+func (*ConfigureWorkspaceStep) Name() string { return "configure-workspace" }
+
+func (s *ConfigureWorkspaceStep) Applicable(_ context.Context, t scaffold.Target) (bool, error) {
+	_, ok := t.Payload.(*AgentTarget)
+	return ok, nil
+}
+
+type workspaceFile struct {
+	name    string
+	content string
+}
+
+func desiredFiles(spec manifestdata.Agent) []workspaceFile {
+	var files []workspaceFile
+	if spec.Soul != "" {
+		files = append(files, workspaceFile{"SOUL.md", spec.Soul})
+	}
+	if spec.AgentsMD != "" {
+		files = append(files, workspaceFile{"AGENTS.md", spec.AgentsMD})
+	}
+	if spec.Identity != nil && spec.Identity.Name != "" {
+		files = append(files, workspaceFile{"IDENTITY.md", buildIdentityMD(spec.Identity)})
+	}
+	return files
+}
+
+func buildIdentityMD(id *manifestdata.AgentIdentity) string {
+	var sb strings.Builder
+	sb.WriteString("# IDENTITY.md - Agent Identity\n\n")
+	if id.Name != "" {
+		sb.WriteString(fmt.Sprintf("name: %s\n", id.Name))
+	}
+	if id.Emoji != "" {
+		sb.WriteString(fmt.Sprintf("emoji: %s\n", id.Emoji))
+	}
+	return sb.String()
+}
+
+// resolveWorkspace resolves ~ in the workspace path using the remote $HOME.
+func resolveWorkspace(client *xssh.Client, workspace string) (string, error) {
+	if strings.HasPrefix(workspace, "~/") {
+		home, err := gwService.ResolveHome(client)
+		if err != nil {
+			return "", err
+		}
+		return path.Join(home, workspace[2:]), nil
+	}
+	return workspace, nil
+}
+
+func (s *ConfigureWorkspaceStep) Check(ctx context.Context, t scaffold.Target) (bool, error) {
+	at := t.Payload.(*AgentTarget)
+	m := at.Machine
+	client, key, err := common.BorrowSSH(ctx, s.dial, common.MachineHost(m), common.MachineSSHPort(m), common.MachineSSHUser(m))
+	if err != nil {
+		return false, nil
+	}
+	defer common.ReturnSSH(ctx, key, client)
+
+	wsDir, err := resolveWorkspace(client, at.Spec.Workspace)
+	if err != nil {
+		return false, nil
+	}
+
+	for _, f := range desiredFiles(at.Spec) {
+		if !fileMatches(client, path.Join(wsDir, f.name), f.content) {
+			return false, nil
+		}
+	}
+	return true, nil
+}
+
+func (s *ConfigureWorkspaceStep) Execute(ctx context.Context, t scaffold.Target) error {
+	at := t.Payload.(*AgentTarget)
+	m := at.Machine
+	client, key, err := common.BorrowSSHWithRetry(ctx, s.dial, common.MachineHost(m), common.MachineSSHPort(m), common.MachineSSHUser(m))
+	if err != nil {
+		return fmt.Errorf("configure-workspace: %w", err)
+	}
+	defer common.ReturnSSH(ctx, key, client)
+
+	wsDir, err := resolveWorkspace(client, at.Spec.Workspace)
+	if err != nil {
+		return fmt.Errorf("configure-workspace: %w", err)
+	}
+
+	for _, f := range desiredFiles(at.Spec) {
+		if err := sshfile.WriteFile(client, path.Join(wsDir, f.name), []byte(f.content)); err != nil {
+			return fmt.Errorf("configure-workspace: write %s: %w", f.name, err)
+		}
+	}
+
+	if at.Spec.Identity != nil && at.Spec.Identity.Name != "" {
+		cmd := fmt.Sprintf(`openclaw agents set-identity --agent %q --name %q`, at.Spec.ID, at.Spec.Identity.Name)
+		if at.Spec.Identity.Emoji != "" {
+			cmd += fmt.Sprintf(` --emoji %q`, at.Spec.Identity.Emoji)
+		}
+		out, err := bash.RunOutput(client, cmd)
+		if err != nil {
+			return fmt.Errorf("configure-workspace: set-identity: %w\n%s", err, out)
+		}
+	}
+
+	return nil
+}
+
+func (s *ConfigureWorkspaceStep) Verify(ctx context.Context, t scaffold.Target) error {
+	at := t.Payload.(*AgentTarget)
+	m := at.Machine
+	client, key, err := common.BorrowSSH(ctx, s.dial, common.MachineHost(m), common.MachineSSHPort(m), common.MachineSSHUser(m))
+	if err != nil {
+		return fmt.Errorf("configure-workspace verify: dial: %w", err)
+	}
+	defer common.ReturnSSH(ctx, key, client)
+
+	wsDir, err := resolveWorkspace(client, at.Spec.Workspace)
+	if err != nil {
+		return fmt.Errorf("configure-workspace verify: %w", err)
+	}
+
+	for _, f := range desiredFiles(at.Spec) {
+		if !fileMatches(client, path.Join(wsDir, f.name), f.content) {
+			return fmt.Errorf("configure-workspace verify: %s content mismatch", f.name)
+		}
+	}
+	return nil
+}
+
+func fileMatches(client *xssh.Client, filePath, desired string) bool {
+	data, err := sshfile.ReadFile(client, filePath)
+	if errors.Is(err, os.ErrNotExist) || err != nil {
+		return false
+	}
+	return strings.TrimSpace(string(data)) == strings.TrimSpace(desired)
+}

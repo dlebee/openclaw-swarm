@@ -1,0 +1,161 @@
+package agents
+
+import (
+	"context"
+	"fmt"
+
+	"github.com/gluwa/openclaw-swarm2/internal/claws/plans/apply/common"
+	manifestdata "github.com/gluwa/openclaw-swarm2/internal/manifests/data"
+	"github.com/gluwa/openclaw-swarm2/internal/platformutil/bash"
+	"github.com/gluwa/openclaw-swarm2/internal/scaffold"
+)
+
+// ConfigureBindingsStep ensures the agent's channel bindings match the
+// manifest. Adds missing bindings and removes extras.
+type ConfigureBindingsStep struct {
+	dial SSHDialFunc
+}
+
+func NewConfigureBindingsStep(opts Options) *ConfigureBindingsStep {
+	return &ConfigureBindingsStep{dial: opts.SSHDial}
+}
+
+func (*ConfigureBindingsStep) Name() string { return "configure-bindings" }
+
+func (s *ConfigureBindingsStep) Applicable(_ context.Context, t scaffold.Target) (bool, error) {
+	at, ok := t.Payload.(*AgentTarget)
+	if !ok {
+		return false, nil
+	}
+	return len(at.Spec.Bindings) > 0, nil
+}
+
+func (s *ConfigureBindingsStep) Check(ctx context.Context, t scaffold.Target) (bool, error) {
+	at := t.Payload.(*AgentTarget)
+	if len(at.Spec.Bindings) == 0 {
+		return true, nil
+	}
+	m := at.Machine
+	client, key, err := common.BorrowSSH(ctx, s.dial, common.MachineHost(m), common.MachineSSHPort(m), common.MachineSSHUser(m))
+	if err != nil {
+		return false, nil
+	}
+	defer common.ReturnSSH(ctx, key, client)
+
+	current, err := ListBindings(client, at.Spec.ID)
+	if err != nil {
+		return false, nil
+	}
+
+	toAdd, toRemove := diffBindings(current, at.Spec.Bindings)
+	return len(toAdd) == 0 && len(toRemove) == 0, nil
+}
+
+func (s *ConfigureBindingsStep) Execute(ctx context.Context, t scaffold.Target) error {
+	at := t.Payload.(*AgentTarget)
+	if len(at.Spec.Bindings) == 0 {
+		return nil
+	}
+	m := at.Machine
+	client, key, err := common.BorrowSSHWithRetry(ctx, s.dial, common.MachineHost(m), common.MachineSSHPort(m), common.MachineSSHUser(m))
+	if err != nil {
+		return fmt.Errorf("configure-bindings: %w", err)
+	}
+	defer common.ReturnSSH(ctx, key, client)
+
+	current, err := ListBindings(client, at.Spec.ID)
+	if err != nil {
+		return fmt.Errorf("configure-bindings: list: %w", err)
+	}
+
+	toAdd, toRemove := diffBindings(current, at.Spec.Bindings)
+
+	for _, b := range toRemove {
+		script := fmt.Sprintf(`openclaw agents unbind --agent %q --bind %q`, at.Spec.ID, formatBinding(b))
+		out, err := bash.RunOutput(client, script)
+		if err != nil {
+			return fmt.Errorf("configure-bindings: unbind %s: %w\n%s", formatBinding(b), err, out)
+		}
+	}
+
+	for _, b := range toAdd {
+		script := fmt.Sprintf(`openclaw agents bind --agent %q --bind %q`, at.Spec.ID, formatBinding(b))
+		out, err := bash.RunOutput(client, script)
+		if err != nil {
+			return fmt.Errorf("configure-bindings: bind %s: %w\n%s", formatBinding(b), err, out)
+		}
+	}
+
+	return nil
+}
+
+func (s *ConfigureBindingsStep) Verify(ctx context.Context, t scaffold.Target) error {
+	at := t.Payload.(*AgentTarget)
+	if len(at.Spec.Bindings) == 0 {
+		return nil
+	}
+	m := at.Machine
+	client, key, err := common.BorrowSSH(ctx, s.dial, common.MachineHost(m), common.MachineSSHPort(m), common.MachineSSHUser(m))
+	if err != nil {
+		return fmt.Errorf("configure-bindings verify: dial: %w", err)
+	}
+	defer common.ReturnSSH(ctx, key, client)
+
+	current, err := ListBindings(client, at.Spec.ID)
+	if err != nil {
+		return fmt.Errorf("configure-bindings verify: %w", err)
+	}
+
+	toAdd, toRemove := diffBindings(current, at.Spec.Bindings)
+	if len(toAdd) > 0 || len(toRemove) > 0 {
+		return fmt.Errorf("configure-bindings verify: %d missing, %d extra bindings", len(toAdd), len(toRemove))
+	}
+	return nil
+}
+
+// ---------------------------------------------------------------------------
+// helpers
+// ---------------------------------------------------------------------------
+
+func formatBinding(b manifestdata.AgentBinding) string {
+	if b.Account != "" {
+		return b.Channel + ":" + b.Account
+	}
+	return b.Channel
+}
+
+func bindingKey(channel, account string) string {
+	if account != "" {
+		return channel + ":" + account
+	}
+	return channel
+}
+
+// diffBindings returns bindings that need to be added and removed to reach
+// the desired state.
+func diffBindings(current []BindingInfo, desired []manifestdata.AgentBinding) (toAdd []manifestdata.AgentBinding, toRemove []manifestdata.AgentBinding) {
+	currentSet := make(map[string]bool, len(current))
+	for _, b := range current {
+		currentSet[bindingKey(b.Channel, b.Account)] = true
+	}
+
+	desiredSet := make(map[string]bool, len(desired))
+	for _, b := range desired {
+		k := bindingKey(b.Channel, b.Account)
+		desiredSet[k] = true
+		if !currentSet[k] {
+			toAdd = append(toAdd, b)
+		}
+	}
+
+	for _, b := range current {
+		k := bindingKey(b.Channel, b.Account)
+		if !desiredSet[k] {
+			toRemove = append(toRemove, manifestdata.AgentBinding{
+				Channel: b.Channel,
+				Account: b.Account,
+			})
+		}
+	}
+	return
+}
