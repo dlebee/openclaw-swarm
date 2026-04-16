@@ -26,6 +26,7 @@ func (mt *MeshTarget) GetMachine() manifestdata.Machine { return mt.Machine }
 // Options configures the mesh phase.
 type Options struct {
 	SSHDial  SSHDialFunc
+	Machines []manifestdata.Machine
 	Gateways []manifestdata.Gateway
 	Nodes    []manifestdata.Node
 }
@@ -110,8 +111,12 @@ func AddPhase(p *scaffold.Plan, machineTargets []scaffold.Target, opts Options) 
 	ph := p.AddPhase("mesh")
 	ph.Concurrency = 1
 
+	machines := opts.Machines
+	if len(machines) == 0 {
+		machines = extractMachines(machineTargets)
+	}
 	meshTargets := BuildMeshTargets(
-		extractMachines(machineTargets),
+		machines,
 		opts.Gateways,
 		opts.Nodes,
 	)

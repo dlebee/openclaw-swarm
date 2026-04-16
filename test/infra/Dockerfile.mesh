@@ -1,0 +1,27 @@
+FROM oc-test:latest
+
+# Override headscale with a test stub that simulates the happy path.
+# - version: echoes the pinned version string
+# - users create: succeeds (idempotent)
+# - preauthkeys create: emits a fake reusable key on stdout
+# - serve: creates the unix socket using Python3 one-liner, then sleeps
+COPY stub-headscale.sh /usr/local/bin/headscale
+RUN chmod +x /usr/local/bin/headscale
+
+# Override tailscale CLI with a stub.
+# - up: writes a deterministic fake IPv4 to /var/lib/tailscale/ip4.txt
+# - ip -4: reads and prints the fake IP (empty string if not yet joined)
+# - all other subcommands: succeed silently
+COPY stub-tailscale.sh /usr/bin/tailscale
+RUN chmod +x /usr/bin/tailscale
+RUN ln -sf /usr/bin/tailscale /usr/sbin/tailscale 2>/dev/null || true
+
+# Stub tailscaled daemon: creates the unix sockets that install_tailscale.go
+# waits for, then sleeps to stay alive as a background process.
+COPY stub-tailscaled.sh /usr/sbin/tailscaled
+RUN chmod +x /usr/sbin/tailscaled
+
+# Override systemctl with a mesh-aware stub that reports tailscaled as inactive
+# when its socket doesn't exist, causing the install script to start it.
+COPY stub-systemctl-mesh.sh /usr/local/bin/systemctl
+RUN chmod 755 /usr/local/bin/systemctl

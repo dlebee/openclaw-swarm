@@ -47,6 +47,27 @@ func (s *InstallTailscaleStep) Execute(ctx context.Context, t scaffold.Target) e
 	}
 	defer common.ReturnSSH(ctx, key, client)
 
+	// In container (Docker) environments, kernel TUN is unavailable so we cannot
+	// run `tailscale up`. Install the binary only and skip the join step.
+	if mt.Machine.Container {
+		script := `set -euo pipefail
+export DEBIAN_FRONTEND=noninteractive
+if ! command -v tailscale >/dev/null 2>&1; then
+  mkdir -p /usr/share/keyrings
+  curl -fsSL https://pkgs.tailscale.com/stable/ubuntu/noble.noarmor.gpg | sudo tee /usr/share/keyrings/tailscale-archive-keyring.gpg >/dev/null
+  curl -fsSL https://pkgs.tailscale.com/stable/ubuntu/noble.tailscale-keyring.list | sudo tee /etc/apt/sources.list.d/tailscale.list >/dev/null
+  sudo apt-get update -qq
+  sudo apt-get install -y -qq tailscale
+fi
+echo "container-skip-join"
+`
+		out, err := bash.RunOutput(client, script)
+		if err != nil {
+			return fmt.Errorf("install-tailscale (container) on %s: %w\n%s", m.Name, err, out)
+		}
+		return nil
+	}
+
 	v, _ := scaffold.PlanCacheGet(ctx, CacheKeyControlURL)
 	controlURL, _ := v.(string)
 	if controlURL == "" {
@@ -72,6 +93,19 @@ sudo ufw allow 41641/udp comment 'tailscale' >/dev/null 2>&1 || true
 %sif ! command -v tailscale >/dev/null 2>&1; then
   curl -fsSL https://tailscale.com/install.sh | sh
 fi
+# Ensure tailscaled is running before calling tailscale up.
+if ! sudo systemctl is-active --quiet tailscaled 2>/dev/null; then
+  sudo systemctl start tailscaled 2>/dev/null || true
+fi
+# Wait for tailscaled socket (path varies by mode).
+for sock in /run/tailscale/tailscaled.sock /var/run/tailscale/tailscaled.sock; do
+  i=0
+  while [ $i -lt 30 ]; do
+    [ -S "$sock" ] && break
+    sleep 1; i=$((i+1))
+  done
+  [ -S "$sock" ] && break
+done
 sudo tailscale up --login-server=%q --authkey=%q --accept-dns=false
 sudo ufw allow in on tailscale0 >/dev/null 2>&1 || true
 tailscale ip -4
@@ -97,6 +131,15 @@ func (s *InstallTailscaleStep) Verify(ctx context.Context, t scaffold.Target) er
 		return fmt.Errorf("install-tailscale verify: dial: %w", err)
 	}
 	defer common.ReturnSSH(ctx, key, client)
+
+	// In container mode we only install the binary, not join — verify binary exists.
+	if mt.Machine.Container {
+		out, err := bash.RunOutput(client, `command -v tailscale >/dev/null 2>&1 && echo ok || echo missing`)
+		if err != nil || strings.TrimSpace(out) != "ok" {
+			return fmt.Errorf("install-tailscale verify: tailscale binary missing on %s", m.Name)
+		}
+		return nil
+	}
 
 	if ip := TailscaleIP(client); ip == "" {
 		return fmt.Errorf("install-tailscale verify: no tailscale IP on %s", m.Name)

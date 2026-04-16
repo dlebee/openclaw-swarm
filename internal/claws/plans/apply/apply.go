@@ -57,6 +57,7 @@ func BuildPlan(o BuildOptions) (*scaffold.Plan, error) {
 	})
 	mesh.AddPhase(p, targets, mesh.Options{
 		SSHDial:  mesh.SSHDialFunc(o.SSHDial),
+		Machines: o.Manifest.Machines,
 		Gateways: o.Manifest.Gateways,
 		Nodes:    o.Manifest.Nodes,
 	})

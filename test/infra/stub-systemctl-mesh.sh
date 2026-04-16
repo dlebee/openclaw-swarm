@@ -1,7 +1,8 @@
 #!/bin/sh
-# Stub systemctl for Docker integration tests.
-# Handles openclaw-gateway and openclaw-node start/stop; everything else is a no-op.
-echo "[stub-systemctl] $*" >&2
+# Stub systemctl for mesh Docker integration tests.
+# Extends the base stub: is-active for tailscaled checks socket existence
+# so that install_tailscale.go's start-if-inactive logic kicks in.
+echo "[stub-systemctl-mesh] $*" >&2
 
 SUBCMD=""
 UNIT=""
@@ -16,8 +17,6 @@ for arg in "$@"; do
   esac
 done
 
-# Load Environment= directives from both the unit file and the drop-in.
-# Strips optional surrounding quotes from values.
 load_unit_env() {
   local svc="$1"
   for d in "$HOME/.config/systemd/user" "/etc/systemd/system"; do
@@ -101,9 +100,8 @@ do_start() {
     ;;
     tailscaled*)
       do_stop "$UNIT"
-      mkdir -p /var/lib/tailscale
-      nohup tailscaled --state=/var/lib/tailscale/tailscaled.state --tun=userspace-networking >> /tmp/tailscaled.log 2>&1 &
-      # Wait for tailscaled socket to be ready (path varies by mode).
+      nohup /usr/sbin/tailscaled >> /tmp/tailscaled.log 2>&1 &
+      # Wait for tailscaled socket to be ready.
       i=0
       while [ $i -lt 20 ]; do
         [ -S /run/tailscale/tailscaled.sock ] && break
@@ -115,7 +113,18 @@ do_start() {
 }
 
 case "$SUBCMD" in
-  is-active)  exit 0 ;;
+  is-active)
+    case "$UNIT" in
+      tailscaled*)
+        # Report inactive if sockets don't exist, so install_tailscale.go
+        # triggers start and our stub tailscaled creates them.
+        [ -S /run/tailscale/tailscaled.sock ] && exit 0
+        [ -S /var/run/tailscale/tailscaled.sock ] && exit 0
+        exit 3
+        ;;
+      *) exit 0 ;;
+    esac
+    ;;
   is-enabled) exit 0 ;;
   status) printf "● %s - stub\n   Active: active (running)\n" "$UNIT"; exit 0 ;;
   start|restart) do_start; exit 0 ;;
