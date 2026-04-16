@@ -1,24 +1,28 @@
 package scaffold
 
 import (
+	"context"
 	"fmt"
 	"strings"
 )
 
-func describePlain(compiled []compiledPhase) string {
+func describePlainWithProbe(ctx context.Context, compiled []compiledPhase, h PlanDisplayHints) (string, error) {
+	cells, err := annotatePlanCellsWithProbe(ctx, compiled, h)
+	if err != nil {
+		return "", err
+	}
+	segs := planSegmentsFromCells(cells)
 	var b strings.Builder
-	for _, ph := range compiled {
-		fmt.Fprintf(&b, "phase %q (concurrency=%d)\n", ph.name, ph.concurrency)
-		for _, st := range ph.steps {
-			fmt.Fprintf(&b, "  step %q: %d cells", st.name, len(st.cells))
-			if st.barrier != nil {
-				b.WriteString(" [barrier]")
-			}
-			b.WriteByte('\n')
-			for _, c := range st.cells {
-				fmt.Fprintf(&b, "    - %s @ %s\n", c.action.Name(), c.target.ID)
+	b.WriteString("Prepared plan\n\n")
+	for _, ph := range segs {
+		fmt.Fprintf(&b, "Phase: %s\n", ph.phase)
+		for _, tg := range ph.targets {
+			fmt.Fprintf(&b, "  Target %s\n", tg.id)
+			for _, c := range tg.cells {
+				fmt.Fprintf(&b, "    %s  %s\n", stepDisplayName(c.step), cellStatusText(c))
 			}
 		}
+		b.WriteByte('\n')
 	}
-	return strings.TrimSuffix(b.String(), "\n")
+	return strings.TrimSpace(b.String()), nil
 }

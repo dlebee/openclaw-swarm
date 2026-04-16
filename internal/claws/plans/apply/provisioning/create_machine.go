@@ -41,7 +41,8 @@ func (a *CreateMachineAction) Applicable(ctx context.Context, t scaffold.Target)
 	return mt.Spec.Type == manifestdata.MachineTypeLinode, nil
 }
 
-// Check implements scaffold.Action — detect already-tagged instances.
+// Check implements scaffold.Action — list instances tagged claws/<prefix>, then match
+// uniquely by Linode label (prefix-machineName).
 func (a *CreateMachineAction) Check(ctx context.Context, t scaffold.Target) (blocked bool, err error) {
 	mt, ok := t.Payload.(*MachineTarget)
 	if !ok || mt == nil {
@@ -50,17 +51,31 @@ func (a *CreateMachineAction) Check(ctx context.Context, t scaffold.Target) (blo
 	if a.provider == nil {
 		return false, fmt.Errorf("create-machine: hosting provider is required for %q", t.ID)
 	}
-	tag := machineTag(a.prefix, mt.Spec.Name)
-	instances, err := a.provider.ListByTag(ctx, tag)
+	prefixTag := clawsPrefixTag(a.prefix)
+	wantLabel := machineLabel(a.prefix, mt.Spec.Name)
+	instances, err := a.provider.ListByTag(ctx, prefixTag)
 	if err != nil {
 		return false, err
 	}
-	if len(instances) == 0 {
-		return false, nil
+	var matches []hosting.Instance
+	for i := range instances {
+		if instances[i].Label == wantLabel {
+			matches = append(matches, instances[i])
+		}
 	}
-	inst := instances[0]
-	mt.Instance = &inst
-	return true, nil
+	switch len(matches) {
+	case 0:
+		scaffold.RecordPlanMachineExists(ctx, t.ID, false)
+		return false, nil
+	case 1:
+		inst := matches[0]
+		mt.Instance = &inst
+		scaffold.RecordPlanMachineExists(ctx, t.ID, true)
+		return true, nil
+	default:
+		return false, fmt.Errorf("create-machine: %d instances with label %q under tag %q (want at most 1)",
+			len(matches), wantLabel, prefixTag)
+	}
 }
 
 // Execute implements scaffold.Action.
@@ -85,7 +100,7 @@ func (a *CreateMachineAction) Execute(ctx context.Context, t scaffold.Target) er
 		Region:     spec.Region,
 		SKU:        spec.SKU,
 		Image:      spec.Image,
-		Tags:       []string{machineTag(a.prefix, spec.Name)},
+		Tags:       []string{clawsPrefixTag(a.prefix), machineTag(a.prefix, spec.Name)},
 		PublicKeys: []string{a.sshPubKey},
 		RootPass:   rootPass,
 	}
@@ -120,8 +135,14 @@ func (*CreateMachineAction) Verify(ctx context.Context, t scaffold.Target) error
 	return nil
 }
 
+// clawsPrefixTag is the shared Linode tag for all instances in a deployment (used with ListByTag).
+func clawsPrefixTag(prefix string) string {
+	return fmt.Sprintf("claws/%s", prefix)
+}
+
+// machineTag is the per-machine Linode tag (claws/<prefix>/<name>).
 func machineTag(prefix, machineName string) string {
-	return fmt.Sprintf("claws:%s:%s", prefix, machineName)
+	return fmt.Sprintf("claws/%s/%s", prefix, machineName)
 }
 
 func machineLabel(prefix, machineName string) string {

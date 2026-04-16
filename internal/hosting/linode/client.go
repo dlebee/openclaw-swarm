@@ -31,6 +31,10 @@ func NewProvider(token string) *Provider {
 func (p *Provider) Kind() string { return hosting.KindLinode }
 
 func (p *Provider) do(ctx context.Context, method, path string, body any) (map[string]any, error) {
+	return p.doRequest(ctx, method, path, body, nil)
+}
+
+func (p *Provider) doRequest(ctx context.Context, method, path string, body any, xFilter []byte) (map[string]any, error) {
 	var r io.Reader
 	if body != nil {
 		b, err := json.Marshal(body)
@@ -46,6 +50,9 @@ func (p *Provider) do(ctx context.Context, method, path string, body any) (map[s
 	req.Header.Set("Authorization", "Bearer "+p.token)
 	if body != nil {
 		req.Header.Set("Content-Type", "application/json")
+	}
+	if len(xFilter) > 0 {
+		req.Header.Set("X-Filter", string(xFilter))
 	}
 	resp, err := p.http.Do(req)
 	if err != nil {
@@ -108,8 +115,12 @@ func (p *Provider) WaitRunning(ctx context.Context, resourceID string) (*hosting
 	}
 }
 
-// ListByTag implements hosting.Provider.
+// ListByTag implements hosting.Provider — lists instances tagged with tag (e.g. claws/<prefix>).
+// Results are filtered so the instance's tag list actually contains tag (API tag filter is not fully reliable).
 func (p *Provider) ListByTag(ctx context.Context, tag string) ([]hosting.Instance, error) {
+	if tag == "" {
+		return nil, nil
+	}
 	var all []hosting.Instance
 	page := 1
 	for {
@@ -133,7 +144,23 @@ func (p *Provider) ListByTag(ctx context.Context, tag string) ([]hosting.Instanc
 		}
 		page++
 	}
-	return all, nil
+	return instancesWithExactTag(all, tag), nil
+}
+
+func instancesWithExactTag(instances []hosting.Instance, tag string) []hosting.Instance {
+	if tag == "" {
+		return nil
+	}
+	var out []hosting.Instance
+	for i := range instances {
+		for _, t := range instances[i].Tags {
+			if t == tag {
+				out = append(out, instances[i])
+				break
+			}
+		}
+	}
+	return out
 }
 
 func instanceFromResult(m map[string]any) *hosting.Instance {

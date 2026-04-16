@@ -15,7 +15,7 @@ import (
 type mockProvider struct {
 	kind         string
 	listByTag    map[string][]hosting.Instance
-	listErr      error
+	listTagErr   error
 	created      *hosting.CreateInstanceOpts
 	createInst   *hosting.Instance
 	createErr    error
@@ -74,8 +74,8 @@ func (m *mockProvider) WaitRunning(ctx context.Context, resourceID string) (*hos
 
 func (m *mockProvider) ListByTag(ctx context.Context, tag string) ([]hosting.Instance, error) {
 	_ = ctx
-	if m.listErr != nil {
-		return nil, m.listErr
+	if m.listTagErr != nil {
+		return nil, m.listTagErr
 	}
 	if m.listByTag == nil {
 		return nil, nil
@@ -94,15 +94,18 @@ func TestAddPhase_describe(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	desc := ex.Describe()
+	desc, err := ex.Describe(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
 	if !strings.Contains(desc, "provisioning") {
 		t.Fatalf("describe should mention provisioning: %q", desc)
 	}
-	if !strings.Contains(desc, "create-machine") {
-		t.Fatalf("describe should mention create-machine: %q", desc)
+	if !strings.Contains(desc, "create machine") {
+		t.Fatalf("describe should mention create machine step: %q", desc)
 	}
-	if !strings.Contains(desc, "authorize-ssh-key") {
-		t.Fatalf("describe should mention authorize-ssh-key: %q", desc)
+	if !strings.Contains(desc, "authorized keys") {
+		t.Fatalf("describe should mention authorized keys step: %q", desc)
 	}
 }
 
@@ -181,21 +184,23 @@ func TestExecute_populatesPayload(t *testing.T) {
 }
 
 func TestCheck_blockedWhenExisting(t *testing.T) {
-	tag := machineTag("pfx", "web")
+	wantLabel := machineLabel("pfx", "web")
+	prefixTag := clawsPrefixTag("pfx")
+	perMachineTag := machineTag("pfx", "web")
 	p := scaffold.New()
 	AddPhase(p, []manifestdata.Machine{
 		{Name: "web", Type: manifestdata.MachineTypeLinode, Region: "us-east", SKU: "g6-nanode-1", Image: "linode/debian12"},
 	}, Options{
 		Provider: &mockProvider{
 			listByTag: map[string][]hosting.Instance{
-				tag: {{
+				prefixTag: {{
 					Provider:   "mock",
 					ResourceID: "999",
-					Label:      "pfx-web",
+					Label:      wantLabel,
 					Region:     "us-east",
 					PublicIPv4: "198.51.100.1",
 					Status:     "running",
-					Tags:       []string{tag},
+					Tags:       []string{prefixTag, perMachineTag},
 				}},
 			},
 		},

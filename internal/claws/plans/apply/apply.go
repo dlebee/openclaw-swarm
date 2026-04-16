@@ -13,6 +13,7 @@ import (
 	"github.com/gluwa/openclaw-swarm2/internal/hosting"
 	"github.com/gluwa/openclaw-swarm2/internal/hosting/linode"
 	manifestdata "github.com/gluwa/openclaw-swarm2/internal/manifests/data"
+	manifestsvc "github.com/gluwa/openclaw-swarm2/internal/manifests/service"
 	"github.com/gluwa/openclaw-swarm2/internal/scaffold"
 	"github.com/gluwa/openclaw-swarm2/internal/scaffold/progress"
 	"golang.org/x/term"
@@ -47,7 +48,8 @@ func BuildPlan(o BuildOptions) (*scaffold.Plan, error) {
 
 // LinodeProviderFromManifest returns a Linode client when the manifest has Linode machines;
 // otherwise nil without error.
-func LinodeProviderFromManifest(m *manifestdata.Manifest) (hosting.Provider, error) {
+// manifestAbsPath is the absolute path to the manifest file (used to resolve relative env_file).
+func LinodeProviderFromManifest(m *manifestdata.Manifest, manifestAbsPath string) (hosting.Provider, error) {
 	if m == nil {
 		return nil, fmt.Errorf("manifest is nil")
 	}
@@ -57,9 +59,9 @@ func LinodeProviderFromManifest(m *manifestdata.Manifest) (hosting.Provider, err
 	if strings.TrimSpace(m.LinodeTokenEnv) == "" {
 		return nil, fmt.Errorf("manifest linode_token_env is required when machines use type %q", manifestdata.MachineTypeLinode)
 	}
-	tok := strings.TrimSpace(os.Getenv(m.LinodeTokenEnv))
-	if tok == "" {
-		return nil, fmt.Errorf("environment variable %q is not set (Linode API token)", m.LinodeTokenEnv)
+	tok, err := manifestsvc.LookupEnvFromManifest(manifestAbsPath, m, m.LinodeTokenEnv)
+	if err != nil {
+		return nil, err
 	}
 	return linode.NewProvider(tok), nil
 }
@@ -70,6 +72,8 @@ type RunOptions struct {
 	Out         io.Writer
 	ProgressOut io.Writer
 	Confirm     func() (bool, error)
+	// PrettyPlan shows the plan in a Bubble Tea viewport (alternate screen) when Out is a TTY.
+	PrettyPlan bool
 }
 
 // Run builds progress styling from ProgressOut, resolves width from Out when possible, then ExecWithConfirm.
@@ -94,6 +98,7 @@ func Run(ctx context.Context, plan *scaffold.Plan, o RunOptions) error {
 		Confirm:       o.Confirm,
 		Width:         width,
 		Out:           o.Out,
+		PrettyPlan:    o.PrettyPlan,
 	})
 }
 

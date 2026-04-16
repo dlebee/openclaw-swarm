@@ -19,7 +19,7 @@ import (
 
 // ApplyCmd returns the `claws apply` command.
 func ApplyCmd(manifestFile *string) *cobra.Command {
-	var dryRun bool
+	var dryRun, prettyPlan bool
 	cmd := &cobra.Command{
 		Use:   "apply",
 		Short: "Apply manifest infrastructure",
@@ -56,7 +56,7 @@ func ApplyCmd(manifestFile *string) *cobra.Command {
 			}
 			sshPub := strings.TrimSpace(string(pubBytes))
 
-			prov, err := planapply.LinodeProviderFromManifest(m)
+			prov, err := planapply.LinodeProviderFromManifest(m, abs)
 			if err != nil {
 				return err
 			}
@@ -79,6 +79,7 @@ func ApplyCmd(manifestFile *string) *cobra.Command {
 
 			return planapply.Run(cmd.Context(), plan, planapply.RunOptions{
 				DryRun:      dryRun,
+				PrettyPlan:  prettyPlan,
 				Out:         cmd.OutOrStdout(),
 				ProgressOut: os.Stderr,
 				Confirm: func() (bool, error) {
@@ -99,6 +100,7 @@ func ApplyCmd(manifestFile *string) *cobra.Command {
 		},
 	}
 	cmd.Flags().BoolVar(&dryRun, "dry-run", false, "print plan and skip cloud mutations")
+	cmd.Flags().BoolVar(&prettyPlan, "pretty-plan", false, "show plan in a scrollable Bubble Tea viewport (TTY only; falls back to inline)")
 	return cmd
 }
 

@@ -4,24 +4,33 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 )
 
-// ExpandPath replaces a leading "~" or "~/" with the home directory.
+// ExpandPath replaces a leading "~" with the user home directory when followed by
+// a path separator: "~/" everywhere, and "~\" on Windows (Claws stores Windows paths that way).
 func ExpandPath(p string) (string, error) {
 	p = strings.TrimSpace(p)
 	if p == "" {
 		return "", fmt.Errorf("empty path")
 	}
-	if p == "~" || strings.HasPrefix(p, "~/") {
+	if p == "~" {
 		home, err := os.UserHomeDir()
 		if err != nil {
 			return "", fmt.Errorf("user home: %w", err)
 		}
-		if p == "~" {
-			return home, nil
+		return home, nil
+	}
+	if len(p) >= 2 && p[0] == '~' {
+		sep := p[1]
+		if sep == '/' || (sep == '\\' && runtime.GOOS == "windows") {
+			home, err := os.UserHomeDir()
+			if err != nil {
+				return "", fmt.Errorf("user home: %w", err)
+			}
+			return filepath.Join(home, p[2:]), nil
 		}
-		return filepath.Join(home, p[2:]), nil
 	}
 	return filepath.Clean(p), nil
 }

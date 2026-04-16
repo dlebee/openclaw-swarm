@@ -32,5 +32,6 @@ type Provider interface {
 	CreateInstance(ctx context.Context, opts CreateInstanceOpts) (*Instance, error)
 	DeleteInstance(ctx context.Context, resourceID string) error
 	WaitRunning(ctx context.Context, resourceID string) (*Instance, error)
+	// ListByTag returns instances that include the given Linode tag (exact string on the instance).
 	ListByTag(ctx context.Context, tag string) ([]Instance, error)
 }

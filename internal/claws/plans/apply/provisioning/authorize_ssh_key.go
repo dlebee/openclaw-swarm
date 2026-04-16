@@ -1,20 +1,19 @@
 package provisioning
 
 import (
-	"bytes"
 	"context"
-	"encoding/base64"
 	"fmt"
 	"strings"
 	"time"
 
 	manifestdata "github.com/gluwa/openclaw-swarm2/internal/manifests/data"
+	"github.com/gluwa/openclaw-swarm2/internal/platformutil/sshkeys"
 	"github.com/gluwa/openclaw-swarm2/internal/scaffold"
-	xssh "golang.org/x/crypto/ssh"
 )
 
 // AuthorizeSSHKeyAction ensures the active CLI public key is present in the target user's authorized_keys.
 // It runs after create-machine (separate step) so SSH is only attempted once the host has an address.
+// Use scaffold.DoesMachineExist(ctx, target.ID) when a probe result is needed; do not assume from a skipped phase.
 type AuthorizeSSHKeyAction struct {
 	dial      SSHDialFunc
 	sshPubKey string
@@ -31,7 +30,9 @@ func NewAuthorizeSSHKeyAction(opts Options) *AuthorizeSSHKeyAction {
 // Name implements scaffold.Action.
 func (*AuthorizeSSHKeyAction) Name() string { return "authorize-ssh-key" }
 
-// Applicable implements scaffold.Action — Linode rows with a reachable instance and configured dialer/key.
+// Applicable implements scaffold.Action — Linode machines when SSH dialer and key are configured.
+// Instance/public IP are not required here: create-machine runs in an earlier step and attaches
+// the instance; plan preview can still show authorize-ssh-key as would execute for new machines.
 func (a *AuthorizeSSHKeyAction) Applicable(ctx context.Context, t scaffold.Target) (bool, error) {
 	_ = ctx
 	if a.dial == nil || a.sshPubKey == "" {
@@ -42,9 +43,6 @@ func (a *AuthorizeSSHKeyAction) Applicable(ctx context.Context, t scaffold.Targe
 		return false, nil
 	}
 	if mt.Spec.Type != manifestdata.MachineTypeLinode {
-		return false, nil
-	}
-	if mt.Instance == nil || strings.TrimSpace(mt.Instance.PublicIPv4) == "" {
 		return false, nil
 	}
 	return true, nil
@@ -63,6 +61,9 @@ func (a *AuthorizeSSHKeyAction) Execute(ctx context.Context, t scaffold.Target) 
 	if !ok || mt == nil {
 		return fmt.Errorf("authorize-ssh-key: expected *MachineTarget for target %q", t.ID)
 	}
+	if mt.Instance == nil || strings.TrimSpace(mt.Instance.PublicIPv4) == "" {
+		return fmt.Errorf("authorize-ssh-key: instance not ready for %q (no public IPv4); ensure create-machine ran for this target first", t.ID)
+	}
 	host := strings.TrimSpace(mt.Instance.PublicIPv4)
 	port := sshPort(mt.Spec)
 	user := sshLoginUser(mt.Spec)
@@ -74,7 +75,7 @@ func (a *AuthorizeSSHKeyAction) Execute(ctx context.Context, t scaffold.Target) 
 		}
 		client, err := a.dial(ctx, host, port, user)
 		if err == nil {
-			err = runRemoteBash(client, authorizeKeyScript(a.sshPubKey))
+			err = sshkeys.AppendAuthorizedKeyLinePOSIX(client, a.sshPubKey)
 			client.Close()
 			if err != nil {
 				return fmt.Errorf("authorize-ssh-key: %w", err)
@@ -100,6 +101,9 @@ func (a *AuthorizeSSHKeyAction) Verify(ctx context.Context, t scaffold.Target) e
 	if a.dial == nil {
 		return fmt.Errorf("authorize-ssh-key verify: no SSH dialer")
 	}
+	if mt.Instance == nil || strings.TrimSpace(mt.Instance.PublicIPv4) == "" {
+		return fmt.Errorf("authorize-ssh-key verify: instance not ready for %q (no public IPv4)", t.ID)
+	}
 	host := strings.TrimSpace(mt.Instance.PublicIPv4)
 	port := sshPort(mt.Spec)
 	user := sshLoginUser(mt.Spec)
@@ -108,7 +112,7 @@ func (a *AuthorizeSSHKeyAction) Verify(ctx context.Context, t scaffold.Target) e
 		return fmt.Errorf("authorize-ssh-key verify: dial: %w", err)
 	}
 	defer client.Close()
-	if err := runRemoteBash(client, verifyKeyScript(a.sshPubKey)); err != nil {
+	if err := sshkeys.VerifyAuthorizedKeyLinePOSIX(client, a.sshPubKey); err != nil {
 		return fmt.Errorf("authorize-ssh-key verify: %w", err)
 	}
 	return nil
@@ -127,49 +131,4 @@ func sshLoginUser(m manifestdata.Machine) string {
 		return "root"
 	}
 	return u
-}
-
-func authorizeKeyScript(pubKey string) string {
-	enc := base64.StdEncoding.EncodeToString([]byte(strings.TrimSpace(pubKey)))
-	q := "'" + strings.ReplaceAll(enc, "'", "'\\''") + "'"
-	return fmt.Sprintf(`set -euo pipefail
-KEY_LINE=$(printf '%%s' %s | base64 -d)
-mkdir -p "$HOME/.ssh"
-chmod 700 "$HOME/.ssh"
-AUTH="$HOME/.ssh/authorized_keys"
-touch "$AUTH"
-chmod 600 "$AUTH"
-grep -qxF -- "$KEY_LINE" "$AUTH" 2>/dev/null && exit 0
-printf '%%s\n' "$KEY_LINE" >> "$AUTH"
-`, q)
-}
-
-func verifyKeyScript(pubKey string) string {
-	enc := base64.StdEncoding.EncodeToString([]byte(strings.TrimSpace(pubKey)))
-	q := "'" + strings.ReplaceAll(enc, "'", "'\\''") + "'"
-	return fmt.Sprintf(`set -euo pipefail
-KEY_LINE=$(printf '%%s' %s | base64 -d)
-AUTH="$HOME/.ssh/authorized_keys"
-test -f "$AUTH"
-grep -qxF -- "$KEY_LINE" "$AUTH"
-`, q)
-}
-
-func runRemoteBash(client *xssh.Client, script string) error {
-	sess, err := client.NewSession()
-	if err != nil {
-		return err
-	}
-	defer sess.Close()
-	sess.Stdin = strings.NewReader(script)
-	var stderr bytes.Buffer
-	sess.Stderr = &stderr
-	if err := sess.Run("/bin/bash -s"); err != nil {
-		msg := strings.TrimSpace(stderr.String())
-		if msg != "" {
-			return fmt.Errorf("%w: %s", err, msg)
-		}
-		return err
-	}
-	return nil
 }
