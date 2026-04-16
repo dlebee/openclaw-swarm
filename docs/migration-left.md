@@ -7,7 +7,7 @@ Items are grouped by area; checked items are implemented in swarm2.
 
 - [x] Provisioning (create Linode machines, authorize SSH keys, ensure agent user)
 - [x] Security (ufw, fail2ban, unattended-upgrades, security packages)
-- [ ] Mesh — headscale install, tailscale join, Caddy HTTPS reverse proxy, preauth key management
+- [x] Mesh — headscale install, tailscale join, Caddy HTTPS reverse proxy, preauth key management
 - [x] Gateway (install nodejs/openclaw, bootstrap, configure, pair device)
 - [x] Node (install nodejs/openclaw, bootstrap, configure, exec-policy, pair)
 - [x] Agents (add, ensure-model, configure-workspace, configure-tools, configure-bindings)

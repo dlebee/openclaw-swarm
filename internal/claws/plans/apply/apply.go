@@ -55,7 +55,11 @@ func BuildPlan(o BuildOptions) (*scaffold.Plan, error) {
 	security.AddPhase(p, targets, security.Options{
 		SSHDial: security.SSHDialFunc(o.SSHDial),
 	})
-	mesh.AddPhase(p, targets, mesh.Options{})
+	mesh.AddPhase(p, targets, mesh.Options{
+		SSHDial:  mesh.SSHDialFunc(o.SSHDial),
+		Gateways: o.Manifest.Gateways,
+		Nodes:    o.Manifest.Nodes,
+	})
 	if len(o.Manifest.Gateways) > 0 {
 		gwTargets := gateway.BuildGatewayTargets(o.Manifest.Gateways, o.Manifest.Machines)
 		gateway.AddPhase(p, gwTargets, gateway.Options{

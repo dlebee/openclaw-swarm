@@ -55,6 +55,14 @@ do_stop() {
       pkill -f "openclaw node" 2>/dev/null || true
       sleep 1
     ;;
+    headscale*)
+      pkill -f "headscale serve" 2>/dev/null || true
+      sleep 1
+    ;;
+    tailscaled*)
+      pkill -f "tailscaled" 2>/dev/null || true
+      sleep 1
+    ;;
   esac
 }
 
@@ -81,6 +89,21 @@ do_start() {
         OC=$(command -v openclaw 2>/dev/null)
         [ -n "$OC" ] && nohup "$OC" node run >> /tmp/openclaw-node.log 2>&1 &
       fi
+    ;;
+    headscale*)
+      do_stop "$UNIT"
+      load_unit_env "headscale"
+      EXEC=$(extract_exec_start "headscale")
+      if [ -n "$EXEC" ]; then
+        nohup sh -c "$EXEC" >> /tmp/headscale.log 2>&1 &
+      else
+        nohup /usr/local/bin/headscale serve --config /etc/headscale/config.yaml >> /tmp/headscale.log 2>&1 &
+      fi
+    ;;
+    tailscaled*)
+      do_stop "$UNIT"
+      nohup tailscaled --state=/var/lib/tailscale/tailscaled.state >> /tmp/tailscaled.log 2>&1 &
+      sleep 1
     ;;
   esac
 }

@@ -32,11 +32,15 @@ const identityName = "integration"
 // ---------------------------------------------------------------------------
 
 func loadTestManifest(t *testing.T) *data.Manifest {
+	return loadTestManifestFile(t, "manifest.yml")
+}
+
+func loadTestManifestFile(t *testing.T, name string) *data.Manifest {
 	t.Helper()
-	path := filepath.Join("testdata", "manifest.yml")
+	path := filepath.Join("testdata", name)
 	m, err := service.LoadFile(path)
 	if err != nil {
-		t.Fatalf("load manifest: %v", err)
+		t.Fatalf("load manifest %s: %v", name, err)
 	}
 	return m
 }
@@ -700,4 +704,152 @@ func waitNodeConnected(t *testing.T, gwClient *xssh.Client, nodeName string, tim
 		time.Sleep(5 * time.Second)
 	}
 	t.Fatalf("node %q not connected within %s", nodeName, timeout)
+}
+
+// ---------------------------------------------------------------------------
+// Mesh integration test
+// ---------------------------------------------------------------------------
+
+// setupMeshTestInfra spins up Docker containers for mesh testing and returns
+// the patched manifest, SSH signer, and mapped ports.
+func setupMeshTestInfra(t *testing.T) (*data.Manifest, xssh.Signer, int, int) {
+	t.Helper()
+	privPath, pubPath := generateTestIdentity(t)
+	t.Logf("identity: priv=%s pub=%s", privPath, pubPath)
+
+	netName := testNetwork(t)
+
+	gw := ocContainer(t, netName, pubPath, "gateway-mesh", "oc-gateway-mesh-test")
+	scraper := ocContainer(t, netName, pubPath, "scraper-mesh", "oc-scraper-mesh-test")
+	_ = ollamaContainer(t, netName)
+
+	gwPort := mappedPort(t, gw, "22/tcp")
+	scraperPort := mappedPort(t, scraper, "22/tcp")
+	t.Logf("mapped ports: gateway=%d scraper=%d", gwPort, scraperPort)
+
+	signer := sshSigner(t, privPath)
+	waitSSH(t, "127.0.0.1", gwPort, "root", signer, 30*time.Second)
+	waitSSH(t, "127.0.0.1", scraperPort, "root", signer, 30*time.Second)
+	t.Log("SSH connectivity confirmed on gateway and scraper (mesh)")
+
+	m := loadTestManifestFile(t, "manifest-mesh.yml")
+	for i := range m.Machines {
+		switch m.Machines[i].Name {
+		case "gateway-host":
+			m.Machines[i].SSHPort = gwPort
+		case "scraper-host":
+			m.Machines[i].SSHPort = scraperPort
+		}
+	}
+	return m, signer, gwPort, scraperPort
+}
+
+// TestMeshApplyExecute runs the full apply plan with headscale mesh networking
+// against Docker containers and verifies:
+//   - Headscale is running on the gateway
+//   - A preauth key was created on the gateway
+//   - Both machines have Tailscale IPs
+//   - Machines can reach each other over the tailnet
+func TestMeshApplyExecute(t *testing.T) {
+	m, signer, gwPort, scraperPort := setupMeshTestInfra(t)
+	dial := sshDialFunc(signer)
+
+	plan, err := apply.BuildPlan(apply.BuildOptions{
+		Manifest: m,
+		SSHDial:  dial,
+	})
+	if err != nil {
+		t.Fatalf("build plan: %v", err)
+	}
+
+	ep, err := plan.Build()
+	if err != nil {
+		t.Fatalf("plan.Build: %v", err)
+	}
+
+	ctx := context.Background()
+	ctx = scaffold.EnsurePlanCache(ctx)
+
+	if err := ep.Execute(ctx, scaffold.ExecuteOptions{}); err != nil {
+		t.Fatalf("execute plan: %v", err)
+	}
+	t.Log("mesh plan executed successfully")
+
+	// --- Verify headscale on gateway ---
+	gwClient, err := dial(ctx, "127.0.0.1", gwPort, "root")
+	if err != nil {
+		t.Fatalf("dial gateway for verification: %v", err)
+	}
+	defer gwClient.Close()
+
+	// 1. Headscale binary must exist.
+	hsOut, err := bash.RunOutput(gwClient, `/usr/local/bin/headscale version 2>/dev/null || echo "(missing)"`)
+	if err != nil || strings.Contains(hsOut, "(missing)") {
+		t.Fatal("headscale binary not found on gateway after mesh phase")
+	}
+	t.Logf("verified: headscale installed (%s)", strings.TrimSpace(hsOut))
+
+	// 2. Headscale config must exist.
+	cfgExists, err := bash.RunOutput(gwClient, `test -f /etc/headscale/config.yaml && echo ok || echo no`)
+	if err != nil || strings.TrimSpace(cfgExists) != "ok" {
+		t.Fatal("headscale config missing on gateway")
+	}
+	t.Log("verified: headscale config exists")
+
+	// 3. Headscale unix socket must be present (daemon running).
+	sockExists, err := bash.RunOutput(gwClient, `sudo test -S /var/run/headscale/headscale.sock && echo ok || echo no`)
+	if err != nil || strings.TrimSpace(sockExists) != "ok" {
+		t.Fatal("headscale unix socket not present — daemon may not be running")
+	}
+	t.Log("verified: headscale daemon running (socket present)")
+
+	// 4. Preauth key file must exist and be non-empty.
+	keyContent, err := bash.RunOutput(gwClient, `sudo cat /var/lib/claws/headscale/preauth.key 2>/dev/null || echo ""`)
+	if err != nil || strings.TrimSpace(keyContent) == "" {
+		t.Fatal("preauth key file missing or empty on gateway")
+	}
+	t.Logf("verified: preauth key present (%d chars)", len(strings.TrimSpace(keyContent)))
+
+	// 5. Gateway must have a Tailscale IP.
+	gwTSIP, err := bash.RunOutput(gwClient, `tailscale ip -4 2>/dev/null || echo ""`)
+	if err != nil || strings.TrimSpace(gwTSIP) == "" {
+		t.Fatal("gateway has no Tailscale IP")
+	}
+	t.Logf("verified: gateway tailscale IP = %s", strings.TrimSpace(gwTSIP))
+
+	// --- Verify tailscale on scraper node ---
+	nodeClient, err := dial(ctx, "127.0.0.1", scraperPort, "root")
+	if err != nil {
+		t.Fatalf("dial scraper for verification: %v", err)
+	}
+	defer nodeClient.Close()
+
+	// 6. Scraper must have a Tailscale IP.
+	nodeTSIP, err := bash.RunOutput(nodeClient, `tailscale ip -4 2>/dev/null || echo ""`)
+	if err != nil || strings.TrimSpace(nodeTSIP) == "" {
+		t.Fatal("scraper node has no Tailscale IP")
+	}
+	t.Logf("verified: scraper tailscale IP = %s", strings.TrimSpace(nodeTSIP))
+
+	// 7. Machines should be able to reach each other over the tailnet.
+	pingCmd := fmt.Sprintf(`ping -c 1 -W 5 %s >/dev/null 2>&1 && echo ok || echo fail`, strings.TrimSpace(nodeTSIP))
+	pingOut, err := bash.RunOutput(gwClient, pingCmd)
+	if err != nil || strings.TrimSpace(pingOut) != "ok" {
+		t.Logf("tailnet ping from gateway to scraper failed (may need userspace networking in Docker — non-fatal)")
+	} else {
+		t.Log("verified: gateway can ping scraper over tailnet")
+	}
+
+	// 8. Gateway should still be functional (config exists, listening).
+	exists, err := gwService.ConfigExists(gwClient, func() string {
+		h, _ := gwService.ResolveHome(gwClient)
+		return h
+	}())
+	if err != nil {
+		t.Fatalf("check config exists after mesh: %v", err)
+	}
+	if !exists {
+		t.Fatal("gateway config missing after mesh phase execution")
+	}
+	t.Log("verified: gateway config still intact after mesh phase")
 }

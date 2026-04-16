@@ -15,6 +15,18 @@ RUN curl -fsSL https://deb.nodesource.com/setup_${NODE_MAJOR}.x | bash - \
 
 RUN npm install -g openclaw@${OPENCLAW_VERSION} --quiet
 
+# Pre-install headscale binary (mesh phase)
+ARG HEADSCALE_VERSION=0.28.0
+RUN ARCH=$(uname -m) \
+    && case "$ARCH" in x86_64) HS_ARCH=amd64 ;; aarch64) HS_ARCH=arm64 ;; *) echo "unsupported: $ARCH" >&2; exit 1 ;; esac \
+    && curl -fsSL "https://github.com/juanfont/headscale/releases/download/v${HEADSCALE_VERSION}/headscale_${HEADSCALE_VERSION}_linux_${HS_ARCH}" \
+       -o /usr/local/bin/headscale \
+    && chmod +x /usr/local/bin/headscale \
+    && mkdir -p /var/lib/headscale /var/run/headscale /etc/headscale /var/lib/claws/headscale
+
+# Pre-install tailscale (mesh phase)
+RUN curl -fsSL https://tailscale.com/install.sh | sh
+
 RUN useradd -m -s /bin/bash agent \
     && echo 'agent ALL=(ALL) NOPASSWD:ALL' > /etc/sudoers.d/agent \
     && chmod 440 /etc/sudoers.d/agent \

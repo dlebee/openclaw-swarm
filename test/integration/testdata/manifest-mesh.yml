@@ -1,0 +1,59 @@
+# Docker integration test manifest — headscale mesh networking.
+# Same two-machine setup as manifest.yml but with networking.mode: headscale
+# and an HTTP custom control URL (no Caddy needed inside Docker).
+#
+# host          = how the CLI reaches the machine (localhost + mapped port)
+# internal_host = how containers reach each other on the Docker bridge
+#
+# Build images first: ./test/infra/build.sh
+
+prefix: mesh-test
+
+machines:
+  - name: gateway-host
+    type: ssh
+    container: true
+    host: 127.0.0.1
+    internal_host: oc-gateway-mesh-test
+    ssh_port: 2222
+    arch: linux-x64
+    agent_user: agent
+
+  - name: scraper-host
+    type: ssh
+    container: true
+    host: 127.0.0.1
+    internal_host: oc-scraper-mesh-test
+    ssh_port: 2223
+    arch: linux-x64
+    agent_user: agent
+
+gateways:
+  - name: gateway
+    reference: gateway-host
+    networking:
+      mode: headscale
+      public_hostname:
+        strategy: custom
+        host: "http://oc-gateway-mesh-test:8080"
+      preauth_key_source: file
+      preauth_key_file: /var/lib/claws/headscale/preauth.key
+    openclaw_version: latest
+
+agents:
+  - id: assistant
+    gateway: gateway
+    workspace: ~/.openclaw/workspace
+    model: { primary: "ollama/qwen2.5:0.5b" }
+    tools:
+      exec: { host: gateway, security: full }
+    soul: |
+      You are an assistant for mesh integration testing.
+
+nodes:
+  - name: scraper-node
+    gateway: gateway
+    reference: scraper-host
+    exec_policy:
+      security: full
+      ask: "off"
