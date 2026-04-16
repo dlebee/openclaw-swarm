@@ -31,8 +31,8 @@ func NewAuthorizeSSHKeyAction(opts Options) *AuthorizeSSHKeyAction {
 func (*AuthorizeSSHKeyAction) Name() string { return "authorize-ssh-key" }
 
 // Applicable implements scaffold.Action — Linode machines when SSH dialer and key are configured.
-// Instance/public IP are not required here: create-machine runs in an earlier step and attaches
-// the instance; plan preview can still show authorize-ssh-key as would execute for new machines.
+// Instance/public IP are not required here: create-machine runs in an earlier step and may attach
+// the instance before authorize-ssh-key's Check runs during the same plan walk.
 func (a *AuthorizeSSHKeyAction) Applicable(ctx context.Context, t scaffold.Target) (bool, error) {
 	_ = ctx
 	if a.dial == nil || a.sshPubKey == "" {
@@ -48,11 +48,31 @@ func (a *AuthorizeSSHKeyAction) Applicable(ctx context.Context, t scaffold.Targe
 	return true, nil
 }
 
-// Check implements scaffold.Action.
-func (*AuthorizeSSHKeyAction) Check(ctx context.Context, t scaffold.Target) (blocked bool, err error) {
-	_ = ctx
-	_ = t
-	return false, nil
+// Check implements scaffold.Action. When create-machine's Check has already attached an
+// instance with a public IPv4, dial once and verify the CLI public key line is present;
+// blocked=true skips Execute (same as create-machine when the instance already exists).
+// Dial or verify errors do not block: Execute may still need to run to fix drift or reachability.
+func (a *AuthorizeSSHKeyAction) Check(ctx context.Context, t scaffold.Target) (blocked bool, err error) {
+	if a == nil || a.dial == nil || strings.TrimSpace(a.sshPubKey) == "" {
+		return false, nil
+	}
+	mt, ok := t.Payload.(*MachineTarget)
+	if !ok || mt == nil || mt.Instance == nil {
+		return false, nil
+	}
+	host := strings.TrimSpace(mt.Instance.PublicIPv4)
+	if host == "" {
+		return false, nil
+	}
+	client, err := a.dial(ctx, host, sshPort(mt.Spec), sshLoginUser(mt.Spec))
+	if err != nil {
+		return false, nil
+	}
+	defer client.Close()
+	if err := sshkeys.VerifyAuthorizedKeyLinePOSIX(client, a.sshPubKey); err != nil {
+		return false, nil
+	}
+	return true, nil
 }
 
 // Execute implements scaffold.Action.

@@ -137,7 +137,12 @@ func (*CreateMachineAction) Verify(ctx context.Context, t scaffold.Target) error
 
 // clawsPrefixTag is the shared Linode tag for all instances in a deployment (used with ListByTag).
 func clawsPrefixTag(prefix string) string {
-	return fmt.Sprintf("claws/%s", prefix)
+	return fmt.Sprintf("claws/%s", strings.TrimSpace(prefix))
+}
+
+// ClawsPrefixTag returns the Linode tag shared by all instances for a manifest prefix (claws/<prefix>).
+func ClawsPrefixTag(prefix string) string {
+	return clawsPrefixTag(prefix)
 }
 
 // machineTag is the per-machine Linode tag (claws/<prefix>/<name>).
