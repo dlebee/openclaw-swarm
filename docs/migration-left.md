@@ -30,9 +30,8 @@ Items are grouped by area; checked items are implemented in swarm2.
 
 ## Agent — missing features
 
-- [ ] **Elevated tools** — global `tools.elevated.enabled` and `tools.elevated.allowFrom.<channel>` config
-- [ ] **BOOTSTRAP.md** — write `agent.Bootstrap` content to workspace
-- [ ] **Managed section markers** — `<!-- CLAWS MANAGED START/END -->` to preserve user content outside managed sections (current implementation does full file overwrite)
+- [x] **Elevated tools** — global `tools.elevated.enabled` and `tools.elevated.allowFrom.<channel>` config
+- [x] **Managed section markers** — `<!-- CLAWS MANAGED START/END -->` to preserve user content outside managed sections
 
 ## Investigate — may not be needed
 

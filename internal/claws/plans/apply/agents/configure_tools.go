@@ -13,8 +13,8 @@ import (
 	xssh "golang.org/x/crypto/ssh"
 )
 
-// ConfigureToolsStep ensures the agent's tools config (exec, elevated) matches
-// the manifest. Drift-repairs via `openclaw config set --batch-json`.
+// ConfigureToolsStep ensures the agent's per-agent tools config (exec) and
+// global tools.elevated config match the manifest. Uses `openclaw config set`.
 type ConfigureToolsStep struct {
 	dial SSHDialFunc
 }
@@ -54,7 +54,16 @@ func (s *ConfigureToolsStep) Check(ctx context.Context, t scaffold.Target) (bool
 	if err != nil {
 		return false, nil
 	}
-	return toolsMatch(current, at.Spec.Tools), nil
+	if !execMatch(current, at.Spec.Tools) {
+		return false, nil
+	}
+
+	if at.Spec.Tools.Elevated != nil {
+		if !elevatedMatch(client, at.Spec.Tools.Elevated) {
+			return false, nil
+		}
+	}
+	return true, nil
 }
 
 func (s *ConfigureToolsStep) Execute(ctx context.Context, t scaffold.Target) error {
@@ -74,7 +83,8 @@ func (s *ConfigureToolsStep) Execute(ctx context.Context, t scaffold.Target) err
 		return fmt.Errorf("configure-tools: agent %q not found in config", at.Spec.ID)
 	}
 
-	batch := buildToolsBatch(idx, at.Spec.Tools)
+	batch := buildExecBatch(idx, at.Spec.Tools)
+	batch = append(batch, buildElevatedBatch(at.Spec.Tools.Elevated)...)
 	if len(batch) == 0 {
 		return nil
 	}
@@ -116,14 +126,19 @@ func (s *ConfigureToolsStep) Verify(ctx context.Context, t scaffold.Target) erro
 	if err != nil {
 		return fmt.Errorf("configure-tools verify: %w", err)
 	}
-	if !toolsMatch(current, at.Spec.Tools) {
-		return fmt.Errorf("configure-tools verify: tools config drift")
+	if !execMatch(current, at.Spec.Tools) {
+		return fmt.Errorf("configure-tools verify: exec config drift")
+	}
+	if at.Spec.Tools.Elevated != nil {
+		if !elevatedMatch(client, at.Spec.Tools.Elevated) {
+			return fmt.Errorf("configure-tools verify: elevated config drift")
+		}
 	}
 	return nil
 }
 
 // ---------------------------------------------------------------------------
-// helpers
+// helpers — per-agent exec
 // ---------------------------------------------------------------------------
 
 type remoteExecConfig struct {
@@ -151,45 +166,120 @@ func readToolsConfig(client *xssh.Client, idx int) (*remoteToolsConfig, error) {
 	return &cfg, nil
 }
 
-
 type batchEntry struct {
 	Path  string      `json:"path"`
 	Value interface{} `json:"value"`
 }
 
-func buildToolsBatch(idx int, tools *manifestdata.AgentTools) []batchEntry {
+func buildExecBatch(idx int, tools *manifestdata.AgentTools) []batchEntry {
+	if tools == nil || tools.Exec == nil {
+		return nil
+	}
 	var batch []batchEntry
-	if tools.Exec != nil {
-		prefix := fmt.Sprintf("agents.list[%d].tools.exec", idx)
-		if tools.Exec.Host != "" {
-			batch = append(batch, batchEntry{prefix + ".host", tools.Exec.Host})
-		}
-		if tools.Exec.Node != "" {
-			batch = append(batch, batchEntry{prefix + ".node", tools.Exec.Node})
-		}
-		if tools.Exec.Security != "" {
-			batch = append(batch, batchEntry{prefix + ".security", tools.Exec.Security})
-		}
+	prefix := fmt.Sprintf("agents.list[%d].tools.exec", idx)
+	if tools.Exec.Host != "" {
+		batch = append(batch, batchEntry{prefix + ".host", tools.Exec.Host})
+	}
+	if tools.Exec.Node != "" {
+		batch = append(batch, batchEntry{prefix + ".node", tools.Exec.Node})
+	}
+	if tools.Exec.Security != "" {
+		batch = append(batch, batchEntry{prefix + ".security", tools.Exec.Security})
 	}
 	return batch
 }
 
-func toolsMatch(current *remoteToolsConfig, desired *manifestdata.AgentTools) bool {
+func execMatch(current *remoteToolsConfig, desired *manifestdata.AgentTools) bool {
+	if desired == nil || desired.Exec == nil {
+		return true
+	}
+	if current == nil || current.Exec == nil {
+		return false
+	}
+	if desired.Exec.Host != "" && current.Exec.Host != desired.Exec.Host {
+		return false
+	}
+	if desired.Exec.Node != "" && current.Exec.Node != desired.Exec.Node {
+		return false
+	}
+	if desired.Exec.Security != "" && current.Exec.Security != desired.Exec.Security {
+		return false
+	}
+	return true
+}
+
+// ---------------------------------------------------------------------------
+// helpers — global tools.elevated
+// ---------------------------------------------------------------------------
+
+type remoteElevatedConfig struct {
+	Enabled   *bool               `json:"enabled,omitempty"`
+	AllowFrom map[string][]string `json:"allowFrom,omitempty"`
+}
+
+func readElevatedConfig(client *xssh.Client) (*remoteElevatedConfig, error) {
+	out, err := bash.RunOutput(client,
+		`openclaw config get tools.elevated --json 2>/dev/null || echo "null"`)
+	if err != nil {
+		return nil, err
+	}
+	raw := strings.TrimSpace(out)
+	if raw == "null" || raw == "" {
+		return &remoteElevatedConfig{}, nil
+	}
+	raw = extractJSON(raw, '{')
+	var cfg remoteElevatedConfig
+	if err := json.Unmarshal([]byte(raw), &cfg); err != nil {
+		return &remoteElevatedConfig{}, nil
+	}
+	return &cfg, nil
+}
+
+func buildElevatedBatch(elev *manifestdata.AgentElevated) []batchEntry {
+	if elev == nil {
+		return nil
+	}
+	var batch []batchEntry
+	if elev.Enabled != nil {
+		batch = append(batch, batchEntry{"tools.elevated.enabled", *elev.Enabled})
+	}
+	for ch, ids := range elev.AllowFrom {
+		batch = append(batch, batchEntry{
+			fmt.Sprintf("tools.elevated.allowFrom.%s", ch), ids,
+		})
+	}
+	return batch
+}
+
+func elevatedMatch(client *xssh.Client, desired *manifestdata.AgentElevated) bool {
 	if desired == nil {
 		return true
 	}
-	if desired.Exec != nil {
-		if current == nil || current.Exec == nil {
+	have, err := readElevatedConfig(client)
+	if err != nil {
+		return false
+	}
+
+	if desired.Enabled != nil {
+		haveEnabled := have.Enabled != nil && *have.Enabled
+		if haveEnabled != *desired.Enabled {
 			return false
 		}
-		if desired.Exec.Host != "" && current.Exec.Host != desired.Exec.Host {
-			return false
-		}
-		if desired.Exec.Node != "" && current.Exec.Node != desired.Exec.Node {
-			return false
-		}
-		if desired.Exec.Security != "" && current.Exec.Security != desired.Exec.Security {
-			return false
+	}
+
+	for ch, wantIDs := range desired.AllowFrom {
+		haveIDs := have.AllowFrom[ch]
+		for _, wid := range wantIDs {
+			found := false
+			for _, hid := range haveIDs {
+				if hid == wid {
+					found = true
+					break
+				}
+			}
+			if !found {
+				return false
+			}
 		}
 	}
 	return true

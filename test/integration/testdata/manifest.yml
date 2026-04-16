@@ -42,6 +42,10 @@ agents:
     model: { primary: "ollama/qwen2.5:0.5b" }
     tools:
       exec: { host: gateway, security: full }
+      elevated:
+        enabled: true
+        allow_from:
+          telegram: ["admin-chat-123"]
     soul: |
       You are an assistant for integration testing.
       Execute commands when asked. Be concise.

@@ -17,8 +17,14 @@ import (
 	xssh "golang.org/x/crypto/ssh"
 )
 
+const (
+	managedStart = "<!-- CLAWS MANAGED START - Do not edit this section. It is overwritten by `claws apply`. -->"
+	managedEnd   = "<!-- CLAWS MANAGED END -->"
+)
+
 // ConfigureWorkspaceStep writes/updates workspace files (SOUL.md, IDENTITY.md,
-// AGENTS.md) and sets identity config via `openclaw agents set-identity`.
+// AGENTS.md) using managed section markers to preserve user content, and sets
+// identity config via `openclaw agents set-identity`.
 type ConfigureWorkspaceStep struct {
 	dial SSHDialFunc
 }
@@ -34,21 +40,22 @@ func (s *ConfigureWorkspaceStep) Applicable(_ context.Context, t scaffold.Target
 	return ok, nil
 }
 
-type workspaceFile struct {
+// managedFile describes a workspace file whose content lives inside markers.
+type managedFile struct {
 	name    string
 	content string
 }
 
-func desiredFiles(spec manifestdata.Agent) []workspaceFile {
-	var files []workspaceFile
+func desiredFiles(spec manifestdata.Agent) []managedFile {
+	var files []managedFile
 	if spec.Soul != "" {
-		files = append(files, workspaceFile{"SOUL.md", spec.Soul})
+		files = append(files, managedFile{name: "SOUL.md", content: spec.Soul})
 	}
 	if spec.AgentsMD != "" {
-		files = append(files, workspaceFile{"AGENTS.md", spec.AgentsMD})
+		files = append(files, managedFile{name: "AGENTS.md", content: spec.AgentsMD})
 	}
 	if spec.Identity != nil && spec.Identity.Name != "" {
-		files = append(files, workspaceFile{"IDENTITY.md", buildIdentityMD(spec.Identity)})
+		files = append(files, managedFile{name: "IDENTITY.md", content: buildIdentityMD(spec.Identity)})
 	}
 	return files
 }
@@ -92,7 +99,7 @@ func (s *ConfigureWorkspaceStep) Check(ctx context.Context, t scaffold.Target) (
 	}
 
 	for _, f := range desiredFiles(at.Spec) {
-		if !fileMatches(client, path.Join(wsDir, f.name), f.content) {
+		if !managedSectionMatches(client, path.Join(wsDir, f.name), f.content) {
 			return false, nil
 		}
 	}
@@ -114,8 +121,8 @@ func (s *ConfigureWorkspaceStep) Execute(ctx context.Context, t scaffold.Target)
 	}
 
 	for _, f := range desiredFiles(at.Spec) {
-		if err := sshfile.WriteFile(client, path.Join(wsDir, f.name), []byte(f.content)); err != nil {
-			return fmt.Errorf("configure-workspace: write %s: %w", f.name, err)
+		if err := writeManagedSection(client, path.Join(wsDir, f.name), f.content); err != nil {
+			return fmt.Errorf("configure-workspace: %s: %w", f.name, err)
 		}
 	}
 
@@ -148,17 +155,73 @@ func (s *ConfigureWorkspaceStep) Verify(ctx context.Context, t scaffold.Target) 
 	}
 
 	for _, f := range desiredFiles(at.Spec) {
-		if !fileMatches(client, path.Join(wsDir, f.name), f.content) {
-			return fmt.Errorf("configure-workspace verify: %s content mismatch", f.name)
+		if !managedSectionMatches(client, path.Join(wsDir, f.name), f.content) {
+			return fmt.Errorf("configure-workspace verify: %s managed section mismatch", f.name)
 		}
 	}
 	return nil
 }
 
-func fileMatches(client *xssh.Client, filePath, desired string) bool {
+// ---------------------------------------------------------------------------
+// managed section helpers
+// ---------------------------------------------------------------------------
+
+// wrapManaged wraps content in CLAWS MANAGED markers with a separator for the
+// user's own content.
+func wrapManaged(content string) string {
+	return managedStart + "\n\n" + strings.TrimSpace(content) + "\n\n" + managedEnd + "\n\n---\nEverything below is yours. Add, edit, evolve freely.\n"
+}
+
+// extractManagedSection returns the content between the CLAWS MANAGED markers,
+// or "" if markers are absent.
+func extractManagedSection(fileContent string) string {
+	startIdx := strings.Index(fileContent, managedStart)
+	if startIdx < 0 {
+		return ""
+	}
+	after := fileContent[startIdx+len(managedStart):]
+	endIdx := strings.Index(after, managedEnd)
+	if endIdx < 0 {
+		return ""
+	}
+	return strings.TrimSpace(after[:endIdx])
+}
+
+// managedSectionMatches reads a remote file and checks whether its managed
+// section content matches the desired content.
+func managedSectionMatches(client *xssh.Client, filePath, desired string) bool {
 	data, err := sshfile.ReadFile(client, filePath)
 	if errors.Is(err, os.ErrNotExist) || err != nil {
 		return false
 	}
-	return strings.TrimSpace(string(data)) == strings.TrimSpace(desired)
+	return extractManagedSection(string(data)) == strings.TrimSpace(desired)
 }
+
+// writeManagedSection creates or updates a file's managed section, preserving
+// any user content outside the markers.
+func writeManagedSection(client *xssh.Client, filePath, content string) error {
+	content = strings.TrimSpace(content)
+	managedBlock := managedStart + "\n\n" + content + "\n\n" + managedEnd
+
+	existing, err := sshfile.ReadFile(client, filePath)
+	if errors.Is(err, os.ErrNotExist) {
+		return sshfile.WriteFile(client, filePath, []byte(wrapManaged(content)))
+	}
+	if err != nil {
+		return err
+	}
+
+	text := string(existing)
+	startIdx := strings.Index(text, managedStart)
+	endIdx := strings.Index(text, managedEnd)
+	if startIdx >= 0 && endIdx > startIdx {
+		// Replace managed section, keep everything before and after.
+		before := text[:startIdx]
+		after := text[endIdx+len(managedEnd):]
+		return sshfile.WriteFile(client, filePath, []byte(before+managedBlock+after))
+	}
+
+	// No markers found — inject at the top, preserve existing content.
+	return sshfile.WriteFile(client, filePath, []byte(managedBlock+"\n\n"+text))
+}
+

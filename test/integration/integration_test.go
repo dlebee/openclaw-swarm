@@ -569,7 +569,7 @@ func TestApplyExecute(t *testing.T) {
 	}
 	t.Log("verified: agent models set correctly")
 
-	// 13. SOUL.md must exist in each agent's workspace with correct content.
+	// 13. SOUL.md must exist with managed section markers and correct content.
 	gwHome, err := gwService.ResolveHome(client)
 	if err != nil {
 		t.Fatalf("resolve gateway home: %v", err)
@@ -584,9 +584,15 @@ func TestApplyExecute(t *testing.T) {
 	if !strings.Contains(soulContent, "integration testing") {
 		t.Fatalf("SOUL.md content mismatch, got:\n%s", soulContent)
 	}
-	t.Log("verified: SOUL.md written to workspace")
+	if !strings.Contains(soulContent, "CLAWS MANAGED START") {
+		t.Fatalf("SOUL.md missing managed section markers, got:\n%s", soulContent)
+	}
+	if !strings.Contains(soulContent, "CLAWS MANAGED END") {
+		t.Fatalf("SOUL.md missing managed section end marker, got:\n%s", soulContent)
+	}
+	t.Log("verified: SOUL.md with managed section markers")
 
-	// 14. IDENTITY.md must exist for agents with identity config.
+	// 14. IDENTITY.md must exist with managed section markers.
 	identityContent, err := bash.RunOutput(client, fmt.Sprintf(`cat %s/.openclaw/workspace/IDENTITY.md 2>/dev/null || echo "(not found)"`, gwHome))
 	if err != nil {
 		t.Fatalf("read IDENTITY.md: %v", err)
@@ -594,5 +600,27 @@ func TestApplyExecute(t *testing.T) {
 	if strings.Contains(identityContent, "(not found)") {
 		t.Fatal("expected IDENTITY.md to exist in agent workspace")
 	}
-	t.Log("verified: IDENTITY.md written to workspace")
+	if !strings.Contains(identityContent, "CLAWS MANAGED START") {
+		t.Fatalf("IDENTITY.md missing managed section markers, got:\n%s", identityContent)
+	}
+	t.Log("verified: IDENTITY.md with managed section markers")
+
+	// 15. Global tools.elevated must be configured (enabled=true, allowFrom.telegram).
+	elevEnabled, err := gwService.ReadConfigValue(client, "tools.elevated.enabled")
+	if err != nil {
+		t.Fatalf("read tools.elevated.enabled: %v", err)
+	}
+	if elevEnabled != "true" {
+		t.Fatalf("tools.elevated.enabled: got %q, want %q", elevEnabled, "true")
+	}
+	t.Log("verified: tools.elevated.enabled=true")
+
+	elevAllowFrom, err := bash.RunOutput(client, `openclaw config get tools.elevated.allowFrom.telegram --json 2>/dev/null || echo "null"`)
+	if err != nil {
+		t.Fatalf("read tools.elevated.allowFrom.telegram: %v", err)
+	}
+	if !strings.Contains(elevAllowFrom, "admin-chat-123") {
+		t.Fatalf("tools.elevated.allowFrom.telegram missing admin-chat-123, got:\n%s", elevAllowFrom)
+	}
+	t.Log("verified: tools.elevated.allowFrom.telegram contains admin-chat-123")
 }
