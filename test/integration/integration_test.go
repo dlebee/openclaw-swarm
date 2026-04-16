@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/gluwa/openclaw-swarm2/internal/claws/plans/apply"
+	gwService "github.com/gluwa/openclaw-swarm2/internal/claws/plans/apply/gateway"
 	"github.com/gluwa/openclaw-swarm2/internal/manifests/data"
 	"github.com/gluwa/openclaw-swarm2/internal/manifests/service"
 	"github.com/gluwa/openclaw-swarm2/internal/scaffold"
@@ -208,61 +209,18 @@ func (l testLogger) Printf(format string, v ...interface{}) {
 // tests
 // ---------------------------------------------------------------------------
 
-// TestApplyPlan is the main integration test:
-//  1. Generates an ephemeral SSH identity ("integration")
-//  2. Creates a shared Docker network
-//  3. Starts gateway, scraper, and ollama containers with the pubkey injected
-//  4. Verifies SSH connectivity using the ephemeral key
-//  5. Builds the apply plan from the test manifest
-//  6. Asserts every provisioning and security step is "not applicable"
-//     for the ssh+container machines
+// TestApplyPlan verifies the scaffold plan structure against Docker containers:
+//   - provisioning, security, mesh steps are not applicable for ssh+container
+//   - gateway install steps are applicable + satisfied (pre-installed)
+//   - bootstrap-gateway is applicable (fresh container)
+//   - configure-gateway and pair-gateway-device are not applicable (no config yet)
 func TestApplyPlan(t *testing.T) {
-	privPath, pubPath := generateTestIdentity(t)
-	t.Logf("identity: priv=%s pub=%s", privPath, pubPath)
-
-	netName := testNetwork(t)
-
-	gw := ocContainer(t, netName, pubPath, "gateway")
-	scraper := ocContainer(t, netName, pubPath, "scraper")
-	_ = ollamaContainer(t, netName)
-
-	gwPort := mappedPort(t, gw, "22/tcp")
-	scraperPort := mappedPort(t, scraper, "22/tcp")
-	t.Logf("mapped ports: gateway=%d scraper=%d", gwPort, scraperPort)
-
-	signer := sshSigner(t, privPath)
-	waitSSH(t, "127.0.0.1", gwPort, "agent", signer, 30*time.Second)
-	waitSSH(t, "127.0.0.1", scraperPort, "agent", signer, 30*time.Second)
-	t.Log("SSH connectivity confirmed on gateway and scraper")
-
-	// Load manifest and build the apply plan.
-	m := loadTestManifest(t)
-
-	// Patch manifest ports to match the dynamic mapped ports.
-	for i := range m.Machines {
-		switch m.Machines[i].Name {
-		case "gateway-host":
-			m.Machines[i].SSHPort = gwPort
-		case "scraper-host":
-			m.Machines[i].SSHPort = scraperPort
-		}
-	}
-
-	// Build an SSH dial func so gateway steps can reach the containers.
-	sshDial := func(ctx context.Context, host string, port int, user string) (*xssh.Client, error) {
-		addr := net.JoinHostPort(host, fmt.Sprintf("%d", port))
-		cfg := &xssh.ClientConfig{
-			User:            user,
-			Auth:            []xssh.AuthMethod{xssh.PublicKeys(signer)},
-			HostKeyCallback: xssh.InsecureIgnoreHostKey(),
-			Timeout:         5 * time.Second,
-		}
-		return xssh.Dial("tcp", addr, cfg)
-	}
+	m, signer, _ := setupTestInfra(t)
+	dial := sshDialFunc(signer)
 
 	plan, err := apply.BuildPlan(apply.BuildOptions{
 		Manifest: m,
-		SSHDial:  sshDial,
+		SSHDial:  dial,
 	})
 	if err != nil {
 		t.Fatalf("build plan: %v", err)
@@ -293,20 +251,40 @@ func TestApplyPlan(t *testing.T) {
 							phase.Name, target.ID, step.Name())
 					}
 				case "gateway":
-					if !applicable {
-						t.Errorf("phase=%s target=%s step=%s: expected applicable, got not applicable",
-							phase.Name, target.ID, step.Name())
-						continue
-					}
-					satisfied, err := step.Check(ctx, target)
-					if err != nil {
-						t.Errorf("phase=%s target=%s step=%s: Check error: %v",
-							phase.Name, target.ID, step.Name(), err)
-						continue
-					}
-					if !satisfied {
-						t.Errorf("phase=%s target=%s step=%s: expected satisfied (already installed), got not satisfied",
-							phase.Name, target.ID, step.Name())
+					stepName := step.Name()
+					switch stepName {
+					case "install-nodejs", "install-openclaw":
+						// Pre-installed in the Docker image: applicable + satisfied.
+						if !applicable {
+							t.Errorf("phase=%s target=%s step=%s: expected applicable, got not applicable",
+								phase.Name, target.ID, stepName)
+							continue
+						}
+						satisfied, err := step.Check(ctx, target)
+						if err != nil {
+							t.Errorf("phase=%s target=%s step=%s: Check error: %v",
+								phase.Name, target.ID, stepName, err)
+							continue
+						}
+						if !satisfied {
+							t.Errorf("phase=%s target=%s step=%s: expected satisfied, got not satisfied",
+								phase.Name, target.ID, stepName)
+						}
+					case "bootstrap-gateway":
+						// Fresh container has no config yet: applicable + will execute.
+						if !applicable {
+							t.Errorf("phase=%s target=%s step=%s: expected applicable (fresh container), got not applicable",
+								phase.Name, target.ID, stepName)
+						}
+					case "configure-gateway", "pair-gateway-device":
+						// Fresh container has no config yet: not applicable.
+						if applicable {
+							t.Errorf("phase=%s target=%s step=%s: expected not applicable (fresh container), got applicable",
+								phase.Name, target.ID, stepName)
+						}
+					default:
+						t.Errorf("phase=%s target=%s step=%s: unexpected step name",
+							phase.Name, target.ID, stepName)
 					}
 				}
 			}
@@ -318,4 +296,139 @@ func TestApplyPlan(t *testing.T) {
 		t.Fatalf("describe plan: %v", err)
 	}
 	t.Logf("plan describe:\n%s", desc)
+}
+
+// setupTestInfra spins up Docker containers and returns the patched manifest,
+// SSH signer, and mapped gateway port. Shared between execution tests.
+func setupTestInfra(t *testing.T) (*data.Manifest, xssh.Signer, int) {
+	t.Helper()
+	privPath, pubPath := generateTestIdentity(t)
+	t.Logf("identity: priv=%s pub=%s", privPath, pubPath)
+
+	netName := testNetwork(t)
+
+	gw := ocContainer(t, netName, pubPath, "gateway")
+	scraper := ocContainer(t, netName, pubPath, "scraper")
+	_ = ollamaContainer(t, netName)
+
+	gwPort := mappedPort(t, gw, "22/tcp")
+	scraperPort := mappedPort(t, scraper, "22/tcp")
+	t.Logf("mapped ports: gateway=%d scraper=%d", gwPort, scraperPort)
+
+	signer := sshSigner(t, privPath)
+	waitSSH(t, "127.0.0.1", gwPort, "root", signer, 30*time.Second)
+	waitSSH(t, "127.0.0.1", scraperPort, "root", signer, 30*time.Second)
+	t.Log("SSH connectivity confirmed on gateway and scraper")
+
+	m := loadTestManifest(t)
+	for i := range m.Machines {
+		switch m.Machines[i].Name {
+		case "gateway-host":
+			m.Machines[i].SSHPort = gwPort
+		case "scraper-host":
+			m.Machines[i].SSHPort = scraperPort
+		}
+	}
+	return m, signer, gwPort
+}
+
+// sshDialFunc returns an SSHDialFunc that uses the given signer.
+func sshDialFunc(signer xssh.Signer) func(ctx context.Context, host string, port int, user string) (*xssh.Client, error) {
+	return func(ctx context.Context, host string, port int, user string) (*xssh.Client, error) {
+		addr := net.JoinHostPort(host, fmt.Sprintf("%d", port))
+		cfg := &xssh.ClientConfig{
+			User:            user,
+			Auth:            []xssh.AuthMethod{xssh.PublicKeys(signer)},
+			HostKeyCallback: xssh.InsecureIgnoreHostKey(),
+			Timeout:         5 * time.Second,
+		}
+		return xssh.Dial("tcp", addr, cfg)
+	}
+}
+
+// TestApplyExecute runs the full apply plan against Docker containers and
+// verifies the gateway is properly bootstrapped: config exists, gateway.mode
+// and gateway.bind are correct, the token side-file is written, and the
+// gateway process is listening on port 18789.
+func TestApplyExecute(t *testing.T) {
+	m, signer, gwPort := setupTestInfra(t)
+	dial := sshDialFunc(signer)
+
+	plan, err := apply.BuildPlan(apply.BuildOptions{
+		Manifest: m,
+		SSHDial:  dial,
+	})
+	if err != nil {
+		t.Fatalf("build plan: %v", err)
+	}
+
+	ep, err := plan.Build()
+	if err != nil {
+		t.Fatalf("plan.Build: %v", err)
+	}
+
+	ctx := context.Background()
+	ctx = scaffold.EnsurePlanCache(ctx)
+
+	if err := ep.Execute(ctx, scaffold.ExecuteOptions{}); err != nil {
+		t.Fatalf("execute plan: %v", err)
+	}
+	t.Log("plan executed successfully")
+
+	// Verify the gateway state by SSH-ing into the container.
+	client, err := dial(ctx, "127.0.0.1", gwPort, "root")
+	if err != nil {
+		t.Fatalf("dial gateway for verification: %v", err)
+	}
+	defer client.Close()
+
+	// 1. Config file must exist.
+	home, err := gwService.ResolveHome(client)
+	if err != nil {
+		t.Fatalf("resolve home: %v", err)
+	}
+	exists, err := gwService.ConfigExists(client, home)
+	if err != nil {
+		t.Fatalf("check config exists: %v", err)
+	}
+	if !exists {
+		t.Fatal("expected ~/.openclaw/openclaw.json to exist after bootstrap")
+	}
+	t.Log("verified: config file exists")
+
+	// 2. gateway.mode must be "local".
+	mode, err := gwService.ReadConfigValue(client, "gateway.mode")
+	if err != nil {
+		t.Fatalf("read gateway.mode: %v", err)
+	}
+	if mode != "local" {
+		t.Fatalf("gateway.mode: got %q, want %q", mode, "local")
+	}
+	t.Log("verified: gateway.mode=local")
+
+	// 3. gateway.bind must be "lan" (networking.mode=docker).
+	bind, err := gwService.ReadConfigValue(client, "gateway.bind")
+	if err != nil {
+		t.Fatalf("read gateway.bind: %v", err)
+	}
+	if bind != "lan" {
+		t.Fatalf("gateway.bind: got %q, want %q", bind, "lan")
+	}
+	t.Log("verified: gateway.bind=lan")
+
+	// 4. Token side-file must be non-empty.
+	token, err := gwService.ReadToken(client, home)
+	if err != nil {
+		t.Fatalf("read token: %v", err)
+	}
+	if token == "" {
+		t.Fatal("expected non-empty gateway token in side-file")
+	}
+	t.Logf("verified: token side-file present (%d chars)", len(token))
+
+	// 5. Gateway must be listening on port 18789.
+	if err := gwService.HealthCheck(client, 15, 2*time.Second); err != nil {
+		t.Fatalf("health check: %v", err)
+	}
+	t.Log("verified: gateway listening on :18789")
 }

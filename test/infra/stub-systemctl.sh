@@ -23,7 +23,7 @@ case "$SUBCMD" in
       openclaw-gateway*)
         pkill -f "openclaw gateway" 2>/dev/null || true; sleep 1
         OC=$(command -v openclaw 2>/dev/null)
-        [ -n "$OC" ] && nohup "$OC" gateway --allow-unconfigured >> /tmp/openclaw-gateway.log 2>&1 &
+        [ -n "$OC" ] && nohup env OPENCLAW_ALLOW_INSECURE_PRIVATE_WS=1 "$OC" gateway --allow-unconfigured >> /tmp/openclaw-gateway.log 2>&1 &
       ;;
       openclaw-node*)
         pkill -f "openclaw node" 2>/dev/null || true; sleep 1

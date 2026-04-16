@@ -65,6 +65,9 @@ func AddPhase(p *scaffold.Plan, targets []scaffold.Target, opts Options) *scaffo
 	ph.AddTargets(targets...)
 	ph.AddStep(NewEnsureNodejsStep(opts))
 	ph.AddStep(NewEnsureOpenclawStep(opts))
+	ph.AddStep(NewBootstrapGatewayStep(opts))
+	ph.AddStep(NewConfigureGatewayStep(opts))
+	ph.AddStep(NewPairGatewayDeviceStep(opts))
 	return ph
 }
 
