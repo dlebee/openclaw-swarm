@@ -11,7 +11,7 @@ import (
 
 // BootstrapGatewayStep runs `openclaw onboard --non-interactive --install-daemon`
 // for first-time gateway setup. Not applicable when the gateway is already
-// onboarded (config + token side-file exist).
+// onboarded (config file exists).
 type BootstrapGatewayStep struct {
 	dial SSHDialFunc
 }
@@ -50,9 +50,9 @@ func (s *BootstrapGatewayStep) Applicable(ctx context.Context, t scaffold.Target
 	return !exists, nil
 }
 
-// Check returns true when the gateway token side-file already exists and the
-// gateway service is active. In practice this should rarely return true because
-// Applicable already filters out onboarded gateways.
+// Check returns true when the config file contains a non-empty gateway token.
+// In practice this should rarely return true because Applicable already filters
+// out onboarded gateways.
 func (s *BootstrapGatewayStep) Check(ctx context.Context, t scaffold.Target) (bool, error) {
 	gt := t.Payload.(*GatewayTarget)
 	m := gt.Machine
@@ -104,22 +104,6 @@ func (s *BootstrapGatewayStep) Execute(ctx context.Context, t scaffold.Target) e
 	out, err := bash.RunOutput(client, script)
 	if err != nil {
 		return fmt.Errorf("bootstrap-gateway: onboard failed: %w\n%s", err, out)
-	}
-
-	home, err := ResolveHome(client)
-	if err != nil {
-		return fmt.Errorf("bootstrap-gateway: %w", err)
-	}
-
-	// Write the token side-file since `openclaw config get` redacts secrets.
-	sideFileScript := fmt.Sprintf(`set -euo pipefail
-mkdir -p %s/.openclaw
-printf '%%s' %q > %s/%s
-chmod 600 %s/%s
-`, home, token, home, tokenSideFile, home, tokenSideFile)
-
-	if err := bash.Run(client, sideFileScript); err != nil {
-		return fmt.Errorf("bootstrap-gateway: write token side-file: %w", err)
 	}
 
 	return nil

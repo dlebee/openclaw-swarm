@@ -21,8 +21,7 @@ import (
 const (
 	gatewayUnit     = "openclaw-gateway"
 	gatewayPort     = 18789
-	tokenSideFile   = ".openclaw/.gateway-token"
-	configFile      = ".openclaw/openclaw.json"
+	configFile = ".openclaw/openclaw.json"
 	healthRetries   = 10
 	healthDelay     = 2 * time.Second
 	waitRetries     = 10
@@ -65,18 +64,29 @@ func GenerateToken() (string, error) {
 	return hex.EncodeToString(b), nil
 }
 
-// ReadToken reads the gateway auth token from the side-file
-// ~/.openclaw/.gateway-token via SFTP. Returns ("", nil) when the file
-// does not exist or is empty.
+// ReadToken reads the gateway auth token directly from
+// ~/.openclaw/openclaw.json via SFTP, parsing gateway.auth.token from the
+// JSON. Returns ("", nil) when the config file doesn't exist or the token
+// field is absent/empty.
 func ReadToken(client *xssh.Client, home string) (string, error) {
-	data, err := sshfile.ReadFile(client, home+"/"+tokenSideFile)
+	raw, err := sshfile.ReadFile(client, home+"/"+configFile)
 	if errors.Is(err, os.ErrNotExist) {
 		return "", nil
 	}
 	if err != nil {
 		return "", err
 	}
-	return strings.TrimSpace(string(data)), nil
+	var cfg struct {
+		Gateway struct {
+			Auth struct {
+				Token string `json:"token"`
+			} `json:"auth"`
+		} `json:"gateway"`
+	}
+	if err := json.Unmarshal(raw, &cfg); err != nil {
+		return "", fmt.Errorf("parse openclaw config: %w", err)
+	}
+	return cfg.Gateway.Auth.Token, nil
 }
 
 // ConfigExists checks whether ~/.openclaw/openclaw.json exists via SFTP.

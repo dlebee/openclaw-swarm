@@ -8,6 +8,7 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -15,6 +16,7 @@ import (
 	gwService "github.com/gluwa/openclaw-swarm2/internal/claws/plans/apply/gateway"
 	"github.com/gluwa/openclaw-swarm2/internal/manifests/data"
 	"github.com/gluwa/openclaw-swarm2/internal/manifests/service"
+	"github.com/gluwa/openclaw-swarm2/internal/platformutil/bash"
 	"github.com/gluwa/openclaw-swarm2/internal/scaffold"
 	intssh "github.com/gluwa/openclaw-swarm2/internal/ssh"
 	tc "github.com/testcontainers/testcontainers-go"
@@ -270,16 +272,12 @@ func TestApplyPlan(t *testing.T) {
 							t.Errorf("phase=%s target=%s step=%s: expected satisfied, got not satisfied",
 								phase.Name, target.ID, stepName)
 						}
-					case "bootstrap-gateway":
-						// Fresh container has no config yet: applicable + will execute.
+					case "bootstrap-gateway", "configure-gateway", "pair-gateway-device":
+						// All always applicable for gateway targets. bootstrap
+						// will execute on fresh containers; configure and pair
+						// run after bootstrap so Check handles idempotency.
 						if !applicable {
-							t.Errorf("phase=%s target=%s step=%s: expected applicable (fresh container), got not applicable",
-								phase.Name, target.ID, stepName)
-						}
-					case "configure-gateway", "pair-gateway-device":
-						// Fresh container has no config yet: not applicable.
-						if applicable {
-							t.Errorf("phase=%s target=%s step=%s: expected not applicable (fresh container), got applicable",
+							t.Errorf("phase=%s target=%s step=%s: expected applicable, got not applicable",
 								phase.Name, target.ID, stepName)
 						}
 					default:
@@ -416,19 +414,30 @@ func TestApplyExecute(t *testing.T) {
 	}
 	t.Log("verified: gateway.bind=lan")
 
-	// 4. Token side-file must be non-empty.
+	// 4. Token in config must be non-empty.
 	token, err := gwService.ReadToken(client, home)
 	if err != nil {
-		t.Fatalf("read token: %v", err)
+		t.Fatalf("read token from config: %v", err)
 	}
 	if token == "" {
-		t.Fatal("expected non-empty gateway token in side-file")
+		t.Fatal("expected non-empty gateway.auth.token in openclaw.json")
 	}
-	t.Logf("verified: token side-file present (%d chars)", len(token))
+	t.Logf("verified: gateway.auth.token present (%d chars)", len(token))
 
 	// 5. Gateway must be listening on port 18789.
 	if err := gwService.HealthCheck(client, 15, 2*time.Second); err != nil {
 		t.Fatalf("health check: %v", err)
 	}
 	t.Log("verified: gateway listening on :18789")
+
+	// 6. OPENCLAW_ALLOW_INSECURE_PRIVATE_WS=1 must be set on the running
+	//    gateway process (required for networking.mode=docker / LAN bind).
+	envOut, err := bash.RunOutput(client, `tr '\0' '\n' < /proc/$(pgrep -f "openclaw gateway")/environ 2>/dev/null | grep OPENCLAW_ALLOW_INSECURE_PRIVATE_WS || echo missing`)
+	if err != nil {
+		t.Fatalf("read gateway process env: %v", err)
+	}
+	if !strings.Contains(envOut, "OPENCLAW_ALLOW_INSECURE_PRIVATE_WS=1") {
+		t.Fatalf("expected OPENCLAW_ALLOW_INSECURE_PRIVATE_WS=1 in gateway process env, got: %q", strings.TrimSpace(envOut))
+	}
+	t.Log("verified: OPENCLAW_ALLOW_INSECURE_PRIVATE_WS=1 set on gateway process")
 }

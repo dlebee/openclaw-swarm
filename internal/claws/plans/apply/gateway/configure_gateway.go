@@ -23,32 +23,12 @@ func NewConfigureGatewayStep(opts Options) *ConfigureGatewayStep {
 
 func (*ConfigureGatewayStep) Name() string { return "configure-gateway" }
 
-// Applicable returns true only when the gateway is already onboarded
-// (config file exists on the remote host).
-func (s *ConfigureGatewayStep) Applicable(ctx context.Context, t scaffold.Target) (bool, error) {
-	gt, ok := t.Payload.(*GatewayTarget)
-	if !ok || gt == nil {
-		return false, nil
-	}
-	if s.dial == nil {
-		return false, nil
-	}
-	m := gt.Machine
-	client, key, err := borrowSSH(ctx, s.dial, machineHost(m), machineSSHPort(m), machineSSHUser(m))
-	if err != nil {
-		return false, nil
-	}
-	defer returnSSH(ctx, key, client)
-
-	home, err := ResolveHome(client)
-	if err != nil {
-		return false, fmt.Errorf("configure-gateway: %w", err)
-	}
-	exists, err := ConfigExists(client, home)
-	if err != nil {
-		return false, fmt.Errorf("configure-gateway: %w", err)
-	}
-	return exists, nil
+// Applicable returns true for any gateway target. The step runs after
+// bootstrap-gateway in the pipeline, so by execution time the config will
+// exist. Check determines whether there is actual drift to repair.
+func (s *ConfigureGatewayStep) Applicable(_ context.Context, t scaffold.Target) (bool, error) {
+	_, ok := t.Payload.(*GatewayTarget)
+	return ok, nil
 }
 
 // Check reads the current gateway.mode and gateway.bind from the remote

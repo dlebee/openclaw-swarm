@@ -30,31 +30,12 @@ func NewPairGatewayDeviceStep(opts Options) *PairGatewayDeviceStep {
 
 func (*PairGatewayDeviceStep) Name() string { return "pair-gateway-device" }
 
-// Applicable returns true when the gateway config exists (already onboarded).
-func (s *PairGatewayDeviceStep) Applicable(ctx context.Context, t scaffold.Target) (bool, error) {
-	gt, ok := t.Payload.(*GatewayTarget)
-	if !ok || gt == nil {
-		return false, nil
-	}
-	if s.dial == nil {
-		return false, nil
-	}
-	m := gt.Machine
-	client, key, err := borrowSSH(ctx, s.dial, machineHost(m), machineSSHPort(m), machineSSHUser(m))
-	if err != nil {
-		return false, nil
-	}
-	defer returnSSH(ctx, key, client)
-
-	home, err := ResolveHome(client)
-	if err != nil {
-		return false, fmt.Errorf("pair-gateway-device: %w", err)
-	}
-	exists, err := ConfigExists(client, home)
-	if err != nil {
-		return false, fmt.Errorf("pair-gateway-device: %w", err)
-	}
-	return exists, nil
+// Applicable returns true for any gateway target. The step runs after
+// bootstrap-gateway in the pipeline, so by execution time the config will
+// exist regardless of whether this is a fresh or existing gateway.
+func (s *PairGatewayDeviceStep) Applicable(_ context.Context, t scaffold.Target) (bool, error) {
+	_, ok := t.Payload.(*GatewayTarget)
+	return ok, nil
 }
 
 // Check returns true when at least one local device is already paired.
