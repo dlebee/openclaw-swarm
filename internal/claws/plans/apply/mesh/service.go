@@ -4,6 +4,7 @@ import (
 	"strings"
 	"unicode"
 
+	manifestdata "github.com/gluwa/openclaw-swarm2/internal/manifests/data"
 	"github.com/gluwa/openclaw-swarm2/internal/platformutil/bash"
 	xssh "golang.org/x/crypto/ssh"
 )
@@ -46,6 +47,30 @@ func HeadscaleVersionOK(client *xssh.Client) bool {
 // IsHTTPControlURL returns true if the control URL uses plain HTTP (no Caddy needed).
 func IsHTTPControlURL(controlURL string) bool {
 	return strings.HasPrefix(strings.TrimSpace(controlURL), "http://")
+}
+
+// ExpectedControlURLIsHTTP reports whether the control URL derived from the
+// manifest's networking.public_hostname would use plain HTTP. Used by steps
+// like install-caddy to decide applicability during dry-run, before
+// resolve-control-url has executed and populated the plan cache.
+//   - sslip strategy always produces an https://…sslip.io URL.
+//   - custom strategy is https unless the host is explicitly prefixed http://.
+func ExpectedControlURLIsHTTP(gw *manifestdata.Gateway) bool {
+	if gw == nil || gw.Networking == nil {
+		return false
+	}
+	ph := gw.Networking.PublicHostname
+	if ph == nil {
+		return false
+	}
+	strategy := strings.ToLower(strings.TrimSpace(ph.Strategy))
+	switch strategy {
+	case "", "sslip":
+		return false
+	case "custom":
+		return strings.HasPrefix(strings.TrimSpace(ph.Host), "http://")
+	}
+	return false
 }
 
 // HostnameFromControlURL extracts the FQDN from a control URL (stripping scheme and port).

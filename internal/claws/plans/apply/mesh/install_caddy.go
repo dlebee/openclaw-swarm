@@ -27,12 +27,15 @@ func (*InstallCaddyStep) Applicable(ctx context.Context, t scaffold.Target) (boo
 	if !ok || !mt.IsGatewayHost {
 		return false, nil
 	}
-	v, ok := scaffold.PlanCacheGet(ctx, CacheKeyControlURL)
-	if !ok {
-		return false, nil
+	// Prefer the resolved control URL from the plan cache (real execute path).
+	// Fall back to the manifest-derived scheme so dry-run previews reflect
+	// what would happen on a real apply without requiring resolve-control-url
+	// to have executed first.
+	if v, ok := scaffold.PlanCacheGet(ctx, CacheKeyControlURL); ok {
+		controlURL, _ := v.(string)
+		return !IsHTTPControlURL(controlURL), nil
 	}
-	controlURL, _ := v.(string)
-	return !IsHTTPControlURL(controlURL), nil
+	return !ExpectedControlURLIsHTTP(mt.Gateway), nil
 }
 
 func (s *InstallCaddyStep) Check(ctx context.Context, t scaffold.Target) (bool, error) {
