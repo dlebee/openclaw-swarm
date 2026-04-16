@@ -11,7 +11,7 @@ type CellResult struct {
 	TargetID string
 	StepName string
 	Skipped  bool
-	Blocked  bool
+	Satisfied bool
 	Err      error
 }
 
@@ -19,7 +19,7 @@ type CellResult struct {
 func (r CellResult) ToOutcome() progress.CellOutcome {
 	return progress.CellOutcome{
 		Skipped: r.Skipped,
-		Blocked: r.Blocked,
+		Satisfied: r.Satisfied,
 		Err:     r.Err,
 	}
 }
@@ -36,13 +36,13 @@ func runCell(ctx context.Context, t Target, s Step) CellResult {
 		res.Skipped = true
 		return res
 	}
-	blocked, err := s.Check(ctx, t)
+	satisfied, err := s.Check(ctx, t)
 	if err != nil {
 		res.Err = err
 		return res
 	}
-	if blocked {
-		res.Blocked = true
+	if satisfied {
+		res.Satisfied = true
 		return res
 	}
 	if err := s.Execute(ctx, t); err != nil {

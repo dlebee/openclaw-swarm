@@ -8,7 +8,7 @@ import "context"
 type Step interface {
 	Name() string
 	Applicable(ctx context.Context, t Target) (bool, error)
-	Check(ctx context.Context, t Target) (blocked bool, err error)
+	Check(ctx context.Context, t Target) (satisfied bool, err error)
 	Execute(ctx context.Context, t Target) error
 	Verify(ctx context.Context, t Target) error
 }

@@ -55,12 +55,12 @@ func probeCellForPlan(ctx context.Context, t Target, s Step, pipelineDryRun bool
 	if !ok {
 		return cellStatusNotApplicable, ""
 	}
-	blocked, err := s.Check(ctx, t)
+	satisfied, err := s.Check(ctx, t)
 	if err != nil {
 		return cellStatusCheckErr, err.Error()
 	}
-	if blocked {
-		return cellStatusBlocked, ""
+	if satisfied {
+		return cellStatusSatisfied, ""
 	}
 	if pipelineDryRun {
 		return cellStatusWouldExecute, ""

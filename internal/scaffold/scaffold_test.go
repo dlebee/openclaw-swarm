@@ -18,7 +18,7 @@ type mockStep struct {
 	name           string
 	applicable     bool
 	applicableErr  error
-	checkBlocked   bool
+	checkSatisfied bool
 	checkErr       error
 	executeErr     error
 	verifyErr      error
@@ -49,7 +49,7 @@ func (m *mockStep) Check(ctx context.Context, t Target) (bool, error) {
 	if m.checkErr != nil {
 		return false, m.checkErr
 	}
-	return m.checkBlocked, nil
+	return m.checkSatisfied, nil
 }
 
 func (m *mockStep) Execute(ctx context.Context, t Target) error {
@@ -269,8 +269,8 @@ func TestExecute_applicable_false(t *testing.T) {
 	}
 }
 
-func TestExecute_check_blocked(t *testing.T) {
-	a := &mockStep{name: "A", applicable: true, checkBlocked: true}
+func TestExecute_check_satisfied(t *testing.T) {
+	a := &mockStep{name: "A", applicable: true, checkSatisfied: true}
 	p := New()
 	ph := p.AddPhase("p1")
 	ph.AddTargets(Target{ID: "t1"})

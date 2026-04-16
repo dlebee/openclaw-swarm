@@ -22,7 +22,7 @@ type cellStatusKind int
 const (
 	cellStatusPhaseSkipped cellStatusKind = iota
 	cellStatusNotApplicable
-	cellStatusBlocked
+	cellStatusSatisfied
 	cellStatusWillExecute
 	cellStatusWouldExecute
 	cellStatusApplicableErr
@@ -143,7 +143,7 @@ func statusStyleForKind(k cellStatusKind) lipgloss.Style {
 		return statusWouldOK
 	case cellStatusNotApplicable, cellStatusPhaseSkipped:
 		return statusMuted
-	case cellStatusBlocked:
+	case cellStatusSatisfied:
 		return statusWarn
 	case cellStatusApplicableErr, cellStatusCheckErr:
 		return statusErr
@@ -160,8 +160,8 @@ func cellStatusText(c annotatedCell) string {
 		return "skipped (phase)"
 	case cellStatusNotApplicable:
 		return "not applicable"
-	case cellStatusBlocked:
-		return "blocked"
+	case cellStatusSatisfied:
+		return "satisfied"
 	case cellStatusWillExecute:
 		return "will execute"
 	case cellStatusWouldExecute:

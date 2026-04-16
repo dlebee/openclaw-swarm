@@ -180,7 +180,7 @@ func TestExecute_populatesPayload(t *testing.T) {
 	}
 }
 
-func TestCheck_blockedWhenExisting(t *testing.T) {
+func TestCheck_satisfiedWhenExisting(t *testing.T) {
 	wantLabel := machineLabel("pfx", "web")
 	prefixTag := clawsPrefixTag("pfx")
 	perMachineTag := machineTag("pfx", "web")

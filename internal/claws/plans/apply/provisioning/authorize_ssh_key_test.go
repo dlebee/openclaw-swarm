@@ -11,7 +11,7 @@ import (
 	xssh "golang.org/x/crypto/ssh"
 )
 
-func TestAuthorizeSSHKeyCheck_nilDialNotBlocked(t *testing.T) {
+func TestAuthorizeSSHKeyCheck_nilDialNotSatisfied(t *testing.T) {
 	a := NewAuthorizeSSHKeyStep(Options{SSHDial: nil, SSHPubKey: "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAI"})
 	mt := &MachineTarget{
 		Spec: manifestdata.Machine{Name: "web", Type: manifestdata.MachineTypeLinode},
@@ -19,13 +19,13 @@ func TestAuthorizeSSHKeyCheck_nilDialNotBlocked(t *testing.T) {
 			PublicIPv4: "203.0.113.1",
 		},
 	}
-	blocked, err := a.Check(context.Background(), scaffold.Target{ID: "t1", Payload: mt})
-	if err != nil || blocked {
-		t.Fatalf("want not blocked, no err; blocked=%v err=%v", blocked, err)
+	satisfied, err := a.Check(context.Background(), scaffold.Target{ID: "t1", Payload: mt})
+	if err != nil || satisfied {
+		t.Fatalf("want not satisfied, no err; satisfied=%v err=%v", satisfied, err)
 	}
 }
 
-func TestAuthorizeSSHKeyCheck_dialErrorNotBlocked(t *testing.T) {
+func TestAuthorizeSSHKeyCheck_dialErrorNotSatisfied(t *testing.T) {
 	a := NewAuthorizeSSHKeyStep(Options{
 		SSHDial: func(ctx context.Context, host string, port int, user string) (*xssh.Client, error) {
 			_ = ctx
@@ -42,13 +42,13 @@ func TestAuthorizeSSHKeyCheck_dialErrorNotBlocked(t *testing.T) {
 			PublicIPv4: "203.0.113.1",
 		},
 	}
-	blocked, err := a.Check(context.Background(), scaffold.Target{ID: "t1", Payload: mt})
-	if err != nil || blocked {
-		t.Fatalf("want not blocked, no err; blocked=%v err=%v", blocked, err)
+	satisfied, err := a.Check(context.Background(), scaffold.Target{ID: "t1", Payload: mt})
+	if err != nil || satisfied {
+		t.Fatalf("want not satisfied, no err; satisfied=%v err=%v", satisfied, err)
 	}
 }
 
-func TestAuthorizeSSHKeyCheck_noInstanceNotBlocked(t *testing.T) {
+func TestAuthorizeSSHKeyCheck_noInstanceNotSatisfied(t *testing.T) {
 	a := NewAuthorizeSSHKeyStep(Options{
 		SSHDial: func(ctx context.Context, host string, port int, user string) (*xssh.Client, error) {
 			t.Fatal("dial should not run without instance IP payload")
@@ -60,8 +60,8 @@ func TestAuthorizeSSHKeyCheck_noInstanceNotBlocked(t *testing.T) {
 		Spec:     manifestdata.Machine{Name: "web", Type: manifestdata.MachineTypeLinode},
 		Instance: nil,
 	}
-	blocked, err := a.Check(context.Background(), scaffold.Target{ID: "t1", Payload: mt})
-	if err != nil || blocked {
-		t.Fatalf("want not blocked, no err; blocked=%v err=%v", blocked, err)
+	satisfied, err := a.Check(context.Background(), scaffold.Target{ID: "t1", Payload: mt})
+	if err != nil || satisfied {
+		t.Fatalf("want not satisfied, no err; satisfied=%v err=%v", satisfied, err)
 	}
 }

@@ -48,9 +48,9 @@ func (a *AuthorizeSSHKeyStep) Applicable(ctx context.Context, t scaffold.Target)
 
 // Check implements scaffold.Step. When create-machine's Check has already attached an
 // instance with a public IPv4, dial once and verify the CLI public key line is present;
-// blocked=true skips Execute. Dial or verify errors do not block: Execute may still
+// satisfied=true skips Execute. Dial or verify errors are not fatal: Execute may still
 // need to run to fix drift or reachability.
-func (a *AuthorizeSSHKeyStep) Check(ctx context.Context, t scaffold.Target) (blocked bool, err error) {
+func (a *AuthorizeSSHKeyStep) Check(ctx context.Context, t scaffold.Target) (satisfied bool, err error) {
 	if a == nil || a.dial == nil || strings.TrimSpace(a.sshPubKey) == "" {
 		return false, nil
 	}

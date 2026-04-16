@@ -43,7 +43,7 @@ func (a *CreateMachineStep) Applicable(ctx context.Context, t scaffold.Target) (
 
 // Check implements scaffold.Step — list instances tagged claws/<prefix>, then match
 // uniquely by Linode label (prefix-machineName).
-func (a *CreateMachineStep) Check(ctx context.Context, t scaffold.Target) (blocked bool, err error) {
+func (a *CreateMachineStep) Check(ctx context.Context, t scaffold.Target) (satisfied bool, err error) {
 	mt, ok := t.Payload.(*MachineTarget)
 	if !ok || mt == nil {
 		return false, fmt.Errorf("create-machine: expected *MachineTarget payload for target %q", t.ID)

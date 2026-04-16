@@ -92,8 +92,8 @@ func (s *Styled) OnStepEnd(phase, targetID, step string, slot int, outcome CellO
 		_, _ = fmt.Fprintln(s.w, prefix+styleErr.Render("error ")+fmt.Sprint(outcome.Err))
 	case outcome.Skipped:
 		_, _ = fmt.Fprintln(s.w, prefix+styleSkip.Render("skipped"))
-	case outcome.Blocked:
-		_, _ = fmt.Fprintln(s.w, prefix+styleSkip.Render("blocked"))
+	case outcome.Satisfied:
+		_, _ = fmt.Fprintln(s.w, prefix+styleSkip.Render("satisfied"))
 	default:
 		_, _ = fmt.Fprintln(s.w, prefix+styleOk.Render("ok"))
 	}

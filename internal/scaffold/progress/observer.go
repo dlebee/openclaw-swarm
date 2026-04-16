@@ -3,7 +3,7 @@ package progress
 // CellOutcome is the result of one (target, step) execution (no scaffold import).
 type CellOutcome struct {
 	Skipped bool
-	Blocked bool
+	Satisfied bool
 	Err     error
 }
 
