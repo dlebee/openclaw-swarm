@@ -48,7 +48,7 @@ Items from v1 that manipulated JSON files directly instead of using `openclaw` C
 - [x] `claws destroy` (plan exists)
 - [x] `claws clean channels` — remove orphaned channel accounts (extensible to machines/nodes/agents)
 - [ ] `claws status` — live dashboard of all resources
-- [ ] `claws ssh` — SSH into a manifest machine
+- [x] `claws ssh` — SSH into a manifest machine (interactive picker or `--name`)
 - [ ] `claws run` — execute manual automations
 - [x] `claws channels pair` — interactive channel pairing
 - [ ] `claws machines` / `gateways` / `nodes` — list subcommands
