@@ -6,13 +6,13 @@ import (
 	"github.com/gluwa/openclaw-swarm2/internal/scaffold/progress"
 )
 
-// CellResult is the outcome of running one cell.
+// CellResult is the outcome of running one (target, step) pair.
 type CellResult struct {
-	TargetID   string
-	ActionName string
-	Skipped    bool
-	Blocked    bool
-	Err        error
+	TargetID string
+	StepName string
+	Skipped  bool
+	Blocked  bool
+	Err      error
 }
 
 // ToOutcome maps to progress.CellOutcome for observers.
@@ -24,10 +24,10 @@ func (r CellResult) ToOutcome() progress.CellOutcome {
 	}
 }
 
-// runCell runs Applicable > Check > Execute > Verify.
-func runCell(ctx context.Context, t Target, a Action) CellResult {
-	res := CellResult{TargetID: t.ID, ActionName: a.Name()}
-	ok, err := a.Applicable(ctx, t)
+// runCell runs Applicable → Check → Execute → Verify for one (target, step) pair.
+func runCell(ctx context.Context, t Target, s Step) CellResult {
+	res := CellResult{TargetID: t.ID, StepName: s.Name()}
+	ok, err := s.Applicable(ctx, t)
 	if err != nil {
 		res.Err = err
 		return res
@@ -36,7 +36,7 @@ func runCell(ctx context.Context, t Target, a Action) CellResult {
 		res.Skipped = true
 		return res
 	}
-	blocked, err := a.Check(ctx, t)
+	blocked, err := s.Check(ctx, t)
 	if err != nil {
 		res.Err = err
 		return res
@@ -45,11 +45,11 @@ func runCell(ctx context.Context, t Target, a Action) CellResult {
 		res.Blocked = true
 		return res
 	}
-	if err := a.Execute(ctx, t); err != nil {
+	if err := s.Execute(ctx, t); err != nil {
 		res.Err = err
 		return res
 	}
-	if err := a.Verify(ctx, t); err != nil {
+	if err := s.Verify(ctx, t); err != nil {
 		res.Err = err
 		return res
 	}

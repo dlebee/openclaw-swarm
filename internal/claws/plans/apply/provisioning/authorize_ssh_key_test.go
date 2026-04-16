@@ -12,7 +12,7 @@ import (
 )
 
 func TestAuthorizeSSHKeyCheck_nilDialNotBlocked(t *testing.T) {
-	a := NewAuthorizeSSHKeyAction(Options{SSHDial: nil, SSHPubKey: "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAI"})
+	a := NewAuthorizeSSHKeyStep(Options{SSHDial: nil, SSHPubKey: "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAI"})
 	mt := &MachineTarget{
 		Spec: manifestdata.Machine{Name: "web", Type: manifestdata.MachineTypeLinode},
 		Instance: &hosting.Instance{
@@ -26,7 +26,7 @@ func TestAuthorizeSSHKeyCheck_nilDialNotBlocked(t *testing.T) {
 }
 
 func TestAuthorizeSSHKeyCheck_dialErrorNotBlocked(t *testing.T) {
-	a := NewAuthorizeSSHKeyAction(Options{
+	a := NewAuthorizeSSHKeyStep(Options{
 		SSHDial: func(ctx context.Context, host string, port int, user string) (*xssh.Client, error) {
 			_ = ctx
 			_ = host
@@ -49,7 +49,7 @@ func TestAuthorizeSSHKeyCheck_dialErrorNotBlocked(t *testing.T) {
 }
 
 func TestAuthorizeSSHKeyCheck_noInstanceNotBlocked(t *testing.T) {
-	a := NewAuthorizeSSHKeyAction(Options{
+	a := NewAuthorizeSSHKeyStep(Options{
 		SSHDial: func(ctx context.Context, host string, port int, user string) (*xssh.Client, error) {
 			t.Fatal("dial should not run without instance IP payload")
 			return nil, nil

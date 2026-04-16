@@ -11,29 +11,27 @@ import (
 	"github.com/gluwa/openclaw-swarm2/internal/scaffold"
 )
 
-// AuthorizeSSHKeyAction ensures the active CLI public key is present in the target user's authorized_keys.
-// It runs after create-machine (separate step) so SSH is only attempted once the host has an address.
-// Use scaffold.DoesMachineExist(ctx, target.ID) when a probe result is needed; do not assume from a skipped phase.
-type AuthorizeSSHKeyAction struct {
+// AuthorizeSSHKeyStep ensures the active CLI public key is present in the target
+// user's authorized_keys. It runs after create-machine (later step in the same phase)
+// so SSH is only attempted once the host has an address.
+type AuthorizeSSHKeyStep struct {
 	dial      SSHDialFunc
 	sshPubKey string
 }
 
-// NewAuthorizeSSHKeyAction builds the scaffold action from options.
-func NewAuthorizeSSHKeyAction(opts Options) *AuthorizeSSHKeyAction {
-	return &AuthorizeSSHKeyAction{
+// NewAuthorizeSSHKeyStep builds the scaffold step from options.
+func NewAuthorizeSSHKeyStep(opts Options) *AuthorizeSSHKeyStep {
+	return &AuthorizeSSHKeyStep{
 		dial:      opts.SSHDial,
 		sshPubKey: strings.TrimSpace(opts.SSHPubKey),
 	}
 }
 
-// Name implements scaffold.Action.
-func (*AuthorizeSSHKeyAction) Name() string { return "authorize-ssh-key" }
+// Name implements scaffold.Step.
+func (*AuthorizeSSHKeyStep) Name() string { return "authorize-ssh-key" }
 
-// Applicable implements scaffold.Action — Linode machines when SSH dialer and key are configured.
-// Instance/public IP are not required here: create-machine runs in an earlier step and may attach
-// the instance before authorize-ssh-key's Check runs during the same plan walk.
-func (a *AuthorizeSSHKeyAction) Applicable(ctx context.Context, t scaffold.Target) (bool, error) {
+// Applicable implements scaffold.Step — Linode machines when SSH dialer and key are configured.
+func (a *AuthorizeSSHKeyStep) Applicable(ctx context.Context, t scaffold.Target) (bool, error) {
 	_ = ctx
 	if a.dial == nil || a.sshPubKey == "" {
 		return false, nil
@@ -48,11 +46,11 @@ func (a *AuthorizeSSHKeyAction) Applicable(ctx context.Context, t scaffold.Targe
 	return true, nil
 }
 
-// Check implements scaffold.Action. When create-machine's Check has already attached an
+// Check implements scaffold.Step. When create-machine's Check has already attached an
 // instance with a public IPv4, dial once and verify the CLI public key line is present;
-// blocked=true skips Execute (same as create-machine when the instance already exists).
-// Dial or verify errors do not block: Execute may still need to run to fix drift or reachability.
-func (a *AuthorizeSSHKeyAction) Check(ctx context.Context, t scaffold.Target) (blocked bool, err error) {
+// blocked=true skips Execute. Dial or verify errors do not block: Execute may still
+// need to run to fix drift or reachability.
+func (a *AuthorizeSSHKeyStep) Check(ctx context.Context, t scaffold.Target) (blocked bool, err error) {
 	if a == nil || a.dial == nil || strings.TrimSpace(a.sshPubKey) == "" {
 		return false, nil
 	}
@@ -75,8 +73,8 @@ func (a *AuthorizeSSHKeyAction) Check(ctx context.Context, t scaffold.Target) (b
 	return true, nil
 }
 
-// Execute implements scaffold.Action.
-func (a *AuthorizeSSHKeyAction) Execute(ctx context.Context, t scaffold.Target) error {
+// Execute implements scaffold.Step.
+func (a *AuthorizeSSHKeyStep) Execute(ctx context.Context, t scaffold.Target) error {
 	mt, ok := t.Payload.(*MachineTarget)
 	if !ok || mt == nil {
 		return fmt.Errorf("authorize-ssh-key: expected *MachineTarget for target %q", t.ID)
@@ -112,8 +110,8 @@ func (a *AuthorizeSSHKeyAction) Execute(ctx context.Context, t scaffold.Target) 
 	return fmt.Errorf("authorize-ssh-key: dial %s@%s:%d after retries: %w", user, host, port, lastErr)
 }
 
-// Verify implements scaffold.Action.
-func (a *AuthorizeSSHKeyAction) Verify(ctx context.Context, t scaffold.Target) error {
+// Verify implements scaffold.Step.
+func (a *AuthorizeSSHKeyStep) Verify(ctx context.Context, t scaffold.Target) error {
 	mt, ok := t.Payload.(*MachineTarget)
 	if !ok || mt == nil {
 		return fmt.Errorf("authorize-ssh-key verify: expected *MachineTarget for %q", t.ID)

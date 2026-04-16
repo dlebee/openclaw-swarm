@@ -30,10 +30,10 @@ const (
 )
 
 type annotatedCell struct {
-	phase, step, action, targetID string
-	seq                           int
-	kind                          cellStatusKind
-	detail                        string
+	phase, step, targetID string
+	seq                   int
+	kind                  cellStatusKind
+	detail                string
 }
 
 // planTargetSegment is one target under a phase with ordered cells (steps).

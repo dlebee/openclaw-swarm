@@ -40,23 +40,15 @@ func (p *Plan) Build(obs ...progress.BuildObserver) (*ExecutablePlan, error) {
 		if len(ph.Steps) == 0 {
 			return nil, fmt.Errorf("scaffold: phase %q has no steps", ph.Name)
 		}
-		for si, st := range ph.Steps {
-			if st.Name == "" {
-				return nil, fmt.Errorf("scaffold: phase %q step %d has empty name", ph.Name, si)
+		if len(ph.Targets) == 0 {
+			return nil, fmt.Errorf("scaffold: phase %q has no targets", ph.Name)
+		}
+		for _, s := range ph.Steps {
+			if s == nil {
+				return nil, fmt.Errorf("scaffold: phase %q has nil step", ph.Name)
 			}
-			if len(st.Targets) == 0 {
-				return nil, fmt.Errorf("scaffold: phase %q step %q has no targets", ph.Name, st.Name)
-			}
-			if len(st.Actions) == 0 {
-				return nil, fmt.Errorf("scaffold: phase %q step %q has no actions", ph.Name, st.Name)
-			}
-			for _, a := range st.Actions {
-				if a == nil {
-					return nil, fmt.Errorf("scaffold: phase %q step %q has nil action", ph.Name, st.Name)
-				}
-				if a.Name() == "" {
-					return nil, fmt.Errorf("scaffold: phase %q step %q has action with empty name", ph.Name, st.Name)
-				}
+			if s.Name() == "" {
+				return nil, fmt.Errorf("scaffold: phase %q has step with empty name", ph.Name)
 			}
 		}
 	}

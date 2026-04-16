@@ -157,14 +157,11 @@ func TestExecute_populatesPayload(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// Recover target payload pointers from compiled plan (same *MachineTarget as builder).
 	var mt *MachineTarget
 	for _, ph := range p.Phases {
-		for _, st := range ph.Steps {
-			for _, tgt := range st.Targets {
-				if m, ok := tgt.Payload.(*MachineTarget); ok && m.Spec.Name == "web" {
-					mt = m
-				}
+		for _, tgt := range ph.Targets {
+			if m, ok := tgt.Payload.(*MachineTarget); ok && m.Spec.Name == "web" {
+				mt = m
 			}
 		}
 	}
@@ -215,11 +212,9 @@ func TestCheck_blockedWhenExisting(t *testing.T) {
 
 	var mt *MachineTarget
 	for _, ph := range p.Phases {
-		for _, st := range ph.Steps {
-			for _, tgt := range st.Targets {
-				if m, ok := tgt.Payload.(*MachineTarget); ok {
-					mt = m
-				}
+		for _, tgt := range ph.Targets {
+			if m, ok := tgt.Payload.(*MachineTarget); ok {
+				mt = m
 			}
 		}
 	}

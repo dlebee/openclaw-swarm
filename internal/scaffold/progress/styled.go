@@ -14,8 +14,8 @@ var (
 	styleErr      = lipgloss.NewStyle().Foreground(lipgloss.Color("196"))
 	styleOk       = lipgloss.NewStyle().Foreground(lipgloss.Color("42"))
 	styleSkip     = lipgloss.NewStyle().Foreground(lipgloss.Color("244"))
+	styleTarget   = lipgloss.NewStyle().Foreground(lipgloss.Color("39"))
 	styleStep     = lipgloss.NewStyle().Foreground(lipgloss.Color("141"))
-	styleCell     = lipgloss.NewStyle().Foreground(lipgloss.Color("252"))
 )
 
 // Styled writes Lip Gloss execution and planning lines to w (thread-safe).
@@ -36,14 +36,14 @@ func (s *Styled) println(a ...any) {
 }
 
 // OnPlanning implements BuildObserver.
-func (s *Styled) OnPlanning(phase, step, action string) {
-	line := stylePlanning.Render("Planning: ") + phase + " > " + step + " > " + action
+func (s *Styled) OnPlanning(phase, step string) {
+	line := stylePlanning.Render("Planning: ") + phase + " > " + step
 	s.println(line)
 }
 
 // OnPhaseStart implements Observer.
 func (s *Styled) OnPhaseStart(index, total int, phase string) {
-	line := stylePhase.Render(fmt.Sprintf("Executing: [%d/%d] %s", index, total, phase))
+	line := stylePhase.Render(fmt.Sprintf("Phase [%d/%d] %s", index, total, phase))
 	s.println(line)
 }
 
@@ -58,33 +58,38 @@ func (s *Styled) OnPhaseEnd(index, total int, phase string, err error) {
 	}
 }
 
+// OnTargetStart implements Observer.
+func (s *Styled) OnTargetStart(phase, targetID string, slot int) {
+	line := fmt.Sprintf("  [%d] ", slot) + styleTarget.Render(targetID) + " starting"
+	s.println(line)
+}
+
+// OnTargetEnd implements Observer.
+func (s *Styled) OnTargetEnd(phase, targetID string, slot int, err error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	prefix := fmt.Sprintf("  [%d] %s: ", slot, targetID)
+	if err != nil {
+		_, _ = fmt.Fprintln(s.w, prefix+styleErr.Render("error ")+fmt.Sprint(err))
+	} else {
+		_, _ = fmt.Fprintln(s.w, prefix+styleOk.Render("done"))
+	}
+}
+
 // OnStepStart implements Observer.
-func (s *Styled) OnStepStart(phase, step string) {
-	s.println(styleStep.Render("  step "), phase, "/", step)
+func (s *Styled) OnStepStart(phase, targetID, step string, slot int) {
+	line := fmt.Sprintf("  [%d] %s > ", slot, targetID) + styleStep.Render(step)
+	s.println(line)
 }
 
 // OnStepEnd implements Observer.
-func (s *Styled) OnStepEnd(phase, step string, results []CellOutcome, err error) {
+func (s *Styled) OnStepEnd(phase, targetID, step string, slot int, outcome CellOutcome) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if err != nil {
-		_, _ = fmt.Fprintf(s.w, "%s %v\n", styleErr.Render("  step error:"), err)
-		return
-	}
-	_, _ = fmt.Fprintf(s.w, "%s (%d cells)\n", styleOk.Render("  step ok"), len(results))
-}
-
-// OnCellStart implements Observer (no partial line; avoids interleaved output under concurrency).
-func (s *Styled) OnCellStart(phase, step, targetID, actionName string) {}
-
-// OnCellEnd implements Observer (one full line per cell, mutex-safe).
-func (s *Styled) OnCellEnd(phase, step, targetID, actionName string, outcome CellOutcome) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	prefix := styleCell.Render("    ") + actionName + " @ " + targetID + ": "
+	prefix := fmt.Sprintf("  [%d] %s > %s: ", slot, targetID, step)
 	switch {
 	case outcome.Err != nil:
-		_, _ = fmt.Fprintln(s.w, prefix+styleErr.Render("error"), outcome.Err)
+		_, _ = fmt.Fprintln(s.w, prefix+styleErr.Render("error ")+fmt.Sprint(outcome.Err))
 	case outcome.Skipped:
 		_, _ = fmt.Fprintln(s.w, prefix+styleSkip.Render("skipped"))
 	case outcome.Blocked:

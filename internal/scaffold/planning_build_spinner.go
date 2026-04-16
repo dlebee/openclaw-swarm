@@ -13,7 +13,7 @@ import (
 )
 
 type planningLineMsg struct {
-	phase, step, action string
+	phase, step string
 }
 
 type buildFinishedMsg struct {
@@ -25,8 +25,8 @@ type spinnerBuildObserver struct {
 	send func(tea.Msg)
 }
 
-func (s *spinnerBuildObserver) OnPlanning(phase, step, action string) {
-	s.send(planningLineMsg{phase: phase, step: step, action: action})
+func (s *spinnerBuildObserver) OnPlanning(phase, step string) {
+	s.send(planningLineMsg{phase: phase, step: step})
 }
 
 type planningBuildModel struct {

@@ -8,10 +8,12 @@ import (
 
 const maxProvisioningConcurrency = 5
 
-// AddPhase registers the "provisioning" phase: create-machine, then authorize-ssh-key (sequential steps).
-// Concurrency is the number of Linode machines (minimum 1), capped at maxProvisioningConcurrency.
+// AddPhase registers the "provisioning" phase. Targets run concurrently (capped
+// at maxProvisioningConcurrency); each target runs create-machine then
+// authorize-ssh-key sequentially.
 func AddPhase(p *scaffold.Plan, machines []manifestdata.Machine, opts Options) *scaffold.Phase {
 	ph := p.AddPhase("provisioning")
+
 	linodeN := 0
 	for _, m := range machines {
 		if m.Type == manifestdata.MachineTypeLinode {
@@ -27,19 +29,15 @@ func AddPhase(p *scaffold.Plan, machines []manifestdata.Machine, opts Options) *
 	}
 	ph.Concurrency = concurrency
 
-	targets := make([]scaffold.Target, 0, len(machines))
 	for _, m := range machines {
-		targets = append(targets, scaffold.Target{
+		ph.AddTargets(scaffold.Target{
 			ID:      m.Name,
 			Payload: &MachineTarget{Spec: m},
 		})
 	}
 
-	sCreate := ph.AddStep("create-machine")
-	sCreate.AddTargets(targets...).AddActions(NewCreateMachineAction(opts))
-
-	sAuth := ph.AddStep("authorize-ssh-key")
-	sAuth.AddTargets(targets...).AddActions(NewAuthorizeSSHKeyAction(opts))
+	ph.AddStep(NewCreateMachineStep(opts))
+	ph.AddStep(NewAuthorizeSSHKeyStep(opts))
 
 	return ph
 }

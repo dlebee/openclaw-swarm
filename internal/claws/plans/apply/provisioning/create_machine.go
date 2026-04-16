@@ -12,27 +12,27 @@ import (
 	"github.com/gluwa/openclaw-swarm2/internal/scaffold"
 )
 
-// CreateMachineAction provisions a Linode instance for a machine target.
-type CreateMachineAction struct {
+// CreateMachineStep provisions a Linode instance for a machine target.
+type CreateMachineStep struct {
 	provider  hosting.Provider
 	prefix    string
 	sshPubKey string
 }
 
-// NewCreateMachineAction builds the scaffold action from options.
-func NewCreateMachineAction(opts Options) *CreateMachineAction {
-	return &CreateMachineAction{
+// NewCreateMachineStep builds the scaffold step from options.
+func NewCreateMachineStep(opts Options) *CreateMachineStep {
+	return &CreateMachineStep{
 		provider:  opts.Provider,
 		prefix:    opts.Prefix,
 		sshPubKey: strings.TrimSpace(opts.SSHPubKey),
 	}
 }
 
-// Name implements scaffold.Action.
-func (*CreateMachineAction) Name() string { return "create-machine" }
+// Name implements scaffold.Step.
+func (*CreateMachineStep) Name() string { return "create-machine" }
 
-// Applicable implements scaffold.Action — only Linode machines are provisioned here.
-func (a *CreateMachineAction) Applicable(ctx context.Context, t scaffold.Target) (bool, error) {
+// Applicable implements scaffold.Step — only Linode machines are provisioned here.
+func (a *CreateMachineStep) Applicable(ctx context.Context, t scaffold.Target) (bool, error) {
 	_ = ctx
 	mt, ok := t.Payload.(*MachineTarget)
 	if !ok || mt == nil {
@@ -41,9 +41,9 @@ func (a *CreateMachineAction) Applicable(ctx context.Context, t scaffold.Target)
 	return mt.Spec.Type == manifestdata.MachineTypeLinode, nil
 }
 
-// Check implements scaffold.Action — list instances tagged claws/<prefix>, then match
+// Check implements scaffold.Step — list instances tagged claws/<prefix>, then match
 // uniquely by Linode label (prefix-machineName).
-func (a *CreateMachineAction) Check(ctx context.Context, t scaffold.Target) (blocked bool, err error) {
+func (a *CreateMachineStep) Check(ctx context.Context, t scaffold.Target) (blocked bool, err error) {
 	mt, ok := t.Payload.(*MachineTarget)
 	if !ok || mt == nil {
 		return false, fmt.Errorf("create-machine: expected *MachineTarget payload for target %q", t.ID)
@@ -78,8 +78,8 @@ func (a *CreateMachineAction) Check(ctx context.Context, t scaffold.Target) (blo
 	}
 }
 
-// Execute implements scaffold.Action.
-func (a *CreateMachineAction) Execute(ctx context.Context, t scaffold.Target) error {
+// Execute implements scaffold.Step.
+func (a *CreateMachineStep) Execute(ctx context.Context, t scaffold.Target) error {
 	mt, ok := t.Payload.(*MachineTarget)
 	if !ok || mt == nil {
 		return fmt.Errorf("create-machine: expected *MachineTarget payload for target %q", t.ID)
@@ -116,8 +116,8 @@ func (a *CreateMachineAction) Execute(ctx context.Context, t scaffold.Target) er
 	return nil
 }
 
-// Verify implements scaffold.Action.
-func (*CreateMachineAction) Verify(ctx context.Context, t scaffold.Target) error {
+// Verify implements scaffold.Step.
+func (*CreateMachineStep) Verify(ctx context.Context, t scaffold.Target) error {
 	_ = ctx
 	mt, ok := t.Payload.(*MachineTarget)
 	if !ok || mt == nil {
@@ -135,7 +135,6 @@ func (*CreateMachineAction) Verify(ctx context.Context, t scaffold.Target) error
 	return nil
 }
 
-// clawsPrefixTag is the shared Linode tag for all instances in a deployment (used with ListByTag).
 func clawsPrefixTag(prefix string) string {
 	return fmt.Sprintf("claws/%s", strings.TrimSpace(prefix))
 }
@@ -145,7 +144,6 @@ func ClawsPrefixTag(prefix string) string {
 	return clawsPrefixTag(prefix)
 }
 
-// machineTag is the per-machine Linode tag (claws/<prefix>/<name>).
 func machineTag(prefix, machineName string) string {
 	return fmt.Sprintf("claws/%s/%s", prefix, machineName)
 }
@@ -163,6 +161,5 @@ func randomRootPassword() (string, error) {
 	if _, err := rand.Read(b); err != nil {
 		return "", fmt.Errorf("random root password: %w", err)
 	}
-	// Linode accepts long passwords; hex is simple and URL-safe enough for API.
 	return hex.EncodeToString(b), nil
 }

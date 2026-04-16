@@ -20,21 +20,10 @@ func runPlan(ctx context.Context, compiled []compiledPhase, opts ExecuteOptions)
 			continue
 		}
 		obs.OnPhaseStart(pi+1, total, ph.name)
-		var phaseErr error
-		for _, st := range ph.steps {
-			obs.OnStepStart(ph.name, st.name)
-			results, stepErr := executeStep(ctx, ph, st, obs, opts.DryRun)
-			outcomes := resultsToOutcomes(results)
-			obs.OnStepEnd(ph.name, st.name, outcomes, stepErr)
-			if stepErr != nil {
-				phaseErr = stepErr
-				break
-			}
-			if st.barrier != nil {
-				if err := st.barrier.Evaluate(ctx, st.name, results); err != nil {
-					phaseErr = fmt.Errorf("barrier %q: %w", st.name, err)
-					break
-				}
+		results, phaseErr := executePhase(ctx, ph, obs, opts.DryRun)
+		if phaseErr == nil && ph.barrier != nil {
+			if err := ph.barrier.Evaluate(ctx, ph.name, results); err != nil {
+				phaseErr = fmt.Errorf("barrier %q: %w", ph.name, err)
 			}
 		}
 		obs.OnPhaseEnd(pi+1, total, ph.name, phaseErr)
@@ -54,56 +43,81 @@ func skipName(name string, skips []string) bool {
 	return false
 }
 
-func resultsToOutcomes(results []CellResult) []progress.CellOutcome {
-	out := make([]progress.CellOutcome, len(results))
-	for i := range results {
-		out[i] = results[i].ToOutcome()
-	}
-	return out
-}
-
-func executeStep(ctx context.Context, ph compiledPhase, st compiledStep, obs progress.Observer, dryRun bool) ([]CellResult, error) {
-	n := len(st.cells)
-	if n == 0 {
+// executePhase fans out targets across worker slots, each running its step
+// pipeline sequentially. Returns all cell results and the first target error.
+func executePhase(ctx context.Context, ph compiledPhase, obs progress.Observer, dryRun bool) ([]CellResult, error) {
+	nTargets := len(ph.targets)
+	if nTargets == 0 {
 		return nil, nil
 	}
-	results := make([]CellResult, n)
+
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
-	sem := make(chan struct{}, ph.concurrency)
-	var wg sync.WaitGroup
-	var firstErr error
-	var mu sync.Mutex
 
-	for i, cell := range st.cells {
+	slots := make(chan int, ph.concurrency)
+	for i := 0; i < ph.concurrency; i++ {
+		slots <- i
+	}
+
+	type targetResult struct {
+		cells []CellResult
+		err   error
+	}
+
+	results := make([]targetResult, nTargets)
+	var wg sync.WaitGroup
+
+	for ti, target := range ph.targets {
 		wg.Add(1)
-		go func(i int, c cellRef) {
+		go func(ti int, t Target) {
 			defer wg.Done()
+
+			var slot int
 			select {
-			case sem <- struct{}{}:
-				defer func() { <-sem }()
+			case slot = <-slots:
+				defer func() { slots <- slot }()
 			case <-ctx.Done():
 				return
 			}
-			obs.OnCellStart(ph.name, st.name, c.target.ID, c.action.Name())
-			var res CellResult
-			if dryRun {
-				res = CellResult{TargetID: c.target.ID, ActionName: c.action.Name()}
-			} else {
-				res = runCell(ctx, c.target, c.action)
-			}
-			results[i] = res
-			obs.OnCellEnd(ph.name, st.name, c.target.ID, c.action.Name(), res.ToOutcome())
-			if res.Err != nil {
-				mu.Lock()
-				if firstErr == nil {
-					firstErr = res.Err
-					cancel()
+
+			obs.OnTargetStart(ph.name, t.ID, slot)
+			var cells []CellResult
+			var targetErr error
+
+			for _, step := range ph.steps {
+				if ctx.Err() != nil {
+					targetErr = ctx.Err()
+					break
 				}
-				mu.Unlock()
+				obs.OnStepStart(ph.name, t.ID, step.Name(), slot)
+				var res CellResult
+				if dryRun {
+					res = CellResult{TargetID: t.ID, StepName: step.Name()}
+				} else {
+					res = runCell(ctx, t, step)
+				}
+				cells = append(cells, res)
+				obs.OnStepEnd(ph.name, t.ID, step.Name(), slot, res.ToOutcome())
+				if res.Err != nil {
+					targetErr = res.Err
+					break
+				}
 			}
-		}(i, cell)
+
+			obs.OnTargetEnd(ph.name, t.ID, slot, targetErr)
+			results[ti] = targetResult{cells: cells, err: targetErr}
+		}(ti, target)
 	}
+
 	wg.Wait()
-	return results, firstErr
+
+	var allCells []CellResult
+	var firstErr error
+	for _, tr := range results {
+		allCells = append(allCells, tr.cells...)
+		if tr.err != nil && firstErr == nil {
+			firstErr = tr.err
+		}
+	}
+	return allCells, firstErr
 }
