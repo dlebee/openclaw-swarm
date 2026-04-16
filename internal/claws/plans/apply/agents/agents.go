@@ -8,6 +8,11 @@ import (
 	"github.com/gluwa/openclaw-swarm2/internal/scaffold"
 )
 
+// maxAgentConcurrency caps parallel agent targets. Currently 1 because
+// agents sharing a gateway race on openclaw.json writes. See
+// docs/issues/03-agent-phase-concurrency.md.
+const maxAgentConcurrency = 1
+
 // SSHDialFunc opens an SSH client to a remote host.
 type SSHDialFunc = common.SSHDialFunc
 
@@ -50,12 +55,10 @@ type Options struct {
 	SSHDial SSHDialFunc
 }
 
-// AddPhase registers the "agents" phase. Concurrency is 1 because agents
-// targeting the same gateway share a config file -- concurrent writes to
-// openclaw.json would race.
+// AddPhase registers the "agents" phase.
 func AddPhase(p *scaffold.Plan, targets []scaffold.Target, opts Options) *scaffold.Phase {
 	ph := p.AddPhase("agents")
-	ph.Concurrency = 1
+	ph.Concurrency = maxAgentConcurrency
 	ph.AddTargets(targets...)
 	ph.AddStep(NewAddAgentStep(opts))
 	ph.AddStep(NewEnsureModelStep(opts))
