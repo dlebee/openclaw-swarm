@@ -9,6 +9,7 @@ import (
 	cleancmd "github.com/gluwa/openclaw-swarm2/internal/cli/commands/clean"
 	destroycmd "github.com/gluwa/openclaw-swarm2/internal/cli/commands/destroy"
 	gatewayscmd "github.com/gluwa/openclaw-swarm2/internal/cli/commands/gateways"
+	githubcmd "github.com/gluwa/openclaw-swarm2/internal/cli/commands/github"
 	manifestcmd "github.com/gluwa/openclaw-swarm2/internal/cli/commands/manifest"
 	remotecmd "github.com/gluwa/openclaw-swarm2/internal/cli/commands/remote"
 	sshauth "github.com/gluwa/openclaw-swarm2/internal/cli/commands/ssh"
@@ -30,6 +31,7 @@ func main() {
 	root.AddCommand(cleancmd.CleanCmd(&manifestFile))
 	root.AddCommand(channelscmd.ChannelsCmd(&manifestFile))
 	root.AddCommand(gatewayscmd.GatewaysCmd(&manifestFile))
+	root.AddCommand(githubcmd.GitHubCmd(&manifestFile))
 	root.AddCommand(remotecmd.SSHCmd(&manifestFile))
 	if err := root.Execute(); err != nil {
 		os.Exit(1)
