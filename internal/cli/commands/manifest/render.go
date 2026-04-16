@@ -2,12 +2,14 @@ package manifestcmd
 
 import (
 	"fmt"
+	"os"
 	"path/filepath"
 	"strings"
 
 	"github.com/charmbracelet/lipgloss"
 	"github.com/charmbracelet/lipgloss/table"
 	"github.com/gluwa/openclaw-swarm2/internal/manifests/data"
+	manifestsvc "github.com/gluwa/openclaw-swarm2/internal/manifests/service"
 )
 
 var (
@@ -33,10 +35,18 @@ var (
 			MarginBottom(1)
 
 	mutedStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("244"))
+
+	warnStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("196"))
 )
 
+// RenderOptions controls optional debug output.
+type RenderOptions struct {
+	Debug           bool
+	ManifestAbsPath string
+}
+
 // RenderManifest formats a manifest for terminal display (Charm / Lip Gloss).
-func RenderManifest(displayPath string, m *data.Manifest, termWidth int) string {
+func RenderManifest(displayPath string, m *data.Manifest, termWidth int, opts RenderOptions) string {
 	if termWidth < 20 {
 		termWidth = 80
 	}
@@ -52,7 +62,7 @@ func RenderManifest(displayPath string, m *data.Manifest, termWidth int) string 
 	b.WriteString(lipgloss.JoinVertical(lipgloss.Left, title, sub))
 	b.WriteString("\n")
 
-	overview := overviewBox(m, tableW)
+	overview := overviewBox(m, tableW, opts)
 	b.WriteString(overview)
 	b.WriteString("\n")
 
@@ -67,6 +77,13 @@ func RenderManifest(displayPath string, m *data.Manifest, termWidth int) string 
 		b.WriteString(sectionStyle.Render(fmt.Sprintf("Gateways (%d)", len(m.Gateways))))
 		b.WriteString("\n")
 		b.WriteString(gatewaysTable(m.Gateways, tableW))
+		b.WriteString("\n")
+	}
+
+	if opts.Debug && hasChannelTokens(m) {
+		b.WriteString(sectionStyle.Render("Secrets"))
+		b.WriteString("\n")
+		b.WriteString(secretsTable(m, opts.ManifestAbsPath, tableW))
 		b.WriteString("\n")
 	}
 
@@ -101,15 +118,105 @@ func RenderManifest(displayPath string, m *data.Manifest, termWidth int) string 
 	return strings.TrimRight(b.String(), "\n")
 }
 
-func overviewBox(m *data.Manifest, w int) string {
+func overviewBox(m *data.Manifest, w int, opts RenderOptions) string {
 	lines := []string{
 		mutedStyle.Render("prefix") + "  " + emptyDash(m.Prefix),
 		mutedStyle.Render("node") + "    " + optionalInt(m.NodeMajor),
-		mutedStyle.Render("env") + "    " + emptyDash(m.EnvFile),
-		mutedStyle.Render("linode") + " " + emptyDash(m.LinodeTokenEnv),
 	}
+
+	if opts.Debug {
+		lines = append(lines, envDebugLines(m, opts.ManifestAbsPath)...)
+		lines = append(lines, linodeDebugLines(m, opts.ManifestAbsPath)...)
+	} else {
+		lines = append(lines,
+			mutedStyle.Render("env")+"     "+emptyDash(m.EnvFile),
+			mutedStyle.Render("linode")+"  "+emptyDash(m.LinodeTokenEnv),
+		)
+	}
+
 	body := strings.Join(lines, "\n")
 	return boxStyle.Width(w).Render(body)
+}
+
+func envDebugLines(m *data.Manifest, absPath string) []string {
+	if m.EnvFile == "" {
+		return []string{mutedStyle.Render("env") + "     " + mutedStyle.Render("— (not set)")}
+	}
+	dir := filepath.Dir(absPath)
+	resolved := filepath.Join(dir, filepath.FromSlash(m.EnvFile))
+	exists := "yes"
+	if _, err := os.Stat(resolved); err != nil {
+		exists = warnStyle.Render("NO")
+	}
+	return []string{
+		mutedStyle.Render("env") + "     " + m.EnvFile,
+		mutedStyle.Render("  path") + "  " + resolved,
+		mutedStyle.Render("  exists") + " " + exists,
+	}
+}
+
+func linodeDebugLines(m *data.Manifest, absPath string) []string {
+	if m.LinodeTokenEnv == "" {
+		return []string{mutedStyle.Render("linode") + "  " + mutedStyle.Render("— (not set)")}
+	}
+	val, err := manifestsvc.LookupEnvFromManifest(absPath, m, m.LinodeTokenEnv)
+	if err != nil {
+		return []string{
+			mutedStyle.Render("linode") + "  " + m.LinodeTokenEnv,
+			mutedStyle.Render("  value") + " " + warnStyle.Render(err.Error()),
+		}
+	}
+	return []string{
+		mutedStyle.Render("linode") + "  " + m.LinodeTokenEnv,
+		mutedStyle.Render("  value") + " " + maskSecret(val) + "  " + mutedStyle.Render(envSource(m.LinodeTokenEnv)),
+	}
+}
+
+func hasChannelTokens(m *data.Manifest) bool {
+	for _, gw := range m.Gateways {
+		for _, ch := range gw.Channels {
+			if ch.TokenEnv != "" {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func secretsTable(m *data.Manifest, absPath string, w int) string {
+	t := table.New().
+		Border(lipgloss.RoundedBorder()).
+		BorderStyle(lipgloss.NewStyle().Foreground(lipgloss.Color("99"))).
+		Headers("Gateway", "Channel", "Env var", "Value", "Source").
+		Width(w)
+	for _, gw := range m.Gateways {
+		for _, ch := range gw.Channels {
+			if ch.TokenEnv == "" {
+				continue
+			}
+			val, err := manifestsvc.LookupEnvFromManifest(absPath, m, ch.TokenEnv)
+			if err != nil {
+				t.Row(gw.Name, ch.Name, ch.TokenEnv, warnStyle.Render("ERROR"), err.Error())
+			} else {
+				t.Row(gw.Name, ch.Name, ch.TokenEnv, maskSecret(val), envSource(ch.TokenEnv))
+			}
+		}
+	}
+	return t.String()
+}
+
+func maskSecret(s string) string {
+	if len(s) <= 10 {
+		return "****"
+	}
+	return s[:4] + strings.Repeat("*", len(s)-8) + s[len(s)-4:]
+}
+
+func envSource(name string) string {
+	if v := strings.TrimSpace(os.Getenv(name)); v != "" {
+		return "process env"
+	}
+	return "env_file"
 }
 
 func emptyDash(s string) string {
@@ -119,7 +226,6 @@ func emptyDash(s string) string {
 	return s
 }
 
-// optionalInt renders unset zero as a muted placeholder (same as missing strings in the overview).
 func optionalInt(n int) string {
 	if n == 0 {
 		return mutedStyle.Render("—")

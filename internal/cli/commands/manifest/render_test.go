@@ -16,7 +16,7 @@ func TestRenderManifest_containsSections(t *testing.T) {
 		},
 		Gateways: []data.Gateway{{Name: "gw1", Reference: "m1"}},
 	}
-	out := RenderManifest("/tmp/x.yml", m, 100)
+	out := RenderManifest("/tmp/x.yml", m, 100, RenderOptions{})
 	if !strings.Contains(out, "lab") || !strings.Contains(out, "m1") || !strings.Contains(out, "gw1") {
 		t.Fatalf("unexpected output:\n%s", out)
 	}

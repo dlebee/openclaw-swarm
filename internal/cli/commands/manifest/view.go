@@ -12,15 +12,17 @@ var helpStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("241"))
 type viewportModel struct {
 	displayPath string
 	manifest    *data.Manifest
+	opts        RenderOptions
 	vp          viewport.Model
 	ready       bool
 }
 
-func newViewportModel(displayPath string, m *data.Manifest) viewportModel {
+func newViewportModel(displayPath string, m *data.Manifest, opts RenderOptions) viewportModel {
 	vp := viewport.New(0, 0)
 	return viewportModel{
 		displayPath: displayPath,
 		manifest:    m,
+		opts:        opts,
 		vp:          vp,
 	}
 }
@@ -36,7 +38,7 @@ func (m viewportModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		footerH := lipgloss.Height(m.footerView())
 		m.vp.Width = msg.Width
 		m.vp.Height = max(1, msg.Height-footerH)
-		m.vp.SetContent(RenderManifest(m.displayPath, m.manifest, msg.Width))
+		m.vp.SetContent(RenderManifest(m.displayPath, m.manifest, msg.Width, m.opts))
 		return m, nil
 	case tea.KeyMsg:
 		switch msg.String() {
@@ -72,9 +74,9 @@ func max(a, b int) int {
 }
 
 // RunViewport runs the interactive scrollable viewer (alternate screen).
-func RunViewport(displayPath string, m *data.Manifest) error {
+func RunViewport(displayPath string, m *data.Manifest, opts RenderOptions) error {
 	p := tea.NewProgram(
-		newViewportModel(displayPath, m),
+		newViewportModel(displayPath, m, opts),
 		tea.WithAltScreen(),
 		tea.WithMouseCellMotion(),
 	)
@@ -83,6 +85,6 @@ func RunViewport(displayPath string, m *data.Manifest) error {
 }
 
 // PlainText is RenderManifest for non-TTY output.
-func PlainText(displayPath string, m *data.Manifest) string {
-	return RenderManifest(displayPath, m, 100)
+func PlainText(displayPath string, m *data.Manifest, opts RenderOptions) string {
+	return RenderManifest(displayPath, m, 100, opts)
 }

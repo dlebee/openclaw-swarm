@@ -89,16 +89,25 @@ func Run(ctx context.Context, plan *scaffold.Plan, o RunOptions) error {
 		progOut = io.Discard
 	}
 	styled := progress.NewStyled(progOut)
+
+	var teaWriter io.Writer
+	if f, ok := progOut.(*os.File); ok && !o.DryRun {
+		if term.IsTerminal(int(f.Fd())) {
+			teaWriter = f
+		}
+	}
+
 	return scaffold.ExecWithConfirm(ctx, plan, scaffold.PipelineOptions{
 		ExecuteOptions: scaffold.ExecuteOptions{
 			DryRun:   o.DryRun,
 			Progress: styled,
 		},
-		BuildProgress: styled,
-		Confirm:       o.Confirm,
-		Width:         width,
-		Out:           o.Out,
-		PrettyPlan:    o.PrettyPlan,
+		BuildProgress:     styled,
+		Confirm:           o.Confirm,
+		Width:             width,
+		Out:               o.Out,
+		PrettyPlan:        o.PrettyPlan,
+		TeaProgressWriter: teaWriter,
 	})
 }
 

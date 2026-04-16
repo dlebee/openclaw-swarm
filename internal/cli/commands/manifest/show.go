@@ -12,13 +12,17 @@ import (
 )
 
 func showCmd(manifestFile *string) *cobra.Command {
-	return &cobra.Command{
+	var debug bool
+	cmd := &cobra.Command{
 		Use:   "show [path]",
 		Short: "Display a manifest in the terminal (Charm: scrollable, styled)",
 		Long: `Load a YAML manifest and show it with Lip Gloss tables in a scrollable Bubble Tea viewport.
 
+Use --debug to show resolved env_file paths and masked secret values.
+
 Examples:
   claws manifest show ./infra/manifest.yml
+  claws manifest show --debug ./infra/manifest.yml
   claws -f manifest.yml manifest show    # uses root --file before the subcommand`,
 		Args: cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
@@ -35,14 +39,17 @@ Examples:
 				return err
 			}
 			display := DisplayPath(abs)
+			opts := RenderOptions{Debug: debug, ManifestAbsPath: abs}
 
 			if !term.IsTerminal(int(os.Stdout.Fd())) {
-				_, err := fmt.Fprint(cmd.OutOrStdout(), PlainText(display, m)+"\n")
+				_, err := fmt.Fprint(cmd.OutOrStdout(), PlainText(display, m, opts)+"\n")
 				return err
 			}
-			return RunViewport(display, m)
+			return RunViewport(display, m, opts)
 		},
 	}
+	cmd.Flags().BoolVar(&debug, "debug", false, "show resolved paths and masked secrets")
+	return cmd
 }
 
 func resolveManifestPath(manifestFile *string, args []string) (string, error) {

@@ -44,3 +44,5 @@ Thumbs.db
 # Debug
 __debug_bin
 debug.test
+
+/cli

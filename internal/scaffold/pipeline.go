@@ -24,6 +24,9 @@ type PipelineOptions struct {
 	Out           io.Writer
 	// PrettyPlan uses a Bubble Tea viewport (alternate screen) when Out is a TTY; otherwise DescribeStyledWithHints is printed.
 	PrettyPlan bool
+	// TeaProgressWriter, when non-nil, renders execution progress with a Bubble
+	// Tea UI (worker bars + ✓/✗ completed) instead of the line-by-line observer.
+	TeaProgressWriter io.Writer
 }
 
 var styleBuildBanner = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("214"))
@@ -81,6 +84,20 @@ func ExecWithConfirm(ctx context.Context, p *Plan, o PipelineOptions) error {
 	}
 	if !ok {
 		return ErrDeclined
+	}
+
+	if o.TeaProgressWriter != nil {
+		execCtx, execCancel := context.WithCancel(ctx)
+		defer execCancel()
+
+		runner, obs := progress.NewExecTea(o.TeaProgressWriter, execCancel)
+		go func() {
+			opts := o.ExecuteOptions
+			opts.Progress = obs
+			execErr := exec.Execute(execCtx, opts)
+			runner.Finish(execErr)
+		}()
+		return runner.Run()
 	}
 
 	opts := o.ExecuteOptions
