@@ -16,13 +16,28 @@ for arg in "$@"; do
   esac
 done
 
-# Load environment from the systemd env drop-in written by configure-gateway.
-load_dropin_env() {
+# Load Environment= directives from both the unit file and the drop-in.
+# Strips optional surrounding quotes from values.
+load_unit_env() {
   local svc="$1"
   for d in "$HOME/.config/systemd/user" "/etc/systemd/system"; do
-    local f="$d/${svc}.service.d/env.conf"
+    local unit="$d/${svc}.service"
+    if [ -f "$unit" ]; then
+      eval "$(grep '^Environment=' "$unit" | sed 's/^Environment=/export /' | sed 's/export "\(.*\)"/export \1/')"
+    fi
+    local dropin="$d/${svc}.service.d/env.conf"
+    if [ -f "$dropin" ]; then
+      eval "$(grep '^Environment=' "$dropin" | sed 's/^Environment=/export /' | sed 's/export "\(.*\)"/export \1/')"
+    fi
+  done
+}
+
+extract_exec_start() {
+  local svc="$1"
+  for d in "$HOME/.config/systemd/user" "/etc/systemd/system"; do
+    local f="$d/${svc}.service"
     if [ -f "$f" ]; then
-      eval "$(grep '^Environment=' "$f" | sed 's/^Environment=/export /')"
+      grep '^ExecStart=' "$f" | sed 's/^ExecStart=//' | head -1
       return
     fi
   done
@@ -32,18 +47,24 @@ do_start() {
   case "$UNIT" in
     openclaw-gateway*)
       pkill -f "openclaw gateway" 2>/dev/null || true; sleep 1
-      OC=$(command -v openclaw 2>/dev/null)
-      if [ -n "$OC" ]; then
-        load_dropin_env "openclaw-gateway"
-        nohup "$OC" gateway --allow-unconfigured >> /tmp/openclaw-gateway.log 2>&1 &
+      load_unit_env "openclaw-gateway"
+      EXEC=$(extract_exec_start "openclaw-gateway")
+      if [ -n "$EXEC" ]; then
+        nohup sh -c "$EXEC" >> /tmp/openclaw-gateway.log 2>&1 &
+      else
+        OC=$(command -v openclaw 2>/dev/null)
+        [ -n "$OC" ] && nohup "$OC" gateway --allow-unconfigured >> /tmp/openclaw-gateway.log 2>&1 &
       fi
     ;;
     openclaw-node*)
       pkill -f "openclaw node" 2>/dev/null || true; sleep 1
-      OC=$(command -v openclaw 2>/dev/null)
-      if [ -n "$OC" ]; then
-        load_dropin_env "openclaw-node"
-        nohup "$OC" node run >> /tmp/openclaw-node.log 2>&1 &
+      load_unit_env "openclaw-node"
+      EXEC=$(extract_exec_start "openclaw-node")
+      if [ -n "$EXEC" ]; then
+        nohup sh -c "$EXEC" >> /tmp/openclaw-node.log 2>&1 &
+      else
+        OC=$(command -v openclaw 2>/dev/null)
+        [ -n "$OC" ] && nohup "$OC" node run >> /tmp/openclaw-node.log 2>&1 &
       fi
     ;;
   esac

@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/gluwa/openclaw-swarm2/internal/claws/plans/apply/common"
 	"github.com/gluwa/openclaw-swarm2/internal/claws/plans/apply/provisioning"
 	manifestdata "github.com/gluwa/openclaw-swarm2/internal/manifests/data"
 	"github.com/gluwa/openclaw-swarm2/internal/scaffold"
@@ -25,6 +26,9 @@ type GatewayTarget struct {
 	Spec    manifestdata.Gateway
 	Machine manifestdata.Machine
 }
+
+// GetMachine implements common.MachineProvider.
+func (gt *GatewayTarget) GetMachine() manifestdata.Machine { return gt.Machine }
 
 // BuildGatewayTargets creates scaffold targets from manifest gateways, resolving
 // each gateway's Reference to its machine.
@@ -63,8 +67,8 @@ func AddPhase(p *scaffold.Plan, targets []scaffold.Target, opts Options) *scaffo
 	}
 	ph.Concurrency = n
 	ph.AddTargets(targets...)
-	ph.AddStep(NewEnsureNodejsStep(opts))
-	ph.AddStep(NewEnsureOpenclawStep(opts))
+	ph.AddStep(common.NewInstallNodejsStep(common.Options{SSHDial: common.SSHDialFunc(opts.SSHDial)}))
+	ph.AddStep(common.NewInstallOpenclawStep(common.Options{SSHDial: common.SSHDialFunc(opts.SSHDial)}))
 	ph.AddStep(NewBootstrapGatewayStep(opts))
 	ph.AddStep(NewConfigureGatewayStep(opts))
 	ph.AddStep(NewPairGatewayDeviceStep(opts))

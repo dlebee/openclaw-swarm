@@ -11,6 +11,7 @@ import (
 
 	"github.com/gluwa/openclaw-swarm2/internal/claws/plans/apply/gateway"
 	"github.com/gluwa/openclaw-swarm2/internal/claws/plans/apply/mesh"
+	"github.com/gluwa/openclaw-swarm2/internal/claws/plans/apply/node"
 	"github.com/gluwa/openclaw-swarm2/internal/claws/plans/apply/provisioning"
 	"github.com/gluwa/openclaw-swarm2/internal/claws/plans/apply/security"
 	"github.com/gluwa/openclaw-swarm2/internal/hosting"
@@ -56,6 +57,12 @@ func BuildPlan(o BuildOptions) (*scaffold.Plan, error) {
 		gwTargets := gateway.BuildGatewayTargets(o.Manifest.Gateways, o.Manifest.Machines)
 		gateway.AddPhase(p, gwTargets, gateway.Options{
 			SSHDial: gateway.SSHDialFunc(o.SSHDial),
+		})
+	}
+	if len(o.Manifest.Nodes) > 0 {
+		nodeTargets := node.BuildNodeTargets(o.Manifest.Nodes, o.Manifest.Machines, o.Manifest.Gateways)
+		node.AddPhase(p, nodeTargets, node.Options{
+			SSHDial: node.SSHDialFunc(o.SSHDial),
 		})
 	}
 	return p, nil

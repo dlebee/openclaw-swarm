@@ -80,7 +80,7 @@ const (
 // ocContainer starts a pre-built oc-test container with the given pubkey
 // injected. The entrypoint installs the key for root and agent users.
 // Build the image first: ./test/infra/build.sh
-func ocContainer(t *testing.T, netName, pubKeyPath, name string) tc.Container {
+func ocContainer(t *testing.T, netName, pubKeyPath, name string, aliases ...string) tc.Container {
 	t.Helper()
 	ctx := context.Background()
 	t.Logf("start container: %s", name)
@@ -88,11 +88,16 @@ func ocContainer(t *testing.T, netName, pubKeyPath, name string) tc.Container {
 	if err != nil {
 		t.Fatalf("abs pubkey path: %v", err)
 	}
+	netAliases := map[string][]string{}
+	if len(aliases) > 0 {
+		netAliases[netName] = aliases
+	}
 	ctr, err := tc.GenericContainer(ctx, tc.GenericContainerRequest{
 		ContainerRequest: tc.ContainerRequest{
-			Image:        ocTestImage,
-			ExposedPorts: []string{"22/tcp"},
-			Networks:     []string{netName},
+			Image:          ocTestImage,
+			ExposedPorts:   []string{"22/tcp"},
+			Networks:       []string{netName},
+			NetworkAliases: netAliases,
 			Files: []tc.ContainerFile{
 				{
 					HostFilePath:      absKey,
@@ -217,7 +222,7 @@ func (l testLogger) Printf(format string, v ...interface{}) {
 //   - bootstrap-gateway is applicable (fresh container)
 //   - configure-gateway and pair-gateway-device are not applicable (no config yet)
 func TestApplyPlan(t *testing.T) {
-	m, signer, _ := setupTestInfra(t)
+	m, signer, _, _ := setupTestInfra(t)
 	dial := sshDialFunc(signer)
 
 	plan, err := apply.BuildPlan(apply.BuildOptions{
@@ -252,38 +257,64 @@ func TestApplyPlan(t *testing.T) {
 						t.Errorf("phase=%s target=%s step=%s: expected not applicable, got applicable",
 							phase.Name, target.ID, step.Name())
 					}
-				case "gateway":
-					stepName := step.Name()
-					switch stepName {
-					case "install-nodejs", "install-openclaw":
-						// Pre-installed in the Docker image: applicable + satisfied.
-						if !applicable {
-							t.Errorf("phase=%s target=%s step=%s: expected applicable, got not applicable",
-								phase.Name, target.ID, stepName)
-							continue
-						}
-						satisfied, err := step.Check(ctx, target)
-						if err != nil {
-							t.Errorf("phase=%s target=%s step=%s: Check error: %v",
-								phase.Name, target.ID, stepName, err)
-							continue
-						}
-						if !satisfied {
-							t.Errorf("phase=%s target=%s step=%s: expected satisfied, got not satisfied",
-								phase.Name, target.ID, stepName)
-						}
-					case "bootstrap-gateway", "configure-gateway", "pair-gateway-device":
-						// All always applicable for gateway targets. bootstrap
-						// will execute on fresh containers; configure and pair
-						// run after bootstrap so Check handles idempotency.
-						if !applicable {
-							t.Errorf("phase=%s target=%s step=%s: expected applicable, got not applicable",
-								phase.Name, target.ID, stepName)
-						}
-					default:
-						t.Errorf("phase=%s target=%s step=%s: unexpected step name",
+			case "gateway":
+				stepName := step.Name()
+				switch stepName {
+				case "install-nodejs", "install-openclaw":
+					// Pre-installed in the Docker image: applicable + satisfied.
+					if !applicable {
+						t.Errorf("phase=%s target=%s step=%s: expected applicable, got not applicable",
+							phase.Name, target.ID, stepName)
+						continue
+					}
+					satisfied, err := step.Check(ctx, target)
+					if err != nil {
+						t.Errorf("phase=%s target=%s step=%s: Check error: %v",
+							phase.Name, target.ID, stepName, err)
+						continue
+					}
+					if !satisfied {
+						t.Errorf("phase=%s target=%s step=%s: expected satisfied, got not satisfied",
 							phase.Name, target.ID, stepName)
 					}
+				case "bootstrap-gateway", "configure-gateway", "pair-gateway-device":
+					if !applicable {
+						t.Errorf("phase=%s target=%s step=%s: expected applicable, got not applicable",
+							phase.Name, target.ID, stepName)
+					}
+				default:
+					t.Errorf("phase=%s target=%s step=%s: unexpected step name",
+						phase.Name, target.ID, stepName)
+				}
+			case "node":
+				stepName := step.Name()
+				switch stepName {
+				case "install-nodejs", "install-openclaw":
+					// Pre-installed in the Docker image: applicable + satisfied.
+					if !applicable {
+						t.Errorf("phase=%s target=%s step=%s: expected applicable, got not applicable",
+							phase.Name, target.ID, stepName)
+						continue
+					}
+					satisfied, err := step.Check(ctx, target)
+					if err != nil {
+						t.Errorf("phase=%s target=%s step=%s: Check error: %v",
+							phase.Name, target.ID, stepName, err)
+						continue
+					}
+					if !satisfied {
+						t.Errorf("phase=%s target=%s step=%s: expected satisfied, got not satisfied",
+							phase.Name, target.ID, stepName)
+					}
+				case "bootstrap-node", "configure-node", "pair-node":
+					if !applicable {
+						t.Errorf("phase=%s target=%s step=%s: expected applicable, got not applicable",
+							phase.Name, target.ID, stepName)
+					}
+				default:
+					t.Errorf("phase=%s target=%s step=%s: unexpected step name",
+						phase.Name, target.ID, stepName)
+				}
 				}
 			}
 		}
@@ -297,16 +328,16 @@ func TestApplyPlan(t *testing.T) {
 }
 
 // setupTestInfra spins up Docker containers and returns the patched manifest,
-// SSH signer, and mapped gateway port. Shared between execution tests.
-func setupTestInfra(t *testing.T) (*data.Manifest, xssh.Signer, int) {
+// SSH signer, mapped gateway port, and mapped scraper port.
+func setupTestInfra(t *testing.T) (*data.Manifest, xssh.Signer, int, int) {
 	t.Helper()
 	privPath, pubPath := generateTestIdentity(t)
 	t.Logf("identity: priv=%s pub=%s", privPath, pubPath)
 
 	netName := testNetwork(t)
 
-	gw := ocContainer(t, netName, pubPath, "gateway")
-	scraper := ocContainer(t, netName, pubPath, "scraper")
+	gw := ocContainer(t, netName, pubPath, "gateway", "oc-gateway-test")
+	scraper := ocContainer(t, netName, pubPath, "scraper", "oc-scraper-test")
 	_ = ollamaContainer(t, netName)
 
 	gwPort := mappedPort(t, gw, "22/tcp")
@@ -327,7 +358,7 @@ func setupTestInfra(t *testing.T) (*data.Manifest, xssh.Signer, int) {
 			m.Machines[i].SSHPort = scraperPort
 		}
 	}
-	return m, signer, gwPort
+	return m, signer, gwPort, scraperPort
 }
 
 // sshDialFunc returns an SSHDialFunc that uses the given signer.
@@ -349,7 +380,7 @@ func sshDialFunc(signer xssh.Signer) func(ctx context.Context, host string, port
 // and gateway.bind are correct, the token side-file is written, and the
 // gateway process is listening on port 18789.
 func TestApplyExecute(t *testing.T) {
-	m, signer, gwPort := setupTestInfra(t)
+	m, signer, gwPort, scraperPort := setupTestInfra(t)
 	dial := sshDialFunc(signer)
 
 	plan, err := apply.BuildPlan(apply.BuildOptions{
@@ -373,7 +404,7 @@ func TestApplyExecute(t *testing.T) {
 	}
 	t.Log("plan executed successfully")
 
-	// Verify the gateway state by SSH-ing into the container.
+	// --- Verify gateway state ---
 	client, err := dial(ctx, "127.0.0.1", gwPort, "root")
 	if err != nil {
 		t.Fatalf("dial gateway for verification: %v", err)
@@ -439,5 +470,58 @@ func TestApplyExecute(t *testing.T) {
 	if !strings.Contains(dropInEnv, "OPENCLAW_ALLOW_INSECURE_PRIVATE_WS=1") {
 		t.Fatalf("expected OPENCLAW_ALLOW_INSECURE_PRIVATE_WS=1 in env drop-in, got:\n%s", dropInEnv)
 	}
-	t.Log("verified: OPENCLAW_ALLOW_INSECURE_PRIVATE_WS=1 in systemd env drop-in")
+	t.Log("verified: OPENCLAW_ALLOW_INSECURE_PRIVATE_WS=1 in gateway systemd env drop-in")
+
+	// --- Verify node (scraper) state ---
+	nodeClient, err := dial(ctx, "127.0.0.1", scraperPort, "root")
+	if err != nil {
+		t.Fatalf("dial scraper for verification: %v", err)
+	}
+	defer nodeClient.Close()
+
+	// 7. Node systemd unit must exist and reference the gateway internal host.
+	nodeUnit, err := bash.RunOutput(nodeClient, `cat ~/.config/systemd/user/openclaw-node.service 2>/dev/null || echo "(not found)"`)
+	if err != nil {
+		t.Fatalf("read node unit: %v", err)
+	}
+	if strings.Contains(nodeUnit, "(not found)") {
+		t.Fatal("expected openclaw-node.service to exist on scraper node")
+	}
+	if !strings.Contains(nodeUnit, "oc-gateway-test") {
+		t.Fatalf("expected node unit to reference gateway internal host oc-gateway-test, got:\n%s", nodeUnit)
+	}
+	t.Log("verified: openclaw-node.service exists and references gateway")
+
+	// 8. Node unit must have OPENCLAW_GATEWAY_TOKEN set in its Environment.
+	if !strings.Contains(nodeUnit, "OPENCLAW_GATEWAY_TOKEN") {
+		t.Fatalf("expected node unit to contain OPENCLAW_GATEWAY_TOKEN in Environment, got:\n%s", nodeUnit)
+	}
+	t.Log("verified: node unit contains OPENCLAW_GATEWAY_TOKEN")
+
+	// 9. Node env drop-in must contain OPENCLAW_ALLOW_INSECURE_PRIVATE_WS=1.
+	nodeDropIn, err := bash.RunOutput(nodeClient, `cat ~/.config/systemd/user/openclaw-node.service.d/env.conf 2>/dev/null || echo "(not found)"`)
+	if err != nil {
+		t.Fatalf("read node env drop-in: %v", err)
+	}
+	if !strings.Contains(nodeDropIn, "OPENCLAW_ALLOW_INSECURE_PRIVATE_WS=1") {
+		t.Fatalf("expected OPENCLAW_ALLOW_INSECURE_PRIVATE_WS=1 in node env drop-in, got:\n%s", nodeDropIn)
+	}
+	t.Log("verified: OPENCLAW_ALLOW_INSECURE_PRIVATE_WS=1 in node systemd env drop-in")
+
+	// 10. Node must be paired on the gateway (device approved with displayName=scraper-node).
+	dl, err := gwService.ListDevices(client)
+	if err != nil {
+		t.Fatalf("list devices on gateway: %v", err)
+	}
+	found := false
+	for _, d := range dl.Paired {
+		if d.DisplayName == "scraper-node" {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatal("expected scraper-node to be paired on the gateway")
+	}
+	t.Log("verified: scraper-node paired on gateway")
 }
