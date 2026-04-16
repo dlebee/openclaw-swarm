@@ -8,15 +8,29 @@ import (
 
 const maxProvisioningConcurrency = 5
 
+// BuildMachineTargets creates scaffold targets with shared *MachineTarget
+// payloads. All phases that operate on machines should use the same targets so
+// that Instance data populated by provisioning is visible to later phases.
+func BuildMachineTargets(machines []manifestdata.Machine) []scaffold.Target {
+	targets := make([]scaffold.Target, len(machines))
+	for i, m := range machines {
+		targets[i] = scaffold.Target{
+			ID:      m.Name,
+			Payload: &MachineTarget{Spec: m},
+		}
+	}
+	return targets
+}
+
 // AddPhase registers the "provisioning" phase. Targets run concurrently (capped
 // at maxProvisioningConcurrency); each target runs create-machine then
 // authorize-ssh-key sequentially.
-func AddPhase(p *scaffold.Plan, machines []manifestdata.Machine, opts Options) *scaffold.Phase {
+func AddPhase(p *scaffold.Plan, targets []scaffold.Target, opts Options) *scaffold.Phase {
 	ph := p.AddPhase("provisioning")
 
 	linodeN := 0
-	for _, m := range machines {
-		if m.Type == manifestdata.MachineTypeLinode {
+	for _, t := range targets {
+		if mt, ok := t.Payload.(*MachineTarget); ok && mt.Spec.Type == manifestdata.MachineTypeLinode {
 			linodeN++
 		}
 	}
@@ -29,12 +43,7 @@ func AddPhase(p *scaffold.Plan, machines []manifestdata.Machine, opts Options) *
 	}
 	ph.Concurrency = concurrency
 
-	for _, m := range machines {
-		ph.AddTargets(scaffold.Target{
-			ID:      m.Name,
-			Payload: &MachineTarget{Spec: m},
-		})
-	}
+	ph.AddTargets(targets...)
 
 	ph.AddStep(NewCreateMachineStep(opts))
 	ph.AddStep(NewAuthorizeSSHKeyStep(opts))

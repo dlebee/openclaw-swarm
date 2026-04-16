@@ -85,10 +85,11 @@ func (m *mockProvider) ListByTag(ctx context.Context, tag string) ([]hosting.Ins
 
 func TestAddPhase_describe(t *testing.T) {
 	p := scaffold.New()
-	AddPhase(p, []manifestdata.Machine{
+	targets := BuildMachineTargets([]manifestdata.Machine{
 		{Name: "web", Type: manifestdata.MachineTypeLinode},
 		{Name: "jump", Type: manifestdata.MachineTypeSSH},
-	}, Options{Provider: &mockProvider{}})
+	})
+	AddPhase(p, targets, Options{Provider: &mockProvider{}})
 
 	ex, err := p.Build()
 	if err != nil {
@@ -118,7 +119,7 @@ func TestAddPhase_concurrencyCappedAtFive(t *testing.T) {
 			Type: manifestdata.MachineTypeLinode,
 		}
 	}
-	ph := AddPhase(p, machines, Options{Provider: &mockProvider{}})
+	ph := AddPhase(p, BuildMachineTargets(machines), Options{Provider: &mockProvider{}})
 	if ph.Concurrency != 5 {
 		t.Fatalf("want concurrency 5, got %d", ph.Concurrency)
 	}
@@ -126,11 +127,11 @@ func TestAddPhase_concurrencyCappedAtFive(t *testing.T) {
 
 func TestAddPhase_concurrencyBelowCap(t *testing.T) {
 	p := scaffold.New()
-	ph := AddPhase(p, []manifestdata.Machine{
+	ph := AddPhase(p, BuildMachineTargets([]manifestdata.Machine{
 		{Name: "a", Type: manifestdata.MachineTypeLinode},
 		{Name: "b", Type: manifestdata.MachineTypeLinode},
 		{Name: "c", Type: manifestdata.MachineTypeLinode},
-	}, Options{Provider: &mockProvider{}})
+	}), Options{Provider: &mockProvider{}})
 	if ph.Concurrency != 3 {
 		t.Fatalf("want concurrency 3, got %d", ph.Concurrency)
 	}
@@ -138,7 +139,7 @@ func TestAddPhase_concurrencyBelowCap(t *testing.T) {
 
 func TestExecute_populatesPayload(t *testing.T) {
 	p := scaffold.New()
-	AddPhase(p, []manifestdata.Machine{
+	AddPhase(p, BuildMachineTargets([]manifestdata.Machine{
 		{
 			Name:   "web",
 			Type:   manifestdata.MachineTypeLinode,
@@ -146,7 +147,7 @@ func TestExecute_populatesPayload(t *testing.T) {
 			SKU:    "g6-nanode-1",
 			Image:  "linode/debian12",
 		},
-	}, Options{
+	}), Options{
 		Provider:  &mockProvider{},
 		Prefix:    "demo",
 		SSHPubKey: "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAI",
@@ -185,9 +186,9 @@ func TestCheck_satisfiedWhenExisting(t *testing.T) {
 	prefixTag := clawsPrefixTag("pfx")
 	perMachineTag := machineTag("pfx", "web")
 	p := scaffold.New()
-	AddPhase(p, []manifestdata.Machine{
+	AddPhase(p, BuildMachineTargets([]manifestdata.Machine{
 		{Name: "web", Type: manifestdata.MachineTypeLinode, Region: "us-east", SKU: "g6-nanode-1", Image: "linode/debian12"},
-	}, Options{
+	}), Options{
 		Provider: &mockProvider{
 			listByTag: map[string][]hosting.Instance{
 				prefixTag: {{

@@ -10,6 +10,7 @@ import (
 	"strings"
 
 	"github.com/gluwa/openclaw-swarm2/internal/claws/plans/apply/provisioning"
+	"github.com/gluwa/openclaw-swarm2/internal/claws/plans/apply/security"
 	"github.com/gluwa/openclaw-swarm2/internal/hosting"
 	"github.com/gluwa/openclaw-swarm2/internal/hosting/linode"
 	manifestdata "github.com/gluwa/openclaw-swarm2/internal/manifests/data"
@@ -36,12 +37,17 @@ func BuildPlan(o BuildOptions) (*scaffold.Plan, error) {
 	if needsLinodeToken(o.Manifest.Machines) && o.SSHDial == nil {
 		return nil, fmt.Errorf("apply plan: SSHDial is required when the manifest has Linode machines")
 	}
+	targets := provisioning.BuildMachineTargets(o.Manifest.Machines)
+
 	p := scaffold.New()
-	provisioning.AddPhase(p, o.Manifest.Machines, provisioning.Options{
+	provisioning.AddPhase(p, targets, provisioning.Options{
 		Provider:  o.Provider,
 		Prefix:    o.Manifest.Prefix,
 		SSHPubKey: o.SSHPubKey,
 		SSHDial:   o.SSHDial,
+	})
+	security.AddPhase(p, targets, security.Options{
+		SSHDial: security.SSHDialFunc(o.SSHDial),
 	})
 	return p, nil
 }
