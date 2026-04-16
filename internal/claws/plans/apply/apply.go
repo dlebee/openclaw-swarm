@@ -10,6 +10,7 @@ import (
 	"strings"
 
 	"github.com/gluwa/openclaw-swarm2/internal/claws/plans/apply/agents"
+	"github.com/gluwa/openclaw-swarm2/internal/claws/plans/apply/channels"
 	"github.com/gluwa/openclaw-swarm2/internal/claws/plans/apply/gateway"
 	"github.com/gluwa/openclaw-swarm2/internal/claws/plans/apply/mesh"
 	"github.com/gluwa/openclaw-swarm2/internal/claws/plans/apply/node"
@@ -26,9 +27,10 @@ import (
 
 // BuildOptions is everything needed to assemble the apply plan (phases in order).
 type BuildOptions struct {
-	Manifest  *manifestdata.Manifest
-	Provider  hosting.Provider
-	SSHPubKey string
+	Manifest     *manifestdata.Manifest
+	ManifestPath string // absolute path to the manifest file (for env_file resolution)
+	Provider     hosting.Provider
+	SSHPubKey    string
 	// SSHDial is required when the manifest has any Linode machine (authorize-ssh-key step).
 	SSHDial provisioning.SSHDialFunc
 }
@@ -59,6 +61,22 @@ func BuildPlan(o BuildOptions) (*scaffold.Plan, error) {
 		gateway.AddPhase(p, gwTargets, gateway.Options{
 			SSHDial: gateway.SSHDialFunc(o.SSHDial),
 		})
+	}
+	if hasChannels(o.Manifest.Gateways) {
+		chTargets, err := channels.BuildChannelTargets(
+			o.Manifest.Gateways, o.Manifest.Machines,
+			func(envName string) (string, error) {
+				return manifestsvc.LookupEnvFromManifest(o.ManifestPath, o.Manifest, envName)
+			},
+		)
+		if err != nil {
+			return nil, fmt.Errorf("apply plan: resolve channel tokens: %w", err)
+		}
+		if len(chTargets) > 0 {
+			channels.AddPhase(p, chTargets, channels.Options{
+				SSHDial: channels.SSHDialFunc(o.SSHDial),
+			})
+		}
 	}
 	if len(o.Manifest.Nodes) > 0 {
 		nodeTargets := node.BuildNodeTargets(o.Manifest.Nodes, o.Manifest.Machines, o.Manifest.Gateways)
@@ -143,6 +161,15 @@ func Run(ctx context.Context, plan *scaffold.Plan, o RunOptions) error {
 func needsLinodeToken(machines []manifestdata.Machine) bool {
 	for _, m := range machines {
 		if m.Type == manifestdata.MachineTypeLinode {
+			return true
+		}
+	}
+	return false
+}
+
+func hasChannels(gateways []manifestdata.Gateway) bool {
+	for _, gw := range gateways {
+		if len(gw.Channels) > 0 {
 			return true
 		}
 	}

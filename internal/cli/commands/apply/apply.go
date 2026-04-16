@@ -71,10 +71,11 @@ func ApplyCmd(manifestFile *string) *cobra.Command {
 			}
 
 			plan, err := planapply.BuildPlan(planapply.BuildOptions{
-				Manifest:  m,
-				Provider:  prov,
-				SSHPubKey: sshPub,
-				SSHDial:   sshDial,
+				Manifest:     m,
+				ManifestPath: abs,
+				Provider:     prov,
+				SSHPubKey:    sshPub,
+				SSHDial:      sshDial,
 			})
 			if err != nil {
 				return err
