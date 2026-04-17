@@ -75,15 +75,13 @@ func (s *EnsureDefaultStep) Check(ctx context.Context, t scaffold.Target) (bool,
 func (s *EnsureDefaultStep) Execute(ctx context.Context, t scaffold.Target) error {
 	ct := t.Payload.(*ChannelTarget)
 	m := ct.Machine
-	client, key, err := common.BorrowSSHWithRetry(ctx, s.dial, common.ResolveMachineHost(ctx, m), common.MachineSSHPort(m), common.MachineSSHUser(m))
-	if err != nil {
-		return fmt.Errorf("ensure-default-account: %w", err)
-	}
-	defer common.ReturnSSH(ctx, key, client)
+	host := common.ResolveMachineHost(ctx, m)
+	port := common.MachineSSHPort(m)
+	user := common.MachineSSHUser(m)
 
 	for kind, name := range desiredDefaults(ct.Channels) {
 		script := fmt.Sprintf(`openclaw config set "channels.%s.defaultAccount" %q`, kind, name)
-		if err := RunWithConflictRetry(client, script); err != nil {
+		if err := RunWithConflictAndTransientRetry(ctx, s.dial, host, port, user, script); err != nil {
 			return fmt.Errorf("ensure-default-account: %s: %w", kind, err)
 		}
 	}

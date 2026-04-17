@@ -16,8 +16,18 @@ func stubClient() *xssh.Client {
 	return &xssh.Client{}
 }
 
-func TestPool_BorrowDialsWhenEmpty(t *testing.T) {
+// newTestPool returns a Pool whose liveness probe always reports "alive", so
+// stub clients with nil conns can be reused between Borrow calls in tests.
+// Individual tests override isAlive when they want to exercise the
+// dead-client-discard path.
+func newTestPool() *Pool {
 	p := NewPool()
+	p.isAlive = func(*xssh.Client) bool { return true }
+	return p
+}
+
+func TestPool_BorrowDialsWhenEmpty(t *testing.T) {
+	p := newTestPool()
 	defer p.Close()
 
 	var dialed int
@@ -37,7 +47,7 @@ func TestPool_BorrowDialsWhenEmpty(t *testing.T) {
 }
 
 func TestPool_ReturnThenBorrowReuses(t *testing.T) {
-	p := NewPool()
+	p := newTestPool()
 	defer p.Close()
 
 	key := "root@10.0.0.1:22"
@@ -63,7 +73,7 @@ func TestPool_ReturnThenBorrowReuses(t *testing.T) {
 }
 
 func TestPool_DifferentKeysAreIndependent(t *testing.T) {
-	p := NewPool()
+	p := newTestPool()
 	defer p.Close()
 
 	a, _ := p.Borrow(context.Background(), "root@10.0.0.1:22", func(ctx context.Context) (*xssh.Client, error) {
@@ -85,7 +95,7 @@ func TestPool_DifferentKeysAreIndependent(t *testing.T) {
 }
 
 func TestPool_DialError(t *testing.T) {
-	p := NewPool()
+	p := newTestPool()
 	defer p.Close()
 
 	want := errors.New("connection refused")
@@ -98,7 +108,7 @@ func TestPool_DialError(t *testing.T) {
 }
 
 func TestPool_ConcurrentBorrowReturn(t *testing.T) {
-	p := NewPool()
+	p := newTestPool()
 	defer p.Close()
 
 	key := "root@10.0.0.1:22"
@@ -129,7 +139,7 @@ func TestPool_ConcurrentBorrowReturn(t *testing.T) {
 }
 
 func TestPool_ClosePreventsBorrow(t *testing.T) {
-	p := NewPool()
+	p := newTestPool()
 	p.Close()
 
 	_, err := p.Borrow(context.Background(), "root@10.0.0.1:22", func(ctx context.Context) (*xssh.Client, error) {
@@ -141,16 +151,53 @@ func TestPool_ClosePreventsBorrow(t *testing.T) {
 }
 
 func TestPool_ReturnAfterCloseDoesNotPanic(t *testing.T) {
-	p := NewPool()
+	p := newTestPool()
 	c := stubClient()
 	p.Close()
 	p.Return("root@10.0.0.1:22", c)
 }
 
 func TestPool_ReturnNilIsNoop(t *testing.T) {
-	p := NewPool()
+	p := newTestPool()
 	defer p.Close()
 	p.Return("root@10.0.0.1:22", nil)
+}
+
+func TestPool_DeadIdleClientIsDiscarded(t *testing.T) {
+	p := NewPool()
+	defer p.Close()
+
+	// Fail the liveness check exactly once, then start passing. This
+	// mimics a pooled connection that went dead while idle (e.g. remote
+	// sshd restarted, Tailscale rerouted the default gateway, connection
+	// reset by peer, etc.) — Borrow must discard and redial rather than
+	// hand the caller a doomed client.
+	var probes int
+	p.isAlive = func(*xssh.Client) bool {
+		probes++
+		return probes > 1
+	}
+
+	key := "root@10.0.0.1:22"
+	dead, _ := p.Borrow(context.Background(), key, func(ctx context.Context) (*xssh.Client, error) {
+		return stubClient(), nil
+	})
+	p.Return(key, dead)
+
+	var dialed int
+	fresh, err := p.Borrow(context.Background(), key, func(ctx context.Context) (*xssh.Client, error) {
+		dialed++
+		return stubClient(), nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if dialed != 1 {
+		t.Fatalf("expected fresh dial after dead client, got %d dials", dialed)
+	}
+	if fresh == dead {
+		t.Fatal("expected a brand new client, got the dead one back")
+	}
 }
 
 func TestHostKey(t *testing.T) {

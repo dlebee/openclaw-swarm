@@ -41,11 +41,7 @@ func (s *InstallTailscaleStep) Check(ctx context.Context, t scaffold.Target) (bo
 func (s *InstallTailscaleStep) Execute(ctx context.Context, t scaffold.Target) error {
 	mt := t.Payload.(*MeshTarget)
 	m := mt.Machine
-	client, key, err := common.BorrowSSHWithRetry(ctx, s.dial, common.ResolveMachineHost(ctx, m), common.MachineSSHPort(m), common.MachineSSHUser(m))
-	if err != nil {
-		return fmt.Errorf("install-tailscale: %w", err)
-	}
-	defer common.ReturnSSH(ctx, key, client)
+	host, port, user := common.ResolveMachineHost(ctx, m), common.MachineSSHPort(m), common.MachineSSHUser(m)
 
 	// In container (Docker) environments, kernel TUN is unavailable so we cannot
 	// run `tailscale up`. Install the binary only and skip the join step.
@@ -61,9 +57,8 @@ if ! command -v tailscale >/dev/null 2>&1; then
 fi
 echo "container-skip-join"
 `
-		out, err := bash.RunOutput(client, script)
-		if err != nil {
-			return fmt.Errorf("install-tailscale (container) on %s: %w\n%s", m.Name, err, out)
+		if _, err := common.RunBashOutputWithRetry(ctx, s.dial, host, port, user, script); err != nil {
+			return fmt.Errorf("install-tailscale (container) on %s: %w", m.Name, err)
 		}
 		return nil
 	}
@@ -111,9 +106,9 @@ sudo ufw allow in on tailscale0 >/dev/null 2>&1 || true
 tailscale ip -4
 `, ufwExtra, controlURL, authKey)
 
-	out, err := bash.RunOutput(client, script)
+	out, err := common.RunBashOutputWithRetry(ctx, s.dial, host, port, user, script)
 	if err != nil {
-		return fmt.Errorf("install-tailscale on %s: %w\n%s", m.Name, err, out)
+		return fmt.Errorf("install-tailscale on %s: %w", m.Name, err)
 	}
 
 	ip := strings.TrimSpace(out)

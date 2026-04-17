@@ -1,11 +1,13 @@
 package channels
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"strings"
 	"time"
 
+	"github.com/gluwa/openclaw-swarm2/internal/claws/plans/apply/common"
 	"github.com/gluwa/openclaw-swarm2/internal/platformutil/bash"
 	xssh "golang.org/x/crypto/ssh"
 )
@@ -75,6 +77,49 @@ func RunWithConflictRetry(client *xssh.Client, script string) error {
 		}
 		if attempt < conflictRetries {
 			time.Sleep(time.Duration(attempt+1) * conflictDelay)
+		}
+	}
+	return fmt.Errorf("config conflict after %d retries: %w", conflictRetries, lastErr)
+}
+
+// RunWithConflictAndTransientRetry executes a script on host:port as user and
+// applies two layers of retry:
+//
+//  1. Transient SSH session retry via common.RunBashOutputWithRetry — a fresh
+//     dial is performed on "exited without exit status" / EOF / reset errors,
+//     which have been observed mid-command on the gateway during channel
+//     mutations (the remote sshd and/or Tailscale routing state can change
+//     beneath a long-lived pooled connection).
+//  2. ConfigMutationConflictError retry — openclaw serialises config writes
+//     and returns a 409-style error to losers when two processes race. Each
+//     conflict attempt re-dials via (1).
+//
+// Use this for any channel-phase command that mutates gateway config
+// (`openclaw channels add`, `openclaw config set`). For fast reads, the
+// pooled client is fine.
+func RunWithConflictAndTransientRetry(
+	ctx context.Context,
+	dial common.SSHDialFunc,
+	host string,
+	port int,
+	user, script string,
+) error {
+	var lastErr error
+	for attempt := 0; attempt <= conflictRetries; attempt++ {
+		out, err := common.RunBashOutputWithRetry(ctx, dial, host, port, user, script)
+		if err == nil {
+			return nil
+		}
+		lastErr = fmt.Errorf("%w\n%s", err, out)
+		if !strings.Contains(out, "ConfigMutationConflictError") {
+			return lastErr
+		}
+		if attempt < conflictRetries {
+			select {
+			case <-ctx.Done():
+				return ctx.Err()
+			case <-time.After(time.Duration(attempt+1) * conflictDelay):
+			}
 		}
 	}
 	return fmt.Errorf("config conflict after %d retries: %w", conflictRetries, lastErr)

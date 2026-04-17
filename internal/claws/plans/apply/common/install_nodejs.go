@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/gluwa/openclaw-swarm2/internal/platformutil/apt"
 	"github.com/gluwa/openclaw-swarm2/internal/platformutil/bash"
 	"github.com/gluwa/openclaw-swarm2/internal/scaffold"
 )
@@ -35,7 +34,7 @@ func (s *InstallNodejsStep) Check(ctx context.Context, t scaffold.Target) (bool,
 		return false, nil
 	}
 	m := mp.GetMachine()
-	client, key, err := BorrowSSH(ctx, s.dial, MachineHost(m), MachineSSHPort(m), MachineSSHUser(m))
+	client, key, err := BorrowSSH(ctx, s.dial, ResolveMachineHost(ctx, m), MachineSSHPort(m), MachineSSHUser(m))
 	if err != nil {
 		return false, nil
 	}
@@ -57,18 +56,19 @@ func (s *InstallNodejsStep) Execute(ctx context.Context, t scaffold.Target) erro
 		return fmt.Errorf("install-nodejs: SSH dialer not configured")
 	}
 	m := mp.GetMachine()
-	client, key, err := BorrowSSHWithRetry(ctx, s.dial, MachineHost(m), MachineSSHPort(m), MachineSSHUser(m))
-	if err != nil {
+	host, port, user := ResolveMachineHost(ctx, m), MachineSSHPort(m), MachineSSHUser(m)
+
+	script := `set -euo pipefail
+if ! command -v node >/dev/null 2>&1; then
+  curl -fsSL https://deb.nodesource.com/setup_22.x | sudo bash -
+fi
+export DEBIAN_FRONTEND=noninteractive
+sudo apt-get install -y -qq nodejs
+`
+	if err := RunBashWithRetry(ctx, s.dial, host, port, user, script); err != nil {
 		return fmt.Errorf("install-nodejs: %w", err)
 	}
-	defer ReturnSSH(ctx, key, client)
-
-	if err := bash.Run(client, `set -euo pipefail
-curl -fsSL https://deb.nodesource.com/setup_22.x | sudo bash -
-`); err != nil {
-		return fmt.Errorf("install-nodejs: add nodesource repo: %w", err)
-	}
-	return apt.Install(client, "nodejs")
+	return nil
 }
 
 func (s *InstallNodejsStep) Verify(ctx context.Context, t scaffold.Target) error {
@@ -77,7 +77,7 @@ func (s *InstallNodejsStep) Verify(ctx context.Context, t scaffold.Target) error
 		return fmt.Errorf("install-nodejs verify: target %q does not provide a machine", t.ID)
 	}
 	m := mp.GetMachine()
-	client, key, err := BorrowSSH(ctx, s.dial, MachineHost(m), MachineSSHPort(m), MachineSSHUser(m))
+	client, key, err := BorrowSSH(ctx, s.dial, ResolveMachineHost(ctx, m), MachineSSHPort(m), MachineSSHUser(m))
 	if err != nil {
 		return fmt.Errorf("install-nodejs verify: dial: %w", err)
 	}

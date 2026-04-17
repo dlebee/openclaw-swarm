@@ -53,14 +53,21 @@ func (s *AddChannelStep) Check(ctx context.Context, t scaffold.Target) (bool, er
 func (s *AddChannelStep) Execute(ctx context.Context, t scaffold.Target) error {
 	ct := t.Payload.(*ChannelTarget)
 	m := ct.Machine
-	client, key, err := common.BorrowSSHWithRetry(ctx, s.dial, common.ResolveMachineHost(ctx, m), common.MachineSSHPort(m), common.MachineSSHUser(m))
+	host := common.ResolveMachineHost(ctx, m)
+	port := common.MachineSSHPort(m)
+	user := common.MachineSSHUser(m)
+
+	// Listing is cheap and read-only; run it through the pool. Mutations
+	// below go through RunWithConflictAndTransientRetry so that a dead
+	// pooled session mid-command (seen as "exited without exit status")
+	// triggers a fresh dial instead of failing the phase.
+	client, key, err := common.BorrowSSHWithRetry(ctx, s.dial, host, port, user)
 	if err != nil {
 		return fmt.Errorf("add-channels: %w", err)
 	}
-	defer common.ReturnSSH(ctx, key, client)
-
-	accounts, err := ListChannelAccounts(client)
-	if err != nil {
+	accounts, lsErr := ListChannelAccounts(client)
+	common.ReturnSSH(ctx, key, client)
+	if lsErr != nil {
 		accounts = ChannelAccounts{}
 	}
 
@@ -78,7 +85,7 @@ func (s *AddChannelStep) Execute(ctx context.Context, t scaffold.Target) error {
 			`openclaw channels add --channel %s --account %q --token %q`,
 			kind, ch.Name, token)
 
-		if err := RunWithConflictRetry(client, script); err != nil {
+		if err := RunWithConflictAndTransientRetry(ctx, s.dial, host, port, user, script); err != nil {
 			return fmt.Errorf("add-channels: add %s/%s: %w", kind, ch.Name, err)
 		}
 	}

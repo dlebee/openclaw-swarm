@@ -84,8 +84,12 @@ const (
 	sshDialRetryDelay = 3 * time.Second
 )
 
-func machineHost(m manifestdata.Machine) string {
-	return strings.TrimSpace(m.Host)
+// machineHost returns the reachable SSH host for m, preferring the plan-cache
+// entry recorded by create-machine (for Linode instances with dynamic IPs)
+// over the manifest's static Spec.Host. Delegates to common.ResolveMachineHost
+// so gateway-phase steps see the same cache entries as every other phase.
+func machineHost(ctx context.Context, m manifestdata.Machine) string {
+	return common.ResolveMachineHost(ctx, m)
 }
 
 func machineSSHPort(m manifestdata.Machine) int {

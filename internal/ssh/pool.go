@@ -15,32 +15,52 @@ type DialFunc func(ctx context.Context, host string, port int, user string) (*xs
 // (user@host:port). Multiple goroutines may Borrow and Return independently;
 // each borrowed client is used by exactly one goroutine at a time.
 type Pool struct {
-	mu      sync.Mutex
-	idle    map[string][]*xssh.Client
-	tracked []*xssh.Client // every client ever created, for CloseAll
-	closed  bool
+	mu       sync.Mutex
+	idle     map[string][]*xssh.Client
+	tracked  []*xssh.Client // every client ever created, for CloseAll
+	closed   bool
+	isAlive  func(*xssh.Client) bool // liveness probe; overridable for tests
 }
 
 // NewPool returns an empty pool ready for use.
 func NewPool() *Pool {
-	return &Pool{idle: make(map[string][]*xssh.Client)}
+	return &Pool{
+		idle:    make(map[string][]*xssh.Client),
+		isAlive: realIsClientAlive,
+	}
 }
 
 // Borrow returns an idle client for key, or dials a new one via dial.
 // The caller must Return the client when done (or let Close clean it up).
+//
+// Idle clients are liveness-checked with an SSH keepalive request before being
+// handed out; a dead pooled client (e.g. the remote sshd restarted, the node's
+// default route changed after Tailscale came up, or the TCP session was reset
+// while this pool was idle) is silently discarded and a fresh dial is performed
+// instead. Without this, stale pool entries surface as "connection reset by
+// peer" / "EOF" errors deep inside caller commands, which is brittle to recover
+// from case-by-case.
 func (p *Pool) Borrow(ctx context.Context, key string, dial func(ctx context.Context) (*xssh.Client, error)) (*xssh.Client, error) {
-	p.mu.Lock()
-	if p.closed {
-		p.mu.Unlock()
-		return nil, context.Canceled
-	}
-	if idle := p.idle[key]; len(idle) > 0 {
+	for {
+		p.mu.Lock()
+		if p.closed {
+			p.mu.Unlock()
+			return nil, context.Canceled
+		}
+		idle := p.idle[key]
+		if len(idle) == 0 {
+			p.mu.Unlock()
+			break
+		}
 		c := idle[len(idle)-1]
 		p.idle[key] = idle[:len(idle)-1]
 		p.mu.Unlock()
-		return c, nil
+
+		if p.isAlive == nil || p.isAlive(c) {
+			return c, nil
+		}
+		safeCloseClient(c)
 	}
-	p.mu.Unlock()
 
 	c, err := dial(ctx)
 	if err != nil {
@@ -51,6 +71,20 @@ func (p *Pool) Borrow(ctx context.Context, key string, dial func(ctx context.Con
 	p.tracked = append(p.tracked, c)
 	p.mu.Unlock()
 	return c, nil
+}
+
+// realIsClientAlive probes an idle SSH client with a keepalive request.
+// Returns false if the request errors (or panics on a nil conn), which
+// indicates the underlying TCP connection is dead and the client must not
+// be reused.
+func realIsClientAlive(c *xssh.Client) (alive bool) {
+	defer func() {
+		if r := recover(); r != nil {
+			alive = false
+		}
+	}()
+	_, _, err := c.SendRequest("keepalive@openssh.com", true, nil)
+	return err == nil
 }
 
 // Return puts a still-healthy client back into the pool for reuse.

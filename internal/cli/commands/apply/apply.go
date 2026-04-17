@@ -22,7 +22,7 @@ import (
 
 // ApplyCmd returns the `claws apply` command.
 func ApplyCmd(manifestFile *string) *cobra.Command {
-	var dryRun, prettyPlan, includeManualAutomations bool
+	var dryRun, prettyPlan, includeManualAutomations, assumeYes bool
 	cmd := &cobra.Command{
 		Use:   "apply",
 		Short: "Apply manifest infrastructure",
@@ -91,6 +91,9 @@ func ApplyCmd(manifestFile *string) *cobra.Command {
 				Out:         cmd.OutOrStdout(),
 				ProgressOut: os.Stderr,
 				Confirm: func() (bool, error) {
+					if assumeYes {
+						return true, nil
+					}
 					var confirm bool
 					if err := huh.NewConfirm().
 						Title("Apply this plan?").
@@ -108,6 +111,7 @@ func ApplyCmd(manifestFile *string) *cobra.Command {
 	cmd.Flags().BoolVar(&dryRun, "dry-run", false, "print plan and skip cloud mutations")
 	cmd.Flags().BoolVar(&prettyPlan, "pretty-plan", false, "show plan in a scrollable Bubble Tea viewport (TTY only; falls back to inline)")
 	cmd.Flags().BoolVar(&includeManualAutomations, "include-manual-automations", false, "also run automations flagged manual: true")
+	cmd.Flags().BoolVar(&assumeYes, "yes", false, "skip the Apply this plan? confirmation prompt")
 	return cmd
 }
 

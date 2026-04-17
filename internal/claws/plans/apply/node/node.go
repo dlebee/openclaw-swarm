@@ -82,6 +82,7 @@ func AddPhase(p *scaffold.Plan, targets []scaffold.Target, opts Options) *scaffo
 	ph.AddTargets(targets...)
 	ph.AddStep(common.NewInstallNodejsStep(common.Options{SSHDial: opts.SSHDial}))
 	ph.AddStep(common.NewInstallOpenclawStep(common.Options{SSHDial: opts.SSHDial}))
+	ph.AddStep(NewStubGatewayUnitStep(opts))
 	ph.AddStep(NewBootstrapNodeStep(opts))
 	ph.AddStep(NewConfigureNodeStep(opts))
 	ph.AddStep(NewExecPolicyStep(opts))
