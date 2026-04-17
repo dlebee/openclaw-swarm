@@ -72,12 +72,12 @@ func applyCmd(manifestFile *string) *cobra.Command {
 			ctx := scaffold.EnsurePlanCache(cmd.Context())
 
 			targets := provisioning.BuildMachineTargets(m.Machines)
-			provider, err := apply.LinodeProviderFromManifest(m, abs)
+			provider, err := apply.ProviderFromManifest(m, abs)
 			if err != nil {
 				return err
 			}
 			if provider != nil {
-				if err := provisioning.ResolveLinodeInstances(ctx, provider, m.Prefix, targets); err != nil {
+				if err := provisioning.ResolveHostedInstances(ctx, provider, m.Prefix, targets); err != nil {
 					return err
 				}
 			}

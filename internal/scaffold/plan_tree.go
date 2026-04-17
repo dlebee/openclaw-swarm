@@ -9,11 +9,20 @@ import (
 	"github.com/charmbracelet/lipgloss/tree"
 )
 
-// PlanDisplayHints tweaks prepared-plan copy. SkipPhases skips probing for those
-// phases (same as execution). DryRun only affects labels: cells that pass
-// Applicable+Check show "would execute" instead of "will execute".
+// PlanDisplayHints tweaks prepared-plan copy.
+//
+//   - DryRun only affects labels: cells that pass Applicable+Check show
+//     "would execute" instead of "will execute".
+//   - OnlyPhases (when non-empty) restricts probing to phases in the list.
+//     Filtered phases render each cell as "skipped (phase)".
+//   - SkipPhases subtracts phases from the run; filtered cells render as
+//     "skipped (phase)" as well. Applied in addition to OnlyPhases.
+//
+// The same filter semantics are used by execution (see ExecuteOptions), so
+// the preview matches what `apply` will actually do.
 type PlanDisplayHints struct {
 	DryRun     bool
+	OnlyPhases []string
 	SkipPhases []string
 }
 
@@ -127,6 +136,9 @@ func planTreeRootTitle(h PlanDisplayHints) string {
 		notes = append(notes, "Dry-run: preview runs Applicable and Check only. Execute and Verify are not run (Verify runs only after a real Execute).")
 	default:
 		notes = append(notes, "Preview runs Applicable and Check only. After you confirm, each cell may Execute then Verify.")
+	}
+	if len(h.OnlyPhases) > 0 {
+		notes = append(notes, fmt.Sprintf("Only phases: %s.", strings.Join(h.OnlyPhases, ", ")))
 	}
 	if len(h.SkipPhases) > 0 {
 		notes = append(notes, fmt.Sprintf("Skip phases: %s.", strings.Join(h.SkipPhases, ", ")))

@@ -34,7 +34,7 @@ func (s *InstallNodejsStep) Check(ctx context.Context, t scaffold.Target) (bool,
 		return false, nil
 	}
 	m := mp.GetMachine()
-	client, key, err := BorrowSSH(ctx, s.dial, ResolveMachineHost(ctx, m), MachineSSHPort(m), MachineSSHUser(m))
+	client, key, err := BorrowSSH(ctx, s.dial, ResolveMachineHost(ctx, m), MachineSSHPort(m), MachineAgentUser(m))
 	if err != nil {
 		return false, nil
 	}
@@ -56,7 +56,7 @@ func (s *InstallNodejsStep) Execute(ctx context.Context, t scaffold.Target) erro
 		return fmt.Errorf("install-nodejs: SSH dialer not configured")
 	}
 	m := mp.GetMachine()
-	host, port, user := ResolveMachineHost(ctx, m), MachineSSHPort(m), MachineSSHUser(m)
+	host, port, user := ResolveMachineHost(ctx, m), MachineSSHPort(m), MachineAgentUser(m)
 
 	script := `set -euo pipefail
 if ! command -v node >/dev/null 2>&1; then
@@ -77,7 +77,7 @@ func (s *InstallNodejsStep) Verify(ctx context.Context, t scaffold.Target) error
 		return fmt.Errorf("install-nodejs verify: target %q does not provide a machine", t.ID)
 	}
 	m := mp.GetMachine()
-	client, key, err := BorrowSSH(ctx, s.dial, ResolveMachineHost(ctx, m), MachineSSHPort(m), MachineSSHUser(m))
+	client, key, err := BorrowSSH(ctx, s.dial, ResolveMachineHost(ctx, m), MachineSSHPort(m), MachineAgentUser(m))
 	if err != nil {
 		return fmt.Errorf("install-nodejs verify: dial: %w", err)
 	}

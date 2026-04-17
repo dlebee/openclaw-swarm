@@ -33,7 +33,7 @@ func (s *BootstrapNodeStep) Applicable(ctx context.Context, t scaffold.Target) (
 		return false, nil
 	}
 	m := nt.Machine
-	client, key, err := common.BorrowSSH(ctx, s.dial, common.ResolveMachineHost(ctx, m), common.MachineSSHPort(m), common.MachineSSHUser(m))
+	client, key, err := common.BorrowSSH(ctx, s.dial, common.ResolveMachineHost(ctx, m), common.MachineSSHPort(m), common.MachineAgentUser(m))
 	if err != nil {
 		return true, nil // host unreachable → assume not yet bootstrapped
 	}
@@ -50,7 +50,7 @@ func (s *BootstrapNodeStep) Applicable(ctx context.Context, t scaffold.Target) (
 func (s *BootstrapNodeStep) Check(ctx context.Context, t scaffold.Target) (bool, error) {
 	nt := t.Payload.(*NodeTarget)
 	m := nt.Machine
-	client, key, err := common.BorrowSSH(ctx, s.dial, common.ResolveMachineHost(ctx, m), common.MachineSSHPort(m), common.MachineSSHUser(m))
+	client, key, err := common.BorrowSSH(ctx, s.dial, common.ResolveMachineHost(ctx, m), common.MachineSSHPort(m), common.MachineAgentUser(m))
 	if err != nil {
 		return false, nil
 	}
@@ -66,7 +66,7 @@ func (s *BootstrapNodeStep) Check(ctx context.Context, t scaffold.Target) (bool,
 func (s *BootstrapNodeStep) Execute(ctx context.Context, t scaffold.Target) error {
 	nt := t.Payload.(*NodeTarget)
 	m := nt.Machine
-	client, key, err := common.BorrowSSHWithRetry(ctx, s.dial, common.ResolveMachineHost(ctx, m), common.MachineSSHPort(m), common.MachineSSHUser(m))
+	client, key, err := common.BorrowSSHWithRetry(ctx, s.dial, common.ResolveMachineHost(ctx, m), common.MachineSSHPort(m), common.MachineAgentUser(m))
 	if err != nil {
 		return fmt.Errorf("bootstrap-node: %w", err)
 	}
@@ -74,7 +74,7 @@ func (s *BootstrapNodeStep) Execute(ctx context.Context, t scaffold.Target) erro
 
 	// Read the gateway token from the gateway's config.
 	gwMach := nt.GWMach
-	gwClient, gwKey, err := common.BorrowSSH(ctx, s.dial, common.ResolveMachineHost(ctx, gwMach), common.MachineSSHPort(gwMach), common.MachineSSHUser(gwMach))
+	gwClient, gwKey, err := common.BorrowSSH(ctx, s.dial, common.ResolveMachineHost(ctx, gwMach), common.MachineSSHPort(gwMach), common.MachineAgentUser(gwMach))
 	if err != nil {
 		return fmt.Errorf("bootstrap-node: dial gateway for token: %w", err)
 	}
@@ -144,7 +144,7 @@ export OPENCLAW_GATEWAY_TOKEN=%q
 func (s *BootstrapNodeStep) Verify(ctx context.Context, t scaffold.Target) error {
 	nt := t.Payload.(*NodeTarget)
 	m := nt.Machine
-	client, key, err := common.BorrowSSH(ctx, s.dial, common.ResolveMachineHost(ctx, m), common.MachineSSHPort(m), common.MachineSSHUser(m))
+	client, key, err := common.BorrowSSH(ctx, s.dial, common.ResolveMachineHost(ctx, m), common.MachineSSHPort(m), common.MachineAgentUser(m))
 	if err != nil {
 		return fmt.Errorf("bootstrap-node verify: dial: %w", err)
 	}

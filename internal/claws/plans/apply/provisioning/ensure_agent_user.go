@@ -36,7 +36,7 @@ func (s *EnsureAgentUserStep) Applicable(_ context.Context, t scaffold.Target) (
 	if !ok || mt == nil {
 		return false, nil
 	}
-	if mt.Spec.Type != manifestdata.MachineTypeLinode {
+	if !manifestdata.IsHostedMachineType(mt.Spec.Type) {
 		return false, nil
 	}
 	return needsAgentUser(mt.Spec), nil
@@ -51,7 +51,7 @@ func (s *EnsureAgentUserStep) Check(ctx context.Context, t scaffold.Target) (boo
 	if host == "" {
 		return false, nil
 	}
-	client, key, err := s.borrowSSH(ctx, host, sshPort(mt.Spec), sshLoginUser(mt.Spec))
+	client, key, err := s.borrowSSH(ctx, host, sshPort(mt.Spec), bootstrapLoginUser(mt.Spec))
 	if err != nil {
 		return false, nil
 	}
@@ -74,7 +74,7 @@ func (s *EnsureAgentUserStep) Execute(ctx context.Context, t scaffold.Target) er
 	}
 	host := strings.TrimSpace(mt.Instance.PublicIPv4)
 	port := sshPort(mt.Spec)
-	login := sshLoginUser(mt.Spec)
+	login := bootstrapLoginUser(mt.Spec)
 
 	var lastErr error
 	for attempt := 0; attempt < agentUserDialRetries; attempt++ {
@@ -109,7 +109,7 @@ func (s *EnsureAgentUserStep) Verify(ctx context.Context, t scaffold.Target) err
 		return fmt.Errorf("ensure-agent-user verify: instance not ready for %q", t.ID)
 	}
 	host := strings.TrimSpace(mt.Instance.PublicIPv4)
-	client, key, err := s.borrowSSH(ctx, host, sshPort(mt.Spec), sshLoginUser(mt.Spec))
+	client, key, err := s.borrowSSH(ctx, host, sshPort(mt.Spec), bootstrapLoginUser(mt.Spec))
 	if err != nil {
 		return fmt.Errorf("ensure-agent-user verify: dial: %w", err)
 	}

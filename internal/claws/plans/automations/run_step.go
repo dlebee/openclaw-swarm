@@ -174,16 +174,17 @@ func (d *DynamicStep) resolveScript(inline, file string) (string, error) {
 	return string(b), nil
 }
 
-// runAs resolves the SSH user for a dynamic automation step. Precedence
-// mirrors common.MachineSSHUser so automations follow the same architectural
-// rule the apply plan does: the agent user is the default for everything
-// post-provisioning, not root.
+// runAs resolves the SSH user for a dynamic automation step. Automations
+// run after the apply plan is fully converged, so the default identity is
+// the agent user (never the bootstrap user, which may have been disabled
+// by hardening). Step- and automation-level overrides let power users
+// escape the default when they need to (e.g. a one-off root maintenance
+// script), but those overrides stay opt-in.
 //
 //  1. Step-level run_as override (most specific)
 //  2. Automation-level run_as override
-//  3. Machine-level ssh_user override
-//  4. Machine-level agent_user (the normal case)
-//  5. "root" (only when the manifest opted out of an agent user)
+//  3. Machine-level agent_user (the normal case)
+//  4. "root" (only when the manifest opted out of an agent user)
 func (d *DynamicStep) runAs(m manifestdata.Machine) string {
 	if u := strings.TrimSpace(d.step.RunAs); u != "" {
 		return u
@@ -191,7 +192,7 @@ func (d *DynamicStep) runAs(m manifestdata.Machine) string {
 	if u := strings.TrimSpace(d.defaultUser); u != "" {
 		return u
 	}
-	return common.MachineSSHUser(m)
+	return common.MachineAgentUser(m)
 }
 
 func (d *DynamicStep) kind() string {

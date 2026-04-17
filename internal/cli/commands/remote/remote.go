@@ -55,9 +55,18 @@ picker is shown. Use --name to skip the picker.`),
 				return err
 			}
 
+			// `claws ssh` defaults to the agent user — it's the account
+			// that stays usable throughout a machine's lifetime. The
+			// bootstrap user may have been disabled by security hardening,
+			// so falling back to it here would break interactive access on
+			// locked-down machines. Operators who need the privileged
+			// identity pass --user explicitly.
 			sshUser := user
 			if sshUser == "" {
-				sshUser = strings.TrimSpace(mach.SSHUser)
+				sshUser = strings.TrimSpace(mach.AgentUser)
+			}
+			if sshUser == "" {
+				sshUser = strings.TrimSpace(mach.BootstrapUser)
 			}
 			if sshUser == "" {
 				sshUser = "root"
@@ -75,7 +84,7 @@ picker is shown. Use --name to skip the picker.`),
 		},
 	}
 	cmd.Flags().StringVar(&name, "name", "", "machine name as declared in the manifest")
-	cmd.Flags().StringVar(&user, "user", "", "SSH user override (default: machine's ssh_user or root)")
+	cmd.Flags().StringVar(&user, "user", "", "SSH user override (default: agent_user, then bootstrap_user, then root)")
 	return cmd
 }
 

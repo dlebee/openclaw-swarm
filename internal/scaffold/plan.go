@@ -25,6 +25,16 @@ func (p *Plan) AddPhase(name string) *Phase {
 	return ph
 }
 
+// PhaseNames returns the ordered phase names as currently appended. Useful for
+// validating user-supplied --phases / --skip-phases flags before Build.
+func (p *Plan) PhaseNames() []string {
+	out := make([]string, 0, len(p.Phases))
+	for _, ph := range p.Phases {
+		out = append(out, ph.Name)
+	}
+	return out
+}
+
 // Build validates, emits planning progress, and returns an ExecutablePlan.
 func (p *Plan) Build(obs ...progress.BuildObserver) (*ExecutablePlan, error) {
 	if len(p.Phases) == 0 {

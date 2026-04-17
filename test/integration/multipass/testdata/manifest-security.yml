@@ -1,0 +1,31 @@
+# Multipass provisioning + security smoke-test manifest.
+#
+# Same shape as manifest-provisioning.yml (two bare machines, no gateway
+# or node), but this manifest drives the provisioning + security phases
+# together. Setting bootstrap_user to root forces authorize-ssh-key and
+# the security hardening steps to dial the machine as root directly;
+# agent_user=agent then exercises ensure-agent-user's real useradd path
+# (not the short-circuit "user already exists" path you'd hit if you
+# reused the cloud-image default account). Security steps keep running
+# as bootstrap_user because apt/ufw/systemctl all need root; everything
+# after this phase switches to agent_user per the bootstrap-vs-agent
+# two-user design.
+
+prefix: claws-it-multipass-sec
+
+machines:
+  - name: gateway-host
+    type: multipass
+    cpus: 1
+    memory: 1G
+    disk: 5G
+    bootstrap_user: root
+    agent_user: agent
+
+  - name: node-host
+    type: multipass
+    cpus: 1
+    memory: 1G
+    disk: 5G
+    bootstrap_user: root
+    agent_user: agent

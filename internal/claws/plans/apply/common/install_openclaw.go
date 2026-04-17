@@ -34,7 +34,7 @@ func (s *InstallOpenclawStep) Check(ctx context.Context, t scaffold.Target) (boo
 		return false, nil
 	}
 	m := mp.GetMachine()
-	client, key, err := BorrowSSH(ctx, s.dial, ResolveMachineHost(ctx, m), MachineSSHPort(m), MachineSSHUser(m))
+	client, key, err := BorrowSSH(ctx, s.dial, ResolveMachineHost(ctx, m), MachineSSHPort(m), MachineAgentUser(m))
 	if err != nil {
 		return false, nil
 	}
@@ -56,7 +56,7 @@ func (s *InstallOpenclawStep) Execute(ctx context.Context, t scaffold.Target) er
 		return fmt.Errorf("install-openclaw: SSH dialer not configured")
 	}
 	m := mp.GetMachine()
-	host, port, user := ResolveMachineHost(ctx, m), MachineSSHPort(m), MachineSSHUser(m)
+	host, port, user := ResolveMachineHost(ctx, m), MachineSSHPort(m), MachineAgentUser(m)
 
 	script := `set -euo pipefail
 sudo npm install -g openclaw --quiet
@@ -73,7 +73,7 @@ func (s *InstallOpenclawStep) Verify(ctx context.Context, t scaffold.Target) err
 		return fmt.Errorf("install-openclaw verify: target %q does not provide a machine", t.ID)
 	}
 	m := mp.GetMachine()
-	client, key, err := BorrowSSH(ctx, s.dial, ResolveMachineHost(ctx, m), MachineSSHPort(m), MachineSSHUser(m))
+	client, key, err := BorrowSSH(ctx, s.dial, ResolveMachineHost(ctx, m), MachineSSHPort(m), MachineAgentUser(m))
 	if err != nil {
 		return fmt.Errorf("install-openclaw verify: dial: %w", err)
 	}

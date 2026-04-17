@@ -48,7 +48,11 @@ func ExecWithConfirm(ctx context.Context, p *Plan, o PipelineOptions) error {
 		return err
 	}
 	_, _ = fmt.Fprintln(o.Out)
-	hints := PlanDisplayHints{DryRun: o.DryRun, SkipPhases: o.SkipPhases}
+	hints := PlanDisplayHints{
+		DryRun:     o.DryRun,
+		OnlyPhases: o.OnlyPhases,
+		SkipPhases: o.SkipPhases,
+	}
 	if o.PrettyPlan {
 		if f, ok := o.Out.(*os.File); ok && term.IsTerminal(int(f.Fd())) {
 			if err := RunPlanPreview(ctx, exec, hints); err != nil {

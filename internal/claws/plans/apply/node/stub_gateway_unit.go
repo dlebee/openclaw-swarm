@@ -63,7 +63,7 @@ func (s *StubGatewayUnitStep) Applicable(_ context.Context, t scaffold.Target) (
 func (s *StubGatewayUnitStep) Check(ctx context.Context, t scaffold.Target) (bool, error) {
 	nt := t.Payload.(*NodeTarget)
 	m := nt.Machine
-	client, key, err := common.BorrowSSH(ctx, s.dial, common.ResolveMachineHost(ctx, m), common.MachineSSHPort(m), common.MachineSSHUser(m))
+	client, key, err := common.BorrowSSH(ctx, s.dial, common.ResolveMachineHost(ctx, m), common.MachineSSHPort(m), common.MachineAgentUser(m))
 	if err != nil {
 		return false, nil
 	}
@@ -83,7 +83,7 @@ fi`)
 func (s *StubGatewayUnitStep) Execute(ctx context.Context, t scaffold.Target) error {
 	nt := t.Payload.(*NodeTarget)
 	m := nt.Machine
-	client, key, err := common.BorrowSSHWithRetry(ctx, s.dial, common.ResolveMachineHost(ctx, m), common.MachineSSHPort(m), common.MachineSSHUser(m))
+	client, key, err := common.BorrowSSHWithRetry(ctx, s.dial, common.ResolveMachineHost(ctx, m), common.MachineSSHPort(m), common.MachineAgentUser(m))
 	if err != nil {
 		return fmt.Errorf("stub-gateway-unit: %w", err)
 	}
@@ -110,7 +110,7 @@ systemctl --user daemon-reload
 func (s *StubGatewayUnitStep) Verify(ctx context.Context, t scaffold.Target) error {
 	nt := t.Payload.(*NodeTarget)
 	m := nt.Machine
-	client, key, err := common.BorrowSSH(ctx, s.dial, common.ResolveMachineHost(ctx, m), common.MachineSSHPort(m), common.MachineSSHUser(m))
+	client, key, err := common.BorrowSSH(ctx, s.dial, common.ResolveMachineHost(ctx, m), common.MachineSSHPort(m), common.MachineAgentUser(m))
 	if err != nil {
 		return fmt.Errorf("stub-gateway-unit verify: dial: %w", err)
 	}

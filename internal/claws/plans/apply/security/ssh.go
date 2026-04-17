@@ -85,13 +85,15 @@ func machineSSHPort(m manifestdata.Machine) int {
 	return m.SSHPort
 }
 
-// machineSSHUser delegates to common.MachineSSHUser so the security phase
-// follows the same precedence (SSHUser → AgentUser → root) as the rest of
-// the apply plan. Security steps run after provisioning.ensure-agent-user
-// has created the agent user, and all privileged commands in this phase
-// (apt-get, systemctl, ufw) are already sudo-prefixed via platformutil.
-func machineSSHUser(m manifestdata.Machine) string {
-	return common.MachineSSHUser(m)
+// machineBootstrapUser delegates to common.MachineBootstrapUser. Security
+// is the second (and last) phase that dials the machine as the privileged
+// bootstrap identity: ufw/fail2ban/unattended-upgrades all need root (or
+// sudo) to install and enable. Everything after this phase uses
+// common.MachineAgentUser instead — by the time mesh/gateway/node run,
+// the agent user has been created by provisioning.EnsureAgentUser and
+// services run under it.
+func machineBootstrapUser(m manifestdata.Machine) string {
+	return common.MachineBootstrapUser(m)
 }
 
 const (
@@ -161,13 +163,20 @@ func runScriptOutput(client *xssh.Client, script string) (string, error) {
 	return stdout.String(), nil
 }
 
-// isLinodeMachine is the shared Applicable check for all security steps.
-func isLinodeMachine(t interface{}) (*provisioning.MachineTarget, bool) {
+// isHostedMachine is the shared Applicable check for all security steps.
+// It returns (target, true) iff the payload describes a machine backed by
+// a hosting.Provider (linode, multipass, …) — i.e. anything that went
+// through create-machine. Bare `type: ssh` entries are pre-provisioned and
+// must be left alone by the hardening steps (they may not allow our edits
+// to /etc/ssh/sshd_config, and their owners haven't opted into fail2ban /
+// ufw). Keeping the gate centralized here means adding a new provider is
+// a one-line edit to manifestdata.IsHostedMachineType.
+func isHostedMachine(t interface{}) (*provisioning.MachineTarget, bool) {
 	mt, ok := t.(*provisioning.MachineTarget)
 	if !ok || mt == nil {
 		return nil, false
 	}
-	if mt.Spec.Type != manifestdata.MachineTypeLinode {
+	if !manifestdata.IsHostedMachineType(mt.Spec.Type) {
 		return nil, false
 	}
 	return mt, true

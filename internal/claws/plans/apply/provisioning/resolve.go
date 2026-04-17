@@ -9,15 +9,20 @@ import (
 	"github.com/gluwa/openclaw-swarm2/internal/scaffold"
 )
 
-// ResolveLinodeInstances populates MachineTarget.Instance for Linode-typed
-// targets by listing instances under the manifest's prefix tag and matching by
-// label. Targets whose Instance is already set or whose machine type is not
-// Linode are left unchanged.
+// ResolveHostedInstances populates MachineTarget.Instance for every machine
+// that's backed by a hosting.Provider (linode, multipass, …) by listing
+// instances under the manifest's prefix tag and matching by label. Targets
+// whose Instance is already set, or whose machine type is SSH (pre-
+// provisioned), are left unchanged.
 //
-// This is useful for commands that operate outside the provisioning phase
-// (e.g. `claws automations apply`) but still need the dynamic PublicIPv4 to
-// reach Linode machines.
-func ResolveLinodeInstances(ctx context.Context, provider hosting.Provider, prefix string, targets []scaffold.Target) error {
+// This is used by commands that operate outside the provisioning phase
+// (e.g. `claws automations apply`, `claws destroy` cross-references) but
+// still need the dynamic PublicIPv4 to reach the machine.
+//
+// The provider parameter is a single Provider — the caller is expected to
+// have constructed the one that matches the manifest's non-SSH machine type.
+// Manifests that mix multiple hosted types in one run are not supported.
+func ResolveHostedInstances(ctx context.Context, provider hosting.Provider, prefix string, targets []scaffold.Target) error {
 	if provider == nil {
 		return nil
 	}
@@ -29,7 +34,7 @@ func ResolveLinodeInstances(ctx context.Context, provider hosting.Provider, pref
 		if !ok || mt == nil {
 			continue
 		}
-		if mt.Spec.Type != manifestdata.MachineTypeLinode {
+		if !manifestdata.IsHostedMachineType(mt.Spec.Type) {
 			continue
 		}
 		if mt.Instance != nil {
@@ -39,7 +44,7 @@ func ResolveLinodeInstances(ctx context.Context, provider hosting.Provider, pref
 			var err error
 			instances, err = provider.ListByTag(ctx, prefixTag)
 			if err != nil {
-				return fmt.Errorf("resolve linode instances: %w", err)
+				return fmt.Errorf("resolve hosted instances: %w", err)
 			}
 			loaded = true
 		}
@@ -49,7 +54,7 @@ func ResolveLinodeInstances(ctx context.Context, provider hosting.Provider, pref
 				inst := instances[i]
 				mt.Instance = &inst
 				// Mirror create-machine: seed the plan cache so downstream
-				// phases resolve the Linode PublicIPv4 through the usual
+				// phases resolve the PublicIPv4 through the usual
 				// common.ResolveMachineHost path.
 				scaffold.RecordPlanMachineHost(ctx, mt.Spec.Name, inst.PublicIPv4)
 				break
@@ -57,4 +62,13 @@ func ResolveLinodeInstances(ctx context.Context, provider hosting.Provider, pref
 		}
 	}
 	return nil
+}
+
+// ResolveLinodeInstances is a deprecated alias preserved so external callers
+// (and older generated docs) keep compiling. New code should call
+// ResolveHostedInstances.
+//
+// Deprecated: use ResolveHostedInstances.
+func ResolveLinodeInstances(ctx context.Context, provider hosting.Provider, prefix string, targets []scaffold.Target) error {
+	return ResolveHostedInstances(ctx, provider, prefix, targets)
 }

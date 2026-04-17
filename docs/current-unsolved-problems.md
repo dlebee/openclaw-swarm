@@ -28,14 +28,17 @@ problems`, some still staged locally):
    Workaround: new `node.stub-gateway-unit` step writes a dummy
    `openclaw-gateway.service` user unit before `bootstrap-node` runs so
    the enable call succeeds.
-4. **Agent user is the default for post-provisioning** — `common.MachineSSHUser`
-   and `automations.DynamicStep.runAs` now cascade
-   `SSHUser → AgentUser → "root"`. Provisioning-only steps
-   (`create-machine`, `authorize-ssh-key`, `ensure-agent-user`) still pin
-   to root via their own `sshLoginUser` helper because the agent user
-   doesn't exist yet. Matters because `ensure-agent-user` runs
-   `loginctl enable-linger` for the agent user only — systemd `--user`
-   services created under root die the moment the SSH session ends.
+4. **Bootstrap-user vs. agent-user split** — the manifest now has two
+   distinct identities: `bootstrap_user` (privileged, used only by
+   provisioning + security) and `agent_user` (the ongoing-ops identity,
+   used by every phase afterwards). Resolved by
+   `common.MachineBootstrapUser` (`BootstrapUser → "root"`, no agent
+   fallback) and `common.MachineAgentUser` (`AgentUser → "root"`, no
+   bootstrap fallback). Security hardening can therefore disable the
+   bootstrap account without breaking subsequent phases. Matters
+   because `ensure-agent-user` runs `loginctl enable-linger` for the
+   agent user only — systemd `--user` services created under root die
+   the moment the SSH session ends.
 5. **`XDG_RUNTIME_DIR` in user-systemd scripts** — `bootstrap-gateway`,
    `bootstrap-node`, `stub-gateway-unit` now `export XDG_RUNTIME_DIR=
    /run/user/$(id -u)` before `systemctl --user` / `openclaw node install`

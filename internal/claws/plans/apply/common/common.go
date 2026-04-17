@@ -71,28 +71,46 @@ func MachineSSHPort(m manifestdata.Machine) int {
 	return m.SSHPort
 }
 
-// MachineSSHUser returns the user that post-provisioning steps dial the
-// machine as. Precedence:
+// MachineBootstrapUser returns the privileged identity that the
+// provisioning and security phases dial the machine as. This is the
+// "escalated root" account used only to bring the box up and lock it
+// down — never for app-level work (installing openclaw, configuring
+// gateways, running agents, etc.). Those phases use MachineAgentUser
+// instead.
 //
-//  1. Explicit SSHUser override (rare — power users who want a specific login)
-//  2. AgentUser (the default for normal operations; created by
-//     provisioning.EnsureAgentUser and granted passwordless sudo)
-//  3. "root" (fallback when the manifest opted out of an agent user)
+// Precedence:
 //
-// Using the agent user by default is important because it's the only
-// non-system account that ensure-agent-user runs `loginctl enable-linger`
-// for. Services registered under the agent user's systemd manager therefore
-// survive the SSH session disconnecting; root's user manager does not by
-// default, which previously killed the openclaw node daemon immediately
-// after bootstrap-node finished (breaking pair-node).
+//  1. Explicit BootstrapUser from the manifest
+//  2. "root" (fresh Linode image default)
 //
-// Provisioning steps (create-machine, authorize-ssh-key, ensure-agent-user)
-// intentionally bypass this helper and always dial as the raw login user
-// (root on a fresh Linode) — the agent user doesn't exist yet.
-func MachineSSHUser(m manifestdata.Machine) string {
-	if u := strings.TrimSpace(m.SSHUser); u != "" {
+// Deliberately does NOT fall back to AgentUser: the two users are
+// architecturally distinct roles (bootstrap vs. ongoing agent). If a
+// manifest omits both, it's opting into root bootstrap.
+//
+// Only provisioning/* and security/* may call this. Any other caller is
+// a design bug — ops-time phases must identify as the agent, not as the
+// bootstrap user (which may be disabled or restricted after hardening).
+func MachineBootstrapUser(m manifestdata.Machine) string {
+	if u := strings.TrimSpace(m.BootstrapUser); u != "" {
 		return u
 	}
+	return "root"
+}
+
+// MachineAgentUser returns the unprivileged identity that every
+// post-security phase (mesh, node, gateway, agents, channels,
+// automations, install_openclaw, install_nodejs) dials the machine as.
+// This is the account created by provisioning.EnsureAgentUser and
+// granted passwordless sudo; services registered under this user's
+// systemd manager also benefit from `loginctl enable-linger` so they
+// survive SSH disconnects.
+//
+// Precedence:
+//
+//  1. Explicit AgentUser from the manifest
+//  2. "root" (fallback when the manifest opted out of an agent user,
+//     e.g. static ssh-type machines managed by an existing operator)
+func MachineAgentUser(m manifestdata.Machine) string {
 	if u := strings.TrimSpace(m.AgentUser); u != "" {
 		return u
 	}

@@ -29,13 +29,13 @@ func BuildMachineTargets(machines []manifestdata.Machine) []scaffold.Target {
 func AddPhase(p *scaffold.Plan, targets []scaffold.Target, opts Options) *scaffold.Phase {
 	ph := p.AddPhase("provisioning")
 
-	linodeN := 0
+	hostedN := 0
 	for _, t := range targets {
-		if mt, ok := t.Payload.(*MachineTarget); ok && mt.Spec.Type == manifestdata.MachineTypeLinode {
-			linodeN++
+		if mt, ok := t.Payload.(*MachineTarget); ok && manifestdata.IsHostedMachineType(mt.Spec.Type) {
+			hostedN++
 		}
 	}
-	concurrency := linodeN
+	concurrency := hostedN
 	if concurrency < 1 {
 		concurrency = 1
 	}

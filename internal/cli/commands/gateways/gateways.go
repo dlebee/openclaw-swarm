@@ -297,7 +297,7 @@ func sshEndpoint(mach *manifestdata.Machine) (host string, port int, user string
 	}
 	user = strings.TrimSpace(mach.AgentUser)
 	if user == "" {
-		user = strings.TrimSpace(mach.SSHUser)
+		user = strings.TrimSpace(mach.BootstrapUser)
 	}
 	if user == "" {
 		user = "root"

@@ -1,6 +1,6 @@
-//go:build integration
+//go:build integration_docker
 
-package integration
+package docker
 
 import (
 	"context"

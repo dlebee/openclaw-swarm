@@ -20,6 +20,7 @@ import (
 	"github.com/gluwa/openclaw-swarm2/internal/claws/plans/automations"
 	"github.com/gluwa/openclaw-swarm2/internal/hosting"
 	"github.com/gluwa/openclaw-swarm2/internal/hosting/linode"
+	"github.com/gluwa/openclaw-swarm2/internal/hosting/multipass"
 	manifestdata "github.com/gluwa/openclaw-swarm2/internal/manifests/data"
 	manifestsvc "github.com/gluwa/openclaw-swarm2/internal/manifests/service"
 	"github.com/gluwa/openclaw-swarm2/internal/scaffold"
@@ -45,8 +46,8 @@ func BuildPlan(o BuildOptions) (*scaffold.Plan, error) {
 	if o.Manifest == nil {
 		return nil, fmt.Errorf("apply plan: manifest is nil")
 	}
-	if needsLinodeToken(o.Manifest.Machines) && o.SSHDial == nil {
-		return nil, fmt.Errorf("apply plan: SSHDial is required when the manifest has Linode machines")
+	if hasHostedMachines(o.Manifest.Machines) && o.SSHDial == nil {
+		return nil, fmt.Errorf("apply plan: SSHDial is required when the manifest has hosted (linode/multipass) machines")
 	}
 	targets := provisioning.BuildMachineTargets(o.Manifest.Machines)
 
@@ -120,27 +121,70 @@ func BuildPlan(o BuildOptions) (*scaffold.Plan, error) {
 	return p, nil
 }
 
-// LinodeProviderFromManifest returns a Linode client when the manifest has Linode machines;
-// otherwise nil without error.
-// manifestAbsPath is the absolute path to the manifest file (used to resolve relative env_file).
-func LinodeProviderFromManifest(m *manifestdata.Manifest, manifestAbsPath string) (hosting.Provider, error) {
+// ProviderFromManifest returns the hosting.Provider that matches the
+// manifest's non-SSH machine type. Contract:
+//
+//   - No hosted machines (all type: ssh) → returns (nil, nil). Apply runs
+//     but the provisioning phase is a no-op for every target.
+//   - All hosted machines are Linode → returns a Linode provider, requires
+//     linode_token_env to be set and resolve.
+//   - All hosted machines are Multipass → returns a Multipass provider.
+//     No token needed.
+//   - Manifest mixes hosted types (e.g. Linode + Multipass in the same
+//     run) → error. Apply per-run is single-provider by design; if you
+//     want mixed hosting use two separate manifests or provision
+//     externally and use type: ssh for the second fleet.
+//
+// manifestAbsPath is the absolute path to the manifest file, used to
+// resolve relative env_file entries for the Linode token.
+func ProviderFromManifest(m *manifestdata.Manifest, manifestAbsPath string) (hosting.Provider, error) {
 	if m == nil {
 		return nil, fmt.Errorf("manifest is nil")
 	}
-	if !needsLinodeToken(m.Machines) {
+	kinds := hostedKinds(m.Machines)
+	switch len(kinds) {
+	case 0:
 		return nil, nil
+	case 1:
+		// fall through with the single kind
+	default:
+		return nil, fmt.Errorf("apply plan: machines mix hosted types %v in one manifest; split into separate manifests or use type: ssh", kinds)
 	}
-	if strings.TrimSpace(m.LinodeTokenEnv) == "" {
-		return nil, fmt.Errorf("manifest linode_token_env is required when machines use type %q", manifestdata.MachineTypeLinode)
+	kind := kinds[0]
+	switch kind {
+	case manifestdata.MachineTypeLinode:
+		if strings.TrimSpace(m.LinodeTokenEnv) == "" {
+			return nil, fmt.Errorf("manifest linode_token_env is required when machines use type %q", manifestdata.MachineTypeLinode)
+		}
+		tok, err := manifestsvc.LookupEnvFromManifest(manifestAbsPath, m, m.LinodeTokenEnv)
+		if err != nil {
+			return nil, err
+		}
+		return linode.NewProvider(tok), nil
+	case manifestdata.MachineTypeMultipass:
+		return multipass.NewProvider(multipass.Options{})
+	default:
+		return nil, fmt.Errorf("apply plan: no provider for machine type %q", kind)
 	}
-	tok, err := manifestsvc.LookupEnvFromManifest(manifestAbsPath, m, m.LinodeTokenEnv)
-	if err != nil {
-		return nil, err
-	}
-	return linode.NewProvider(tok), nil
+}
+
+// LinodeProviderFromManifest is a deprecated alias retained for older call
+// sites that still expect the Linode-only API. New callers must use
+// ProviderFromManifest.
+//
+// Deprecated: use ProviderFromManifest.
+func LinodeProviderFromManifest(m *manifestdata.Manifest, manifestAbsPath string) (hosting.Provider, error) {
+	return ProviderFromManifest(m, manifestAbsPath)
 }
 
 // RunOptions configures ExecWithConfirm for an apply run.
+//
+// OnlyPhases and SkipPhases let callers run a subset of the apply pipeline —
+// used by integration tests ("only run provisioning + security") and by
+// operators iterating on a single phase. Both filters apply to the prepared
+// plan preview AND execution, so the tree always reflects what will run.
+// Unknown phase names are silently ignored at this layer; callers should
+// validate against scaffold.Plan.PhaseNames before reaching Run.
 type RunOptions struct {
 	DryRun      bool
 	Out         io.Writer
@@ -148,6 +192,8 @@ type RunOptions struct {
 	Confirm     func() (bool, error)
 	// PrettyPlan shows the plan in a Bubble Tea viewport (alternate screen) when Out is a TTY.
 	PrettyPlan bool
+	OnlyPhases []string
+	SkipPhases []string
 }
 
 // Run builds progress styling from ProgressOut, resolves width from Out when possible, then ExecWithConfirm.
@@ -173,8 +219,10 @@ func Run(ctx context.Context, plan *scaffold.Plan, o RunOptions) error {
 
 	return scaffold.ExecWithConfirm(ctx, plan, scaffold.PipelineOptions{
 		ExecuteOptions: scaffold.ExecuteOptions{
-			DryRun:   o.DryRun,
-			Progress: styled,
+			DryRun:     o.DryRun,
+			Progress:   styled,
+			OnlyPhases: o.OnlyPhases,
+			SkipPhases: o.SkipPhases,
 		},
 		BuildProgress:     styled,
 		Confirm:           o.Confirm,
@@ -192,13 +240,32 @@ func manifestDir(manifestPath string) string {
 	return filepath.Dir(manifestPath)
 }
 
-func needsLinodeToken(machines []manifestdata.Machine) bool {
+func hasHostedMachines(machines []manifestdata.Machine) bool {
 	for _, m := range machines {
-		if m.Type == manifestdata.MachineTypeLinode {
+		if manifestdata.IsHostedMachineType(m.Type) {
 			return true
 		}
 	}
 	return false
+}
+
+// hostedKinds returns the deduplicated set of hosted machine types in the
+// manifest (everything that's not SSH). Order is insertion order so
+// single-kind manifests round-trip deterministically.
+func hostedKinds(machines []manifestdata.Machine) []manifestdata.MachineType {
+	seen := make(map[manifestdata.MachineType]struct{})
+	var out []manifestdata.MachineType
+	for _, m := range machines {
+		if !manifestdata.IsHostedMachineType(m.Type) {
+			continue
+		}
+		if _, ok := seen[m.Type]; ok {
+			continue
+		}
+		seen[m.Type] = struct{}{}
+		out = append(out, m.Type)
+	}
+	return out
 }
 
 func hasChannels(gateways []manifestdata.Gateway) bool {

@@ -98,11 +98,13 @@ func machineSSHPort(m manifestdata.Machine) int {
 	return m.SSHPort
 }
 
-// machineSSHUser delegates to common.MachineSSHUser so the gateway phase
-// follows the same SSHUser → AgentUser → root precedence as the rest of
-// the apply plan.
-func machineSSHUser(m manifestdata.Machine) string {
-	return common.MachineSSHUser(m)
+// machineAgentUser delegates to common.MachineAgentUser. Gateway is a
+// post-security phase and runs as the agent user — never as the
+// bootstrap identity (which may have been disabled by hardening).
+// Install/configure scripts in this package are sudo-prefixed to pick
+// up the passwordless-sudo grant from provisioning.EnsureAgentUser.
+func machineAgentUser(m manifestdata.Machine) string {
+	return common.MachineAgentUser(m)
 }
 
 func borrowSSH(ctx context.Context, dial SSHDialFunc, host string, port int, user string) (*xssh.Client, string, error) {

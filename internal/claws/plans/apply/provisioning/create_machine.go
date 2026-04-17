@@ -31,14 +31,16 @@ func NewCreateMachineStep(opts Options) *CreateMachineStep {
 // Name implements scaffold.Step.
 func (*CreateMachineStep) Name() string { return "create-machine" }
 
-// Applicable implements scaffold.Step — only Linode machines are provisioned here.
+// Applicable implements scaffold.Step — runs for any machine backed by a
+// hosting.Provider (linode, multipass, …). SSH-typed machines are assumed
+// pre-provisioned and skip this step entirely.
 func (a *CreateMachineStep) Applicable(ctx context.Context, t scaffold.Target) (bool, error) {
 	_ = ctx
 	mt, ok := t.Payload.(*MachineTarget)
 	if !ok || mt == nil {
 		return false, nil
 	}
-	return mt.Spec.Type == manifestdata.MachineTypeLinode, nil
+	return manifestdata.IsHostedMachineType(mt.Spec.Type), nil
 }
 
 // Check implements scaffold.Step — list instances tagged claws/<prefix>, then match
@@ -99,14 +101,23 @@ func (a *CreateMachineStep) Execute(ctx context.Context, t scaffold.Target) erro
 		return err
 	}
 	spec := mt.Spec
+	// Opts carry BOTH the Linode and Multipass field sets; providers ignore
+	// the ones that don't apply to them. This keeps create-machine fully
+	// provider-agnostic at the cost of a few unused struct fields per call.
 	opts := hosting.CreateInstanceOpts{
 		Label:      machineLabel(a.prefix, spec.Name),
-		Region:     spec.Region,
-		SKU:        spec.SKU,
 		Image:      spec.Image,
 		Tags:       []string{clawsPrefixTag(a.prefix), machineTag(a.prefix, spec.Name)},
 		PublicKeys: []string{a.sshPubKey},
-		RootPass:   rootPass,
+		// Linode-specific.
+		Region:   spec.Region,
+		SKU:      spec.SKU,
+		RootPass: rootPass,
+		// Multipass-specific. Zero values are passed through and the
+		// provider substitutes its own defaults if appropriate.
+		CPUs:   spec.CPUs,
+		Memory: spec.Memory,
+		Disk:   spec.Disk,
 	}
 	inst, err := a.provider.CreateInstance(ctx, opts)
 	if err != nil {

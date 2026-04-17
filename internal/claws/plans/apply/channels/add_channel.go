@@ -31,7 +31,7 @@ func (s *AddChannelStep) Applicable(_ context.Context, t scaffold.Target) (bool,
 func (s *AddChannelStep) Check(ctx context.Context, t scaffold.Target) (bool, error) {
 	ct := t.Payload.(*ChannelTarget)
 	m := ct.Machine
-	client, key, err := common.BorrowSSH(ctx, s.dial, common.ResolveMachineHost(ctx, m), common.MachineSSHPort(m), common.MachineSSHUser(m))
+	client, key, err := common.BorrowSSH(ctx, s.dial, common.ResolveMachineHost(ctx, m), common.MachineSSHPort(m), common.MachineAgentUser(m))
 	if err != nil {
 		return false, nil
 	}
@@ -55,7 +55,7 @@ func (s *AddChannelStep) Execute(ctx context.Context, t scaffold.Target) error {
 	m := ct.Machine
 	host := common.ResolveMachineHost(ctx, m)
 	port := common.MachineSSHPort(m)
-	user := common.MachineSSHUser(m)
+	user := common.MachineAgentUser(m)
 
 	// Listing is cheap and read-only; run it through the pool. Mutations
 	// below go through RunWithConflictAndTransientRetry so that a dead
@@ -95,7 +95,7 @@ func (s *AddChannelStep) Execute(ctx context.Context, t scaffold.Target) error {
 func (s *AddChannelStep) Verify(ctx context.Context, t scaffold.Target) error {
 	ct := t.Payload.(*ChannelTarget)
 	m := ct.Machine
-	client, key, err := common.BorrowSSH(ctx, s.dial, common.ResolveMachineHost(ctx, m), common.MachineSSHPort(m), common.MachineSSHUser(m))
+	client, key, err := common.BorrowSSH(ctx, s.dial, common.ResolveMachineHost(ctx, m), common.MachineSSHPort(m), common.MachineAgentUser(m))
 	if err != nil {
 		return fmt.Errorf("add-channels verify: dial: %w", err)
 	}

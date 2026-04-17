@@ -30,7 +30,7 @@ func (s *EnsureModelStep) Applicable(_ context.Context, t scaffold.Target) (bool
 func (s *EnsureModelStep) Check(ctx context.Context, t scaffold.Target) (bool, error) {
 	at := t.Payload.(*AgentTarget)
 	m := at.Machine
-	client, key, err := common.BorrowSSH(ctx, s.dial, common.ResolveMachineHost(ctx, m), common.MachineSSHPort(m), common.MachineSSHUser(m))
+	client, key, err := common.BorrowSSH(ctx, s.dial, common.ResolveMachineHost(ctx, m), common.MachineSSHPort(m), common.MachineAgentUser(m))
 	if err != nil {
 		return false, nil
 	}
@@ -46,7 +46,7 @@ func (s *EnsureModelStep) Check(ctx context.Context, t scaffold.Target) (bool, e
 func (s *EnsureModelStep) Execute(ctx context.Context, t scaffold.Target) error {
 	at := t.Payload.(*AgentTarget)
 	m := at.Machine
-	client, key, err := common.BorrowSSHWithRetry(ctx, s.dial, common.ResolveMachineHost(ctx, m), common.MachineSSHPort(m), common.MachineSSHUser(m))
+	client, key, err := common.BorrowSSHWithRetry(ctx, s.dial, common.ResolveMachineHost(ctx, m), common.MachineSSHPort(m), common.MachineAgentUser(m))
 	if err != nil {
 		return fmt.Errorf("ensure-model: %w", err)
 	}
@@ -91,7 +91,7 @@ openclaw config set --batch-json '%s'
 func (s *EnsureModelStep) Verify(ctx context.Context, t scaffold.Target) error {
 	at := t.Payload.(*AgentTarget)
 	m := at.Machine
-	client, key, err := common.BorrowSSH(ctx, s.dial, common.ResolveMachineHost(ctx, m), common.MachineSSHPort(m), common.MachineSSHUser(m))
+	client, key, err := common.BorrowSSH(ctx, s.dial, common.ResolveMachineHost(ctx, m), common.MachineSSHPort(m), common.MachineAgentUser(m))
 	if err != nil {
 		return fmt.Errorf("ensure-model verify: dial: %w", err)
 	}

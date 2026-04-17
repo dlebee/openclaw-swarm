@@ -42,7 +42,7 @@ func (s *PairGatewayDeviceStep) Applicable(_ context.Context, t scaffold.Target)
 func (s *PairGatewayDeviceStep) Check(ctx context.Context, t scaffold.Target) (bool, error) {
 	gt := t.Payload.(*GatewayTarget)
 	m := gt.Machine
-	client, key, err := borrowSSH(ctx, s.dial, machineHost(ctx, m), machineSSHPort(m), machineSSHUser(m))
+	client, key, err := borrowSSH(ctx, s.dial, machineHost(ctx, m), machineSSHPort(m), machineAgentUser(m))
 	if err != nil {
 		return false, nil
 	}
@@ -61,7 +61,7 @@ func (s *PairGatewayDeviceStep) Check(ctx context.Context, t scaffold.Target) (b
 func (s *PairGatewayDeviceStep) Execute(ctx context.Context, t scaffold.Target) error {
 	gt := t.Payload.(*GatewayTarget)
 	m := gt.Machine
-	client, key, err := borrowSSHWithRetry(ctx, s.dial, machineHost(ctx, m), machineSSHPort(m), machineSSHUser(m))
+	client, key, err := borrowSSHWithRetry(ctx, s.dial, machineHost(ctx, m), machineSSHPort(m), machineAgentUser(m))
 	if err != nil {
 		return fmt.Errorf("pair-gateway-device: %w", err)
 	}
@@ -104,7 +104,7 @@ func (s *PairGatewayDeviceStep) Execute(ctx context.Context, t scaffold.Target) 
 func (s *PairGatewayDeviceStep) Verify(ctx context.Context, t scaffold.Target) error {
 	gt := t.Payload.(*GatewayTarget)
 	m := gt.Machine
-	client, key, err := borrowSSH(ctx, s.dial, machineHost(ctx, m), machineSSHPort(m), machineSSHUser(m))
+	client, key, err := borrowSSH(ctx, s.dial, machineHost(ctx, m), machineSSHPort(m), machineAgentUser(m))
 	if err != nil {
 		return fmt.Errorf("pair-gateway-device verify: dial: %w", err)
 	}

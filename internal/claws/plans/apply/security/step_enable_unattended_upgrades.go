@@ -22,12 +22,12 @@ func NewEnableUnattendedUpgradesStep(opts Options) *EnableUnattendedUpgradesStep
 func (*EnableUnattendedUpgradesStep) Name() string { return "enable-unattended-upgrades" }
 
 func (s *EnableUnattendedUpgradesStep) Applicable(_ context.Context, t scaffold.Target) (bool, error) {
-	_, ok := isLinodeMachine(t.Payload)
+	_, ok := isHostedMachine(t.Payload)
 	return ok, nil
 }
 
 func (s *EnableUnattendedUpgradesStep) Check(ctx context.Context, t scaffold.Target) (bool, error) {
-	mt, ok := isLinodeMachine(t.Payload)
+	mt, ok := isHostedMachine(t.Payload)
 	if !ok {
 		return false, nil
 	}
@@ -35,7 +35,7 @@ func (s *EnableUnattendedUpgradesStep) Check(ctx context.Context, t scaffold.Tar
 	if host == "" {
 		return false, nil
 	}
-	client, key, err := borrowSSH(ctx, s.dial, host, machineSSHPort(mt.Spec), machineSSHUser(mt.Spec))
+	client, key, err := borrowSSH(ctx, s.dial, host, machineSSHPort(mt.Spec), machineBootstrapUser(mt.Spec))
 	if err != nil {
 		return false, nil
 	}
@@ -49,7 +49,7 @@ func (s *EnableUnattendedUpgradesStep) Check(ctx context.Context, t scaffold.Tar
 }
 
 func (s *EnableUnattendedUpgradesStep) Execute(ctx context.Context, t scaffold.Target) error {
-	mt, ok := isLinodeMachine(t.Payload)
+	mt, ok := isHostedMachine(t.Payload)
 	if !ok {
 		return fmt.Errorf("enable-unattended-upgrades: expected *MachineTarget for %q", t.ID)
 	}
@@ -57,7 +57,7 @@ func (s *EnableUnattendedUpgradesStep) Execute(ctx context.Context, t scaffold.T
 	if host == "" {
 		return fmt.Errorf("enable-unattended-upgrades: no reachable host for %q", t.ID)
 	}
-	client, key, err := borrowSSHWithRetry(ctx, s.dial, host, machineSSHPort(mt.Spec), machineSSHUser(mt.Spec))
+	client, key, err := borrowSSHWithRetry(ctx, s.dial, host, machineSSHPort(mt.Spec), machineBootstrapUser(mt.Spec))
 	if err != nil {
 		return fmt.Errorf("enable-unattended-upgrades: %w", err)
 	}
@@ -70,7 +70,7 @@ func (s *EnableUnattendedUpgradesStep) Execute(ctx context.Context, t scaffold.T
 }
 
 func (s *EnableUnattendedUpgradesStep) Verify(ctx context.Context, t scaffold.Target) error {
-	mt, ok := isLinodeMachine(t.Payload)
+	mt, ok := isHostedMachine(t.Payload)
 	if !ok {
 		return fmt.Errorf("enable-unattended-upgrades verify: expected *MachineTarget for %q", t.ID)
 	}
@@ -78,7 +78,7 @@ func (s *EnableUnattendedUpgradesStep) Verify(ctx context.Context, t scaffold.Ta
 	if host == "" {
 		return fmt.Errorf("enable-unattended-upgrades verify: no reachable host for %q", t.ID)
 	}
-	client, key, err := borrowSSH(ctx, s.dial, host, machineSSHPort(mt.Spec), machineSSHUser(mt.Spec))
+	client, key, err := borrowSSH(ctx, s.dial, host, machineSSHPort(mt.Spec), machineBootstrapUser(mt.Spec))
 	if err != nil {
 		return fmt.Errorf("enable-unattended-upgrades verify: dial: %w", err)
 	}

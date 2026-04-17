@@ -31,7 +31,7 @@ func (*InstallHeadscaleStep) Applicable(_ context.Context, t scaffold.Target) (b
 func (s *InstallHeadscaleStep) Check(ctx context.Context, t scaffold.Target) (bool, error) {
 	mt := t.Payload.(*MeshTarget)
 	m := mt.Machine
-	client, key, err := common.BorrowSSH(ctx, s.dial, common.ResolveMachineHost(ctx, m), common.MachineSSHPort(m), common.MachineSSHUser(m))
+	client, key, err := common.BorrowSSH(ctx, s.dial, common.ResolveMachineHost(ctx, m), common.MachineSSHPort(m), common.MachineAgentUser(m))
 	if err != nil {
 		return false, nil
 	}
@@ -43,7 +43,7 @@ func (s *InstallHeadscaleStep) Check(ctx context.Context, t scaffold.Target) (bo
 func (s *InstallHeadscaleStep) Execute(ctx context.Context, t scaffold.Target) error {
 	mt := t.Payload.(*MeshTarget)
 	m := mt.Machine
-	client, key, err := common.BorrowSSHWithRetry(ctx, s.dial, common.ResolveMachineHost(ctx, m), common.MachineSSHPort(m), common.MachineSSHUser(m))
+	client, key, err := common.BorrowSSHWithRetry(ctx, s.dial, common.ResolveMachineHost(ctx, m), common.MachineSSHPort(m), common.MachineAgentUser(m))
 	if err != nil {
 		return fmt.Errorf("install-headscale: %w", err)
 	}
@@ -134,7 +134,7 @@ sudo /usr/local/bin/headscale users create default 2>/dev/null || true
 func (s *InstallHeadscaleStep) Verify(ctx context.Context, t scaffold.Target) error {
 	mt := t.Payload.(*MeshTarget)
 	m := mt.Machine
-	client, key, err := common.BorrowSSH(ctx, s.dial, common.ResolveMachineHost(ctx, m), common.MachineSSHPort(m), common.MachineSSHUser(m))
+	client, key, err := common.BorrowSSH(ctx, s.dial, common.ResolveMachineHost(ctx, m), common.MachineSSHPort(m), common.MachineAgentUser(m))
 	if err != nil {
 		return fmt.Errorf("install-headscale verify: dial: %w", err)
 	}

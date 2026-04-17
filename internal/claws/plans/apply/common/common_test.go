@@ -46,34 +46,57 @@ func TestResolveMachineHost_linodeMissingCache(t *testing.T) {
 	}
 }
 
-func TestMachineSSHUser_defaultsToRootWhenNoAgentUser(t *testing.T) {
-	if got := MachineSSHUser(manifestdata.Machine{}); got != "root" {
-		t.Fatalf("MachineSSHUser = %q, want root", got)
+// MachineBootstrapUser resolves the privileged bootstrap identity. It
+// does NOT fall back to AgentUser — the two users are deliberately
+// independent roles so hardening can disable the bootstrap account
+// without breaking ongoing agent-user access.
+
+func TestMachineBootstrapUser_defaultsToRoot(t *testing.T) {
+	if got := MachineBootstrapUser(manifestdata.Machine{}); got != "root" {
+		t.Fatalf("MachineBootstrapUser = %q, want root", got)
 	}
 }
 
-func TestMachineSSHUser_prefersAgentUserOverRoot(t *testing.T) {
-	// This is the core architectural rule: post-provisioning steps dial
-	// as the agent user by default, not root, so user-level systemd
-	// services (openclaw-node, openclaw-gateway) are registered under
-	// an account that has linger enabled.
+func TestMachineBootstrapUser_explicit(t *testing.T) {
+	m := manifestdata.Machine{BootstrapUser: "ubuntu"}
+	if got := MachineBootstrapUser(m); got != "ubuntu" {
+		t.Fatalf("MachineBootstrapUser = %q, want ubuntu", got)
+	}
+}
+
+func TestMachineBootstrapUser_ignoresAgentUser(t *testing.T) {
+	// Architectural invariant: AgentUser must never leak into the
+	// bootstrap identity. A manifest with only agent_user set bootstraps
+	// as root, not as the agent.
 	m := manifestdata.Machine{AgentUser: "agent"}
-	if got := MachineSSHUser(m); got != "agent" {
-		t.Fatalf("MachineSSHUser = %q, want agent", got)
+	if got := MachineBootstrapUser(m); got != "root" {
+		t.Fatalf("MachineBootstrapUser = %q, want root (agent_user must not leak)", got)
 	}
 }
 
-func TestMachineSSHUser_explicitSSHUserWins(t *testing.T) {
-	m := manifestdata.Machine{SSHUser: "deploy", AgentUser: "agent"}
-	if got := MachineSSHUser(m); got != "deploy" {
-		t.Fatalf("MachineSSHUser = %q, want deploy (ssh_user override)", got)
+// MachineAgentUser resolves the ongoing-operations identity used by
+// every post-security phase. Falls back to root when unset for static
+// ssh-type machines that don't declare an agent user.
+
+func TestMachineAgentUser_defaultsToRoot(t *testing.T) {
+	if got := MachineAgentUser(manifestdata.Machine{}); got != "root" {
+		t.Fatalf("MachineAgentUser = %q, want root", got)
 	}
 }
 
-func TestMachineSSHUser_rootAgentUserStillRoot(t *testing.T) {
-	// Users who explicitly want root for everything can set agent_user: root.
-	m := manifestdata.Machine{AgentUser: "root"}
-	if got := MachineSSHUser(m); got != "root" {
-		t.Fatalf("MachineSSHUser = %q, want root", got)
+func TestMachineAgentUser_explicit(t *testing.T) {
+	m := manifestdata.Machine{AgentUser: "agent"}
+	if got := MachineAgentUser(m); got != "agent" {
+		t.Fatalf("MachineAgentUser = %q, want agent", got)
+	}
+}
+
+func TestMachineAgentUser_ignoresBootstrapUser(t *testing.T) {
+	// Architectural invariant: BootstrapUser must never leak into the
+	// agent identity. A manifest with only bootstrap_user set runs app
+	// phases as root, not as the bootstrap user.
+	m := manifestdata.Machine{BootstrapUser: "ubuntu"}
+	if got := MachineAgentUser(m); got != "root" {
+		t.Fatalf("MachineAgentUser = %q, want root (bootstrap_user must not leak)", got)
 	}
 }

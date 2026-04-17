@@ -38,7 +38,7 @@ func (s *ExecPolicyStep) Check(ctx context.Context, t scaffold.Target) (bool, er
 		return true, nil
 	}
 	m := nt.Machine
-	client, key, err := common.BorrowSSH(ctx, s.dial, common.ResolveMachineHost(ctx, m), common.MachineSSHPort(m), common.MachineSSHUser(m))
+	client, key, err := common.BorrowSSH(ctx, s.dial, common.ResolveMachineHost(ctx, m), common.MachineSSHPort(m), common.MachineAgentUser(m))
 	if err != nil {
 		return false, nil
 	}
@@ -63,7 +63,7 @@ func (s *ExecPolicyStep) Execute(ctx context.Context, t scaffold.Target) error {
 		return nil
 	}
 	m := nt.Machine
-	client, key, err := common.BorrowSSHWithRetry(ctx, s.dial, common.ResolveMachineHost(ctx, m), common.MachineSSHPort(m), common.MachineSSHUser(m))
+	client, key, err := common.BorrowSSHWithRetry(ctx, s.dial, common.ResolveMachineHost(ctx, m), common.MachineSSHPort(m), common.MachineAgentUser(m))
 	if err != nil {
 		return fmt.Errorf("exec-policy: %w", err)
 	}
@@ -94,7 +94,7 @@ func (s *ExecPolicyStep) Verify(ctx context.Context, t scaffold.Target) error {
 		return nil
 	}
 	m := nt.Machine
-	client, key, err := common.BorrowSSH(ctx, s.dial, common.ResolveMachineHost(ctx, m), common.MachineSSHPort(m), common.MachineSSHUser(m))
+	client, key, err := common.BorrowSSH(ctx, s.dial, common.ResolveMachineHost(ctx, m), common.MachineSSHPort(m), common.MachineAgentUser(m))
 	if err != nil {
 		return fmt.Errorf("exec-policy verify: dial: %w", err)
 	}

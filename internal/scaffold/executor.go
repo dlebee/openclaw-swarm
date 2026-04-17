@@ -17,7 +17,7 @@ func runPlan(ctx context.Context, compiled []compiledPhase, opts ExecuteOptions)
 	}
 	total := len(compiled)
 	for pi, ph := range compiled {
-		if skipName(ph.name, opts.SkipPhases) {
+		if phaseFiltered(ph.name, opts.OnlyPhases, opts.SkipPhases) {
 			continue
 		}
 		obs.OnPhaseStart(pi+1, total, ph.name)
@@ -42,6 +42,20 @@ func skipName(name string, skips []string) bool {
 		}
 	}
 	return false
+}
+
+// phaseFiltered returns true when a phase should be treated as "not running"
+// for this invocation (skipped by probe AND execute).
+//
+// OnlyPhases is an allow-list: when non-empty, a phase must appear in it to
+// survive, otherwise it's filtered out. SkipPhases is a deny-list applied on
+// top of the allow-list result. An empty OnlyPhases means "no restriction";
+// an empty SkipPhases means "don't subtract anything".
+func phaseFiltered(name string, only, skip []string) bool {
+	if len(only) > 0 && !skipName(name, only) {
+		return true
+	}
+	return skipName(name, skip)
 }
 
 // executePhase fans out targets across worker slots, each running its step

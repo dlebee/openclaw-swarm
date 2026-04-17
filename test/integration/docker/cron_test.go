@@ -1,6 +1,6 @@
-//go:build integration
+//go:build integration_docker
 
-package integration
+package docker
 
 // TestCronAgentWithNodeExec verifies that agent crons fire on schedule and
 // successfully generate responses through a real LLM (Ollama).

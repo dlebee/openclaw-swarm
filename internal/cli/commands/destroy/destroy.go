@@ -8,10 +8,9 @@ import (
 	"strings"
 
 	"github.com/charmbracelet/huh"
+	planapply "github.com/gluwa/openclaw-swarm2/internal/claws/plans/apply"
 	clawdestroy "github.com/gluwa/openclaw-swarm2/internal/claws/plans/destroy"
 	"github.com/gluwa/openclaw-swarm2/internal/hosting"
-	"github.com/gluwa/openclaw-swarm2/internal/hosting/linode"
-	manifestdata "github.com/gluwa/openclaw-swarm2/internal/manifests/data"
 	manifestsvc "github.com/gluwa/openclaw-swarm2/internal/manifests/service"
 	"github.com/spf13/cobra"
 	"golang.org/x/term"
@@ -22,12 +21,15 @@ func DestroyCmd(manifestFile *string) *cobra.Command {
 	var destroyAll, yes, dryRun bool
 	cmd := &cobra.Command{
 		Use:   "destroy",
-		Short: "Destroy Linode instances tagged for this manifest prefix",
+		Short: "Destroy hosted (linode/multipass) instances tagged for this manifest prefix",
 		Long: strings.TrimSpace(`
 Lists instances tagged claws/<prefix> from the manifest, then either deletes all (--all)
 or opens an interactive multi-select (space to toggle, enter to confirm).
 
-Requires manifest linode_token_env and a reachable Linode API token.`),
+Picks the hosting provider from the manifest's machine types:
+  - any type: linode  → requires linode_token_env
+  - any type: multipass → requires the multipass CLI on PATH
+  - all type: ssh     → nothing to destroy (no-op)`),
 		Args: cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			path, err := resolveManifestPath(manifestFile, args)
@@ -42,9 +44,13 @@ Requires manifest linode_token_env and a reachable Linode API token.`),
 			if err != nil {
 				return err
 			}
-			prov, err := linodeProviderFromManifest(m, abs)
+			prov, err := planapply.ProviderFromManifest(m, abs)
 			if err != nil {
 				return err
+			}
+			if prov == nil {
+				fmt.Fprintf(cmd.OutOrStdout(), "No hosted machines in manifest %q (all type: ssh); nothing to destroy.\n", abs)
+				return nil
 			}
 
 			ctx := cmd.Context()
@@ -53,7 +59,7 @@ Requires manifest linode_token_env and a reachable Linode API token.`),
 				return err
 			}
 			if len(instances) == 0 {
-				fmt.Fprintf(cmd.OutOrStdout(), "No Linode instances tagged %q.\n", clawdestroyListTagHint(m.Prefix))
+				fmt.Fprintf(cmd.OutOrStdout(), "No instances tagged %q.\n", clawdestroyListTagHint(m.Prefix))
 				return nil
 			}
 
@@ -130,16 +136,3 @@ func resolveManifestPath(manifestFile *string, args []string) (string, error) {
 	return "", fmt.Errorf("specify manifest path: argument, or claws -f manifest.yml destroy")
 }
 
-func linodeProviderFromManifest(m *manifestdata.Manifest, manifestAbsPath string) (hosting.Provider, error) {
-	if m == nil {
-		return nil, fmt.Errorf("manifest is nil")
-	}
-	if strings.TrimSpace(m.LinodeTokenEnv) == "" {
-		return nil, fmt.Errorf("manifest linode_token_env is required for destroy")
-	}
-	tok, err := manifestsvc.LookupEnvFromManifest(manifestAbsPath, m, m.LinodeTokenEnv)
-	if err != nil {
-		return nil, err
-	}
-	return linode.NewProvider(tok), nil
-}

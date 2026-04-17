@@ -29,7 +29,7 @@ func (*InstallTailscaleStep) Applicable(_ context.Context, t scaffold.Target) (b
 func (s *InstallTailscaleStep) Check(ctx context.Context, t scaffold.Target) (bool, error) {
 	mt := t.Payload.(*MeshTarget)
 	m := mt.Machine
-	client, key, err := common.BorrowSSH(ctx, s.dial, common.ResolveMachineHost(ctx, m), common.MachineSSHPort(m), common.MachineSSHUser(m))
+	client, key, err := common.BorrowSSH(ctx, s.dial, common.ResolveMachineHost(ctx, m), common.MachineSSHPort(m), common.MachineAgentUser(m))
 	if err != nil {
 		return false, nil
 	}
@@ -49,7 +49,7 @@ func (s *InstallTailscaleStep) Check(ctx context.Context, t scaffold.Target) (bo
 func (s *InstallTailscaleStep) Execute(ctx context.Context, t scaffold.Target) error {
 	mt := t.Payload.(*MeshTarget)
 	m := mt.Machine
-	host, port, user := common.ResolveMachineHost(ctx, m), common.MachineSSHPort(m), common.MachineSSHUser(m)
+	host, port, user := common.ResolveMachineHost(ctx, m), common.MachineSSHPort(m), common.MachineAgentUser(m)
 
 	// In container (Docker) environments, kernel TUN is unavailable so we cannot
 	// run `tailscale up`. Install the binary only and skip the join step.
@@ -146,7 +146,7 @@ tailscale ip -4
 func (s *InstallTailscaleStep) Verify(ctx context.Context, t scaffold.Target) error {
 	mt := t.Payload.(*MeshTarget)
 	m := mt.Machine
-	client, key, err := common.BorrowSSH(ctx, s.dial, common.ResolveMachineHost(ctx, m), common.MachineSSHPort(m), common.MachineSSHUser(m))
+	client, key, err := common.BorrowSSH(ctx, s.dial, common.ResolveMachineHost(ctx, m), common.MachineSSHPort(m), common.MachineAgentUser(m))
 	if err != nil {
 		return fmt.Errorf("install-tailscale verify: dial: %w", err)
 	}

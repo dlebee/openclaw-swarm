@@ -57,7 +57,7 @@ func desiredDefaults(channels []manifestdata.Channel) map[string]string {
 func (s *EnsureDefaultStep) Check(ctx context.Context, t scaffold.Target) (bool, error) {
 	ct := t.Payload.(*ChannelTarget)
 	m := ct.Machine
-	client, key, err := common.BorrowSSH(ctx, s.dial, common.ResolveMachineHost(ctx, m), common.MachineSSHPort(m), common.MachineSSHUser(m))
+	client, key, err := common.BorrowSSH(ctx, s.dial, common.ResolveMachineHost(ctx, m), common.MachineSSHPort(m), common.MachineAgentUser(m))
 	if err != nil {
 		return false, nil
 	}
@@ -77,7 +77,7 @@ func (s *EnsureDefaultStep) Execute(ctx context.Context, t scaffold.Target) erro
 	m := ct.Machine
 	host := common.ResolveMachineHost(ctx, m)
 	port := common.MachineSSHPort(m)
-	user := common.MachineSSHUser(m)
+	user := common.MachineAgentUser(m)
 
 	for kind, name := range desiredDefaults(ct.Channels) {
 		script := fmt.Sprintf(`openclaw config set "channels.%s.defaultAccount" %q`, kind, name)
@@ -91,7 +91,7 @@ func (s *EnsureDefaultStep) Execute(ctx context.Context, t scaffold.Target) erro
 func (s *EnsureDefaultStep) Verify(ctx context.Context, t scaffold.Target) error {
 	ct := t.Payload.(*ChannelTarget)
 	m := ct.Machine
-	client, key, err := common.BorrowSSH(ctx, s.dial, common.ResolveMachineHost(ctx, m), common.MachineSSHPort(m), common.MachineSSHUser(m))
+	client, key, err := common.BorrowSSH(ctx, s.dial, common.ResolveMachineHost(ctx, m), common.MachineSSHPort(m), common.MachineAgentUser(m))
 	if err != nil {
 		return fmt.Errorf("ensure-default-account verify: dial: %w", err)
 	}

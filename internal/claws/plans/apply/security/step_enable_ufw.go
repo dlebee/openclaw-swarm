@@ -20,12 +20,12 @@ func NewEnableUFWStep(opts Options) *EnableUFWStep {
 func (*EnableUFWStep) Name() string { return "enable-ufw" }
 
 func (s *EnableUFWStep) Applicable(_ context.Context, t scaffold.Target) (bool, error) {
-	_, ok := isLinodeMachine(t.Payload)
+	_, ok := isHostedMachine(t.Payload)
 	return ok, nil
 }
 
 func (s *EnableUFWStep) Check(ctx context.Context, t scaffold.Target) (bool, error) {
-	mt, ok := isLinodeMachine(t.Payload)
+	mt, ok := isHostedMachine(t.Payload)
 	if !ok {
 		return false, nil
 	}
@@ -33,7 +33,7 @@ func (s *EnableUFWStep) Check(ctx context.Context, t scaffold.Target) (bool, err
 	if host == "" {
 		return false, nil
 	}
-	client, key, err := borrowSSH(ctx, s.dial, host, machineSSHPort(mt.Spec), machineSSHUser(mt.Spec))
+	client, key, err := borrowSSH(ctx, s.dial, host, machineSSHPort(mt.Spec), machineBootstrapUser(mt.Spec))
 	if err != nil {
 		return false, nil
 	}
@@ -47,7 +47,7 @@ func (s *EnableUFWStep) Check(ctx context.Context, t scaffold.Target) (bool, err
 }
 
 func (s *EnableUFWStep) Execute(ctx context.Context, t scaffold.Target) error {
-	mt, ok := isLinodeMachine(t.Payload)
+	mt, ok := isHostedMachine(t.Payload)
 	if !ok {
 		return fmt.Errorf("enable-ufw: expected *MachineTarget for %q", t.ID)
 	}
@@ -56,7 +56,7 @@ func (s *EnableUFWStep) Execute(ctx context.Context, t scaffold.Target) error {
 		return fmt.Errorf("enable-ufw: no reachable host for %q", t.ID)
 	}
 	port := machineSSHPort(mt.Spec)
-	client, key, err := borrowSSHWithRetry(ctx, s.dial, host, port, machineSSHUser(mt.Spec))
+	client, key, err := borrowSSHWithRetry(ctx, s.dial, host, port, machineBootstrapUser(mt.Spec))
 	if err != nil {
 		return fmt.Errorf("enable-ufw: %w", err)
 	}
@@ -72,7 +72,7 @@ func (s *EnableUFWStep) Execute(ctx context.Context, t scaffold.Target) error {
 }
 
 func (s *EnableUFWStep) Verify(ctx context.Context, t scaffold.Target) error {
-	mt, ok := isLinodeMachine(t.Payload)
+	mt, ok := isHostedMachine(t.Payload)
 	if !ok {
 		return fmt.Errorf("enable-ufw verify: expected *MachineTarget for %q", t.ID)
 	}
@@ -80,7 +80,7 @@ func (s *EnableUFWStep) Verify(ctx context.Context, t scaffold.Target) error {
 	if host == "" {
 		return fmt.Errorf("enable-ufw verify: no reachable host for %q", t.ID)
 	}
-	client, key, err := borrowSSH(ctx, s.dial, host, machineSSHPort(mt.Spec), machineSSHUser(mt.Spec))
+	client, key, err := borrowSSH(ctx, s.dial, host, machineSSHPort(mt.Spec), machineBootstrapUser(mt.Spec))
 	if err != nil {
 		return fmt.Errorf("enable-ufw verify: dial: %w", err)
 	}

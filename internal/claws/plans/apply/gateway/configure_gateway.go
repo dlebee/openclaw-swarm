@@ -39,7 +39,7 @@ func (s *ConfigureGatewayStep) Applicable(_ context.Context, t scaffold.Target) 
 func (s *ConfigureGatewayStep) Check(ctx context.Context, t scaffold.Target) (bool, error) {
 	gt := t.Payload.(*GatewayTarget)
 	m := gt.Machine
-	client, key, err := borrowSSH(ctx, s.dial, machineHost(ctx, m), machineSSHPort(m), machineSSHUser(m))
+	client, key, err := borrowSSH(ctx, s.dial, machineHost(ctx, m), machineSSHPort(m), machineAgentUser(m))
 	if err != nil {
 		return false, nil
 	}
@@ -96,7 +96,7 @@ func gatewayEnv(gw manifestdata.Gateway) map[string]string {
 func (s *ConfigureGatewayStep) Execute(ctx context.Context, t scaffold.Target) error {
 	gt := t.Payload.(*GatewayTarget)
 	m := gt.Machine
-	client, key, err := borrowSSHWithRetry(ctx, s.dial, machineHost(ctx, m), machineSSHPort(m), machineSSHUser(m))
+	client, key, err := borrowSSHWithRetry(ctx, s.dial, machineHost(ctx, m), machineSSHPort(m), machineAgentUser(m))
 	if err != nil {
 		return fmt.Errorf("configure-gateway: %w", err)
 	}
@@ -143,7 +143,7 @@ openclaw config set --batch-json '%s'
 func (s *ConfigureGatewayStep) Verify(ctx context.Context, t scaffold.Target) error {
 	gt := t.Payload.(*GatewayTarget)
 	m := gt.Machine
-	client, key, err := borrowSSH(ctx, s.dial, machineHost(ctx, m), machineSSHPort(m), machineSSHUser(m))
+	client, key, err := borrowSSH(ctx, s.dial, machineHost(ctx, m), machineSSHPort(m), machineAgentUser(m))
 	if err != nil {
 		return fmt.Errorf("configure-gateway verify: dial: %w", err)
 	}

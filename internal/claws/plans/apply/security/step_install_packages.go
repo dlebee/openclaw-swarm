@@ -20,12 +20,12 @@ func NewInstallPackagesStep(opts Options) *InstallPackagesStep {
 func (*InstallPackagesStep) Name() string { return "install-security-packages" }
 
 func (s *InstallPackagesStep) Applicable(_ context.Context, t scaffold.Target) (bool, error) {
-	_, ok := isLinodeMachine(t.Payload)
+	_, ok := isHostedMachine(t.Payload)
 	return ok, nil
 }
 
 func (s *InstallPackagesStep) Check(ctx context.Context, t scaffold.Target) (bool, error) {
-	mt, ok := isLinodeMachine(t.Payload)
+	mt, ok := isHostedMachine(t.Payload)
 	if !ok {
 		return false, nil
 	}
@@ -33,7 +33,7 @@ func (s *InstallPackagesStep) Check(ctx context.Context, t scaffold.Target) (boo
 	if host == "" {
 		return false, nil
 	}
-	client, key, err := borrowSSH(ctx, s.dial, host, machineSSHPort(mt.Spec), machineSSHUser(mt.Spec))
+	client, key, err := borrowSSH(ctx, s.dial, host, machineSSHPort(mt.Spec), machineBootstrapUser(mt.Spec))
 	if err != nil {
 		return false, nil
 	}
@@ -49,7 +49,7 @@ func (s *InstallPackagesStep) Check(ctx context.Context, t scaffold.Target) (boo
 }
 
 func (s *InstallPackagesStep) Execute(ctx context.Context, t scaffold.Target) error {
-	mt, ok := isLinodeMachine(t.Payload)
+	mt, ok := isHostedMachine(t.Payload)
 	if !ok {
 		return fmt.Errorf("install-security-packages: expected *MachineTarget for %q", t.ID)
 	}
@@ -57,7 +57,7 @@ func (s *InstallPackagesStep) Execute(ctx context.Context, t scaffold.Target) er
 	if host == "" {
 		return fmt.Errorf("install-security-packages: no reachable host for %q", t.ID)
 	}
-	client, key, err := borrowSSHWithRetry(ctx, s.dial, host, machineSSHPort(mt.Spec), machineSSHUser(mt.Spec))
+	client, key, err := borrowSSHWithRetry(ctx, s.dial, host, machineSSHPort(mt.Spec), machineBootstrapUser(mt.Spec))
 	if err != nil {
 		return fmt.Errorf("install-security-packages: %w", err)
 	}
@@ -73,7 +73,7 @@ func (s *InstallPackagesStep) Execute(ctx context.Context, t scaffold.Target) er
 }
 
 func (s *InstallPackagesStep) Verify(ctx context.Context, t scaffold.Target) error {
-	mt, ok := isLinodeMachine(t.Payload)
+	mt, ok := isHostedMachine(t.Payload)
 	if !ok {
 		return fmt.Errorf("install-security-packages verify: expected *MachineTarget for %q", t.ID)
 	}
@@ -81,7 +81,7 @@ func (s *InstallPackagesStep) Verify(ctx context.Context, t scaffold.Target) err
 	if host == "" {
 		return fmt.Errorf("install-security-packages verify: no reachable host for %q", t.ID)
 	}
-	client, key, err := borrowSSH(ctx, s.dial, host, machineSSHPort(mt.Spec), machineSSHUser(mt.Spec))
+	client, key, err := borrowSSH(ctx, s.dial, host, machineSSHPort(mt.Spec), machineBootstrapUser(mt.Spec))
 	if err != nil {
 		return fmt.Errorf("install-security-packages verify: dial: %w", err)
 	}

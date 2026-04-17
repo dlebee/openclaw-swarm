@@ -9,6 +9,17 @@ type ExecutablePlan struct {
 	compiled []compiledPhase
 }
 
+// PhaseNames returns the ordered phase names in the compiled plan. Mirrors
+// Plan.PhaseNames so callers holding only the ExecutablePlan (e.g. after
+// ExecWithConfirm builds internally) can still validate phase filters.
+func (e *ExecutablePlan) PhaseNames() []string {
+	out := make([]string, 0, len(e.compiled))
+	for _, ph := range e.compiled {
+		out = append(out, ph.name)
+	}
+	return out
+}
+
 // Describe returns a plain-text outline (no ANSI) after Applicable+Check per cell.
 func (e *ExecutablePlan) Describe(ctx context.Context) (string, error) {
 	ctx = EnsurePlanCache(ctx)
