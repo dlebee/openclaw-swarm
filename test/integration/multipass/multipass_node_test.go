@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net"
+	"os"
 	"strings"
 	"testing"
 	"time"
@@ -200,6 +201,13 @@ func TestNodeSmoke(t *testing.T) {
 	dial := sshDialFunc(signer)
 
 	t.Cleanup(func() {
+		// Debug hook: if CLAWS_IT_KEEP_VMS is set, skip the
+		// cleanup sweep so a failing test leaves the VMs running
+		// for manual SSH inspection. Never set this in CI.
+		if os.Getenv("CLAWS_IT_KEEP_VMS") != "" {
+			t.Logf("CLAWS_IT_KEEP_VMS set → leaving VMs up for debug (prefix=%s)", prefix)
+			return
+		}
 		cleanupCtx, ccancel := context.WithTimeout(context.Background(), 120*time.Second)
 		defer ccancel()
 		insts, err := prov.ListByTag(cleanupCtx, "claws/"+prefix)
