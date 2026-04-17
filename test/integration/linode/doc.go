@@ -50,6 +50,17 @@
 //     proves `npm install -g openclaw` against the public registry,
 //     user-mode systemd + linger survival, and (critically) that the
 //     gateway does NOT inadvertently bind 0.0.0.0 on a public-IP VM.
+//   - TestChannelsSmoke (linode_channels_test.go): provisioning +
+//     security + gateway + channels on one instance with two
+//     telegram channels (the second one proves ensure-default-
+//     account honors ch.Default rather than falling back to first-
+//     seen). Fake bot tokens injected via t.Setenv — the channels
+//     phase writes config without hitting the Telegram API, the
+//     daemon 401s in the background. SFTP-pulls the remote
+//     ~/.openclaw/openclaw.json to assert unredacted token values
+//     against the multi-bot schema path. Re-asserts loopback bind
+//     after channels apply on a public-IP VM, which is the unique
+//     value-add over the Multipass tier.
 //   - TestMeshSmoke (linode_mesh_test.go): provisioning + security +
 //     mesh-gateway + mesh-join on three instances. Uses the default
 //     sslip.io public_hostname strategy — so this test also covers
