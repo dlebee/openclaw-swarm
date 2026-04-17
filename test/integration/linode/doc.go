@@ -24,8 +24,9 @@
 //
 // Cost envelope (g6-standard-1, us-east, ~April 2026 pricing):
 //
-//   - provisioning: 2 VMs × ~5 min = ~$0.003
-//   - security:     2 VMs × ~8 min = ~$0.005
+//   - provisioning: 2 VMs × ~5 min  = ~$0.003
+//   - security:     2 VMs × ~8 min  = ~$0.005
+//   - gateway:      1 VM  × ~10 min = ~$0.003
 //   - mesh:         3 VMs × ~12 min = ~$0.010
 //
 // Leaked VMs are the real cost risk — every test registers a cleanup
@@ -42,6 +43,13 @@
 //     security. Same outside-in SSH assertions as the Multipass tier
 //     (agent user exists, security packages installed, UFW active,
 //     fail2ban up, unattended-upgrades enabled).
+//   - TestGatewaySmoke (linode_gateway_test.go): provisioning +
+//     security + gateway on one instance. Loopback-only bind (no
+//     networking block) — mirror of the Multipass tier's
+//     TestGatewaySmoke, but on real cloud infrastructure it also
+//     proves `npm install -g openclaw` against the public registry,
+//     user-mode systemd + linger survival, and (critically) that the
+//     gateway does NOT inadvertently bind 0.0.0.0 on a public-IP VM.
 //   - TestMeshSmoke (linode_mesh_test.go): provisioning + security +
 //     mesh-gateway + mesh-join on three instances. Uses the default
 //     sslip.io public_hostname strategy — so this test also covers
