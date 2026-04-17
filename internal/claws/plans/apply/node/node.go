@@ -3,6 +3,7 @@
 package node
 
 import (
+	"context"
 	"strings"
 
 	"github.com/gluwa/openclaw-swarm2/internal/claws/plans/apply/common"
@@ -27,12 +28,35 @@ type NodeTarget struct {
 func (nt *NodeTarget) GetMachine() manifestdata.Machine { return nt.Machine }
 
 // GatewayInternalHost returns the address the node should use to connect to
-// the gateway. Prefers internal_host (Docker bridge, VPC) over host.
-func (nt *NodeTarget) GatewayInternalHost() string {
+// the gateway. Precedence:
+//
+//  1. Manifest-declared GWMach.InternalHost (explicit override — Docker
+//     bridge, VPC, bastion, etc.)
+//  2. Plan-cache mesh IP recorded by mesh.install-tailscale — required when
+//     networking.mode selects a private overlay (headscale), because
+//     openclaw's client refuses plaintext ws:// to public IPs ("SECURITY
+//     ERROR: Cannot connect over plaintext"). The tailnet address (100.x/8
+//     RFC6598) bypasses that guard AND is routable between mesh peers.
+//  3. Manifest-declared GWMach.Host (static non-Linode gateway on a private
+//     network the manifest already knows about).
+//  4. Plan-cache public host recorded by provisioning.create-machine (last
+//     resort — only works for loopback-bound gateways or when openclaw's
+//     insecure-ws guard is satisfied some other way).
+//
+// Pre-cache fallback matters for standalone gateways (BYOS hosts that
+// already have Host set in the manifest); for Linode-provisioned gateways
+// the manifest Host is empty and the plan cache is the only source of truth.
+func (nt *NodeTarget) GatewayInternalHost(ctx context.Context) string {
 	if h := strings.TrimSpace(nt.GWMach.InternalHost); h != "" {
 		return h
 	}
-	return strings.TrimSpace(nt.GWMach.Host)
+	if ip, ok := scaffold.LookupPlanMachineMeshIP(ctx, nt.GWMach.Name); ok && ip != "" {
+		return ip
+	}
+	if h := strings.TrimSpace(nt.GWMach.Host); h != "" {
+		return h
+	}
+	return common.ResolveMachineHost(ctx, nt.GWMach)
 }
 
 // BuildNodeTargets creates scaffold targets from manifest nodes, resolving

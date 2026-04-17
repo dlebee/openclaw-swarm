@@ -188,6 +188,51 @@ func ForgetPlanMachineHost(ctx context.Context, machineName string) {
 	pc.mu.Unlock()
 }
 
+func planCacheMachineMeshIPKey(machineName string) string {
+	key := normalizeMachineCacheID(machineName)
+	return fmt.Sprintf("MACHINE_%s_MESH_IP", key)
+}
+
+// RecordPlanMachineMeshIP stores the machine's mesh-local IP (e.g. the
+// tailscale IPv4 address after install-tailscale has joined the mesh). This
+// is the address downstream phases should use for inter-machine traffic when
+// networking.mode selects a private overlay — it's both routable between
+// mesh peers and accepted as "private" by openclaw's SECURITY check that
+// refuses plaintext ws:// to public IPs.
+//
+// Passing an empty ip clears the entry. Destroy flows should call
+// [ForgetPlanMachineMeshIP] explicitly.
+func RecordPlanMachineMeshIP(ctx context.Context, machineName, ip string) {
+	ip = strings.TrimSpace(ip)
+	if ip == "" {
+		ForgetPlanMachineMeshIP(ctx, machineName)
+		return
+	}
+	PlanCacheSet(ctx, planCacheMachineMeshIPKey(machineName), ip)
+}
+
+// LookupPlanMachineMeshIP returns the cached mesh IP for machineName, or
+// ("", false) if nothing has been recorded yet.
+func LookupPlanMachineMeshIP(ctx context.Context, machineName string) (string, bool) {
+	v, ok := PlanCacheGet(ctx, planCacheMachineMeshIPKey(machineName))
+	if !ok {
+		return "", false
+	}
+	s, _ := v.(string)
+	return s, true
+}
+
+// ForgetPlanMachineMeshIP removes the cached mesh IP for a machine.
+func ForgetPlanMachineMeshIP(ctx context.Context, machineName string) {
+	pc := getPlanCache(ctx)
+	if pc == nil {
+		return
+	}
+	pc.mu.Lock()
+	delete(pc.data, planCacheMachineMeshIPKey(machineName))
+	pc.mu.Unlock()
+}
+
 // normalizeMachineCacheID turns a machine / target name into the uppercase
 // underscore form used by all MACHINE_* cache keys so the key space is stable
 // regardless of the casing/dashes callers happen to use.

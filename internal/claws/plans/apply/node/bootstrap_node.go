@@ -92,7 +92,10 @@ func (s *BootstrapNodeStep) Execute(ctx context.Context, t scaffold.Target) erro
 		return fmt.Errorf("bootstrap-node: gateway token is empty (gateway not bootstrapped?)")
 	}
 
-	gwHost := nt.GatewayInternalHost()
+	gwHost := nt.GatewayInternalHost(ctx)
+	if strings.TrimSpace(gwHost) == "" {
+		return fmt.Errorf("bootstrap-node: gateway host not resolved for %q (provisioning phase must run first)", nt.GWMach.Name)
+	}
 
 	var envPrefix string
 	if gwService.NeedsInsecureWS(nt.Gateway) {
@@ -152,8 +155,9 @@ func (s *BootstrapNodeStep) Verify(ctx context.Context, t scaffold.Target) error
 	if err != nil || strings.Contains(out, "(not found)") {
 		return fmt.Errorf("bootstrap-node verify: openclaw-node.service not found")
 	}
-	if !strings.Contains(out, nt.GatewayInternalHost()) {
-		return fmt.Errorf("bootstrap-node verify: unit does not reference gateway host %q", nt.GatewayInternalHost())
+	gwHost := nt.GatewayInternalHost(ctx)
+	if !strings.Contains(out, gwHost) {
+		return fmt.Errorf("bootstrap-node verify: unit does not reference gateway host %q", gwHost)
 	}
 	return nil
 }

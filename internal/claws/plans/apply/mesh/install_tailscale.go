@@ -35,7 +35,15 @@ func (s *InstallTailscaleStep) Check(ctx context.Context, t scaffold.Target) (bo
 	}
 	defer common.ReturnSSH(ctx, key, client)
 
-	return TailscaleIP(client) != "", nil
+	ip := TailscaleIP(client)
+	if ip == "" {
+		return false, nil
+	}
+	// Re-populate the plan cache on idempotent runs where Execute is skipped
+	// because tailscale is already joined. Downstream phases (node
+	// bootstrap) depend on this being set.
+	scaffold.RecordPlanMachineMeshIP(ctx, m.Name, ip)
+	return true, nil
 }
 
 func (s *InstallTailscaleStep) Execute(ctx context.Context, t scaffold.Target) error {
@@ -111,10 +119,27 @@ tailscale ip -4
 		return fmt.Errorf("install-tailscale on %s: %w", m.Name, err)
 	}
 
-	ip := strings.TrimSpace(out)
+	// `tailscale ip -4` can return multiple lines when the node has more than
+	// one tailnet address (rare but possible). Take the first non-empty line.
+	var ip string
+	for _, line := range strings.Split(strings.TrimSpace(out), "\n") {
+		if line = strings.TrimSpace(line); line != "" {
+			ip = line
+			break
+		}
+	}
 	if ip == "" {
 		return fmt.Errorf("install-tailscale on %s: tailscale ip -4 returned empty", m.Name)
 	}
+
+	// Expose the mesh-local IP to downstream phases (node.bootstrap-node uses
+	// this to tell the node daemon which gateway address to dial). The
+	// tailnet address is both routable between mesh peers AND accepted as
+	// "private" by openclaw's security check that rejects plaintext ws:// to
+	// public IPs — bootstrap-node would otherwise install a unit that
+	// refuses to start with "SECURITY ERROR: Cannot connect over plaintext
+	// ws://".
+	scaffold.RecordPlanMachineMeshIP(ctx, m.Name, ip)
 	return nil
 }
 
