@@ -1,0 +1,48 @@
+# Linode provisioning smoke-test manifest.
+#
+# Two `type: linode` machines. No gateway, no node, no automations —
+# TestProvisioningSmoke runs ONLY the provisioning phase of the apply
+# plan, so everything past create-machine / authorize-ssh-key /
+# ensure-agent-user is out of scope and doesn't need to appear here.
+#
+# Why g6-standard-1 instead of the cheaper g6-nanode-1:
+#
+#   The subsequent security test apt-installs fail2ban + unattended
+#   -upgrades + ufw on the same fixture shape; nanodes (1 vCPU / 1 GiB)
+#   complete that but with noticeable swap pressure. Standard-1
+#   (1 vCPU / 2 GiB, ~$0.015/hr) keeps the cost envelope in the single
+#   pennies per run while giving apt room to breathe. All three Linode
+#   tests share this SKU so their fixtures stay mechanically similar.
+#
+# `prefix` is overridden at runtime by the harness to avoid label
+# collisions between parallel runs; the fixture value is only used
+# outside the harness (manual lint, manifest pretty-print). The
+# harness also truncates labels to Linode's 64-char limit — see
+# machineLabel in internal/claws/plans/apply/provisioning.
+#
+# bootstrap_user = root matches the out-of-the-box state of Linode's
+# Ubuntu 24.04 image: authorized_keys seeded by the CreateInstance API
+# land in /root/.ssh/authorized_keys, and sshd ships with
+# PermitRootLogin=prohibit-password so key-only root SSH works
+# immediately. agent_user = agent then forces ensure-agent-user to
+# actually run useradd (same code path the Multipass security test
+# exercises — keeping the two tiers symmetrical).
+
+prefix: claws-it-linode
+
+machines:
+  - name: gateway-host
+    type: linode
+    sku: g6-standard-1
+    image: linode/ubuntu24.04
+    region: us-east
+    bootstrap_user: root
+    agent_user: agent
+
+  - name: node-host
+    type: linode
+    sku: g6-standard-1
+    image: linode/ubuntu24.04
+    region: us-east
+    bootstrap_user: root
+    agent_user: agent
