@@ -129,7 +129,7 @@ func (p *Provider) CreateInstance(ctx context.Context, opts hosting.CreateInstan
 	}
 	args = append(args, image)
 
-	seed := buildCloudInit(opts.PublicKeys)
+	seed := buildCloudInit(opts.PublicKeys, opts.BootstrapUser, opts.Hostname)
 	if _, err := p.runner.Run(ctx, strings.NewReader(seed), args...); err != nil {
 		return nil, fmt.Errorf("multipass launch %s: %w", label, err)
 	}

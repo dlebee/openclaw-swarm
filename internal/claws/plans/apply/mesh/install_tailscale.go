@@ -81,6 +81,10 @@ echo "container-skip-join"
 	if authKey == "" {
 		return fmt.Errorf("install-tailscale: preauth key not resolved")
 	}
+	// Strip scheme/port to get the bare hostname we'll seed into /etc/hosts
+	// below. HostnameFromControlURL handles http://host:port, https://host/,
+	// and raw host:port forms uniformly.
+	controlHost := HostnameFromControlURL(controlURL)
 
 	var ufwExtra string
 	if mt.IsGatewayHost {
@@ -90,10 +94,41 @@ sudo ufw allow 443/tcp comment 'caddy-https' >/dev/null 2>&1 || true
 `
 	}
 
+	// tailscaled is a static Go binary built with netgo — its resolver
+	// reads /etc/resolv.conf and /etc/hosts directly but does NOT consult
+	// libnss_* plugins. That matters when the control URL is an mDNS name
+	// like `gateway-host.local`: libc-backed tools (curl, ssh, getent)
+	// resolve it fine through nss_mdns, but tailscaled sees "no DNS
+	// fallback candidates remain" and blocks `tailscale up` forever.
+	//
+	// Workaround: before `tailscale up`, pin the control-URL host in
+	// /etc/hosts using whatever NSS can currently resolve. `getent hosts`
+	// hits the same search chain libc does (files → mdns → dns), so it
+	// picks up the Avahi announcement even though tailscaled can't.
+	//
+	//   - If getent finds nothing, the script leaves /etc/hosts alone and
+	//     `tailscale up` will fall back to its usual DNS path. On Linode
+	//     the hostname is already in public DNS, so that's fine.
+	//   - If /etc/hosts already has a line for this host, we leave it:
+	//     production hostnames may be present from user-managed /etc/hosts,
+	//     and we don't want to shadow them.
+	//   - The grep pattern is anchored to tab/space-separated tokens so we
+	//     don't false-positive on `gateway-host` when looking for
+	//     `gateway-host.local`.
+	pinHostsSnippet := fmt.Sprintf(`
+CTRL_HOST=%q
+if [ -n "$CTRL_HOST" ] && ! grep -qE "[[:space:]]${CTRL_HOST}([[:space:]]|$)" /etc/hosts; then
+  IP="$(getent hosts "$CTRL_HOST" 2>/dev/null | awk '{print $1}' | head -n1 || true)"
+  if [ -n "$IP" ]; then
+    echo "$IP $CTRL_HOST" | sudo tee -a /etc/hosts >/dev/null
+  fi
+fi
+`, controlHost)
+
 	script := fmt.Sprintf(`set -euo pipefail
 export DEBIAN_FRONTEND=noninteractive
 sudo ufw allow 41641/udp comment 'tailscale' >/dev/null 2>&1 || true
-%sif ! command -v tailscale >/dev/null 2>&1; then
+%s%sif ! command -v tailscale >/dev/null 2>&1; then
   curl -fsSL https://tailscale.com/install.sh | sh
 fi
 # Ensure tailscaled is running before calling tailscale up.
@@ -112,7 +147,7 @@ done
 sudo tailscale up --login-server=%q --authkey=%q --accept-dns=false
 sudo ufw allow in on tailscale0 >/dev/null 2>&1 || true
 tailscale ip -4
-`, ufwExtra, controlURL, authKey)
+`, ufwExtra, pinHostsSnippet, controlURL, authKey)
 
 	out, err := common.RunBashOutputWithRetry(ctx, s.dial, host, port, user, script)
 	if err != nil {

@@ -109,6 +109,14 @@ func (a *CreateMachineStep) Execute(ctx context.Context, t scaffold.Target) erro
 		Image:      spec.Image,
 		Tags:       []string{clawsPrefixTag(a.prefix), machineTag(a.prefix, spec.Name)},
 		PublicKeys: []string{a.sshPubKey},
+		// BootstrapUser tells the provider where PublicKeys need to land
+		// in the fresh image (see docs on hosting.CreateInstanceOpts).
+		// Empty manifest value resolves to "root" inside the provider.
+		BootstrapUser: strings.TrimSpace(spec.BootstrapUser),
+		// Hostname is the manifest's short machine name. Multipass sets
+		// it via cloud-init so peers can dial `<name>.local` through
+		// Avahi without a dynamic IP lookup; Linode ignores the field.
+		Hostname: strings.TrimSpace(spec.Name),
 		// Linode-specific.
 		Region:   spec.Region,
 		SKU:      spec.SKU,

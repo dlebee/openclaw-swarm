@@ -237,14 +237,125 @@ func TestProvider_Kind(t *testing.T) {
 	}
 }
 
-func TestBuildCloudInit_includesKeysAndHeader(t *testing.T) {
-	out := buildCloudInit([]string{"ssh-ed25519 AAA one", " ", "ssh-ed25519 BBB two"})
+func TestBuildCloudInit_ubuntuPath_includesKeysAndHeader(t *testing.T) {
+	// Default / ubuntu bootstrap, no hostname: keys land only on the
+	// cloud-image default user; root-specific hardening escape hatches
+	// stay off; mDNS/hostname machinery stays off.
+	out := buildCloudInit(
+		[]string{"ssh-ed25519 AAA one", " ", "ssh-ed25519 BBB two"},
+		"ubuntu",
+		"",
+	)
 	if !strings.HasPrefix(out, "#cloud-config\n") {
 		t.Errorf("missing #cloud-config header: %q", out)
 	}
 	for _, want := range []string{"ssh-ed25519 AAA one", "ssh-ed25519 BBB two", "users:", "default"} {
 		if !strings.Contains(out, want) {
 			t.Errorf("missing %q in:\n%s", want, out)
+		}
+	}
+	for _, disallow := range []string{"disable_root", "write_files", "/root/.ssh", "hostname:", "avahi-daemon", "runcmd:"} {
+		if strings.Contains(out, disallow) {
+			t.Errorf("ubuntu path must not emit %q:\n%s", disallow, out)
+		}
+	}
+}
+
+func TestBuildCloudInit_rootPath_enablesRootSSHAndSeedsRootKeys(t *testing.T) {
+	// Root bootstrap, no hostname: (1) disable_root: false so cloud-init
+	// doesn't lock root out, (2) a write_files block installing the keys
+	// into /root/.ssh/authorized_keys, (3) a runcmd chmod to bring the
+	// parent dir down to 0700 so sshd's StrictModes accepts it. Must
+	// still NOT install avahi — mDNS machinery is tied to the hostname
+	// input, not the bootstrap user.
+	out := buildCloudInit(
+		[]string{"ssh-ed25519 ROOTKEY label"},
+		"root",
+		"",
+	)
+	if !strings.HasPrefix(out, "#cloud-config\n") {
+		t.Errorf("missing #cloud-config header: %q", out)
+	}
+	for _, want := range []string{
+		"disable_root: false",
+		"write_files:",
+		"/root/.ssh/authorized_keys",
+		"permissions: '0600'",
+		"runcmd:",
+		"/root/.ssh",
+		"ssh-ed25519 ROOTKEY label",
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("missing %q in:\n%s", want, out)
+		}
+	}
+	for _, disallow := range []string{"hostname:", "avahi-daemon", "5353/udp"} {
+		if strings.Contains(out, disallow) {
+			t.Errorf("no-hostname root path must not emit %q:\n%s", disallow, out)
+		}
+	}
+}
+
+func TestBuildCloudInit_emptyBootstrapUser_keepsUbuntuPath(t *testing.T) {
+	// Empty string is the wire default for Linode callers (who don't care
+	// about this opt). It must behave like "ubuntu": no root-specific
+	// escape hatches.
+	out := buildCloudInit([]string{"ssh-ed25519 AAA one"}, "", "")
+	if strings.Contains(out, "disable_root") || strings.Contains(out, "write_files") {
+		t.Errorf("empty bootstrapUser must not trigger root path:\n%s", out)
+	}
+}
+
+func TestBuildCloudInit_hostnamePath_setsHostnameAndInstallsAvahi(t *testing.T) {
+	// With a hostname, cloud-init must (a) pin the VM's short hostname +
+	// FQDN so uname -n is predictable, (b) install avahi-daemon +
+	// libnss-mdns so peers can resolve `<hostname>.local` both ways,
+	// (c) stage a ufw rule for UDP 5353 so the later security-phase
+	// `ufw --force enable` doesn't black-hole multicast.
+	out := buildCloudInit(
+		[]string{"ssh-ed25519 AAA one"},
+		"ubuntu",
+		"gateway-host",
+	)
+	for _, want := range []string{
+		"hostname: gateway-host",
+		"fqdn: gateway-host.local",
+		"manage_etc_hosts: true",
+		"packages:",
+		"- avahi-daemon",
+		"- libnss-mdns",
+		"runcmd:",
+		"[ systemctl, enable, --now, avahi-daemon ]",
+		"[ ufw, allow, 5353/udp, comment, 'mdns' ]",
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("missing %q in:\n%s", want, out)
+		}
+	}
+}
+
+func TestBuildCloudInit_hostnameAndRoot_singleRuncmdBlock(t *testing.T) {
+	// When both the hostname path and the root path emit runcmd entries,
+	// they must share a single `runcmd:` block — two sibling keys with
+	// the same name is invalid YAML and cloud-init would reject the
+	// whole document, silently falling back to defaults (which on the
+	// root path means a locked-out root account).
+	out := buildCloudInit(
+		[]string{"ssh-ed25519 ROOTKEY label"},
+		"root",
+		"gateway-host",
+	)
+	if got := strings.Count(out, "\nruncmd:\n"); got != 1 {
+		t.Fatalf("expected exactly one `runcmd:` block, got %d in:\n%s", got, out)
+	}
+	// Both feature branches' commands must appear under that single
+	// block — spot-check one entry from each.
+	for _, want := range []string{
+		"[ systemctl, enable, --now, avahi-daemon ]",
+		"[ chmod, '0700', /root/.ssh ]",
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("missing %q in merged runcmd:\n%s", want, out)
 		}
 	}
 }
