@@ -3,6 +3,7 @@ package mesh
 import (
 	"context"
 	"fmt"
+	"net"
 	"strings"
 
 	"github.com/gluwa/openclaw-swarm2/internal/claws/plans/apply/common"
@@ -154,17 +155,29 @@ tailscale ip -4
 		return fmt.Errorf("install-tailscale on %s: %w", m.Name, err)
 	}
 
-	// `tailscale ip -4` can return multiple lines when the node has more than
-	// one tailnet address (rare but possible). Take the first non-empty line.
+	// The bash script above emits earlier tooling output (ufw, curl | sh
+	// installer banner, tailscale up progress) BEFORE the final
+	// `tailscale ip -4` line, so we can't just take the first line. Walk
+	// the output in reverse and pick the last line that parses as a valid
+	// IPv4 address — that's the tailnet address the installer printed
+	// last. This also tolerates multi-IP nodes: the first tailnet IP is
+	// the canonical one and gets printed last by `tailscale ip -4` as the
+	// bottom-most address.
 	var ip string
-	for _, line := range strings.Split(strings.TrimSpace(out), "\n") {
-		if line = strings.TrimSpace(line); line != "" {
-			ip = line
+	lines := strings.Split(strings.TrimSpace(out), "\n")
+	for i := len(lines) - 1; i >= 0; i-- {
+		candidate := strings.TrimSpace(lines[i])
+		if candidate == "" {
+			continue
+		}
+		parsed := net.ParseIP(candidate)
+		if parsed != nil && parsed.To4() != nil {
+			ip = candidate
 			break
 		}
 	}
 	if ip == "" {
-		return fmt.Errorf("install-tailscale on %s: tailscale ip -4 returned empty", m.Name)
+		return fmt.Errorf("install-tailscale on %s: no IPv4 address in output:\n%s", m.Name, out)
 	}
 
 	// Expose the mesh-local IP to downstream phases (node.bootstrap-node uses
