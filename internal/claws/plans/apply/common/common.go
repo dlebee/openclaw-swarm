@@ -71,12 +71,32 @@ func MachineSSHPort(m manifestdata.Machine) int {
 	return m.SSHPort
 }
 
+// MachineSSHUser returns the user that post-provisioning steps dial the
+// machine as. Precedence:
+//
+//  1. Explicit SSHUser override (rare — power users who want a specific login)
+//  2. AgentUser (the default for normal operations; created by
+//     provisioning.EnsureAgentUser and granted passwordless sudo)
+//  3. "root" (fallback when the manifest opted out of an agent user)
+//
+// Using the agent user by default is important because it's the only
+// non-system account that ensure-agent-user runs `loginctl enable-linger`
+// for. Services registered under the agent user's systemd manager therefore
+// survive the SSH session disconnecting; root's user manager does not by
+// default, which previously killed the openclaw node daemon immediately
+// after bootstrap-node finished (breaking pair-node).
+//
+// Provisioning steps (create-machine, authorize-ssh-key, ensure-agent-user)
+// intentionally bypass this helper and always dial as the raw login user
+// (root on a fresh Linode) — the agent user doesn't exist yet.
 func MachineSSHUser(m manifestdata.Machine) string {
-	u := strings.TrimSpace(m.SSHUser)
-	if u == "" {
-		return "root"
+	if u := strings.TrimSpace(m.SSHUser); u != "" {
+		return u
 	}
-	return u
+	if u := strings.TrimSpace(m.AgentUser); u != "" {
+		return u
+	}
+	return "root"
 }
 
 func BorrowSSH(ctx context.Context, dial SSHDialFunc, host string, port int, user string) (*xssh.Client, string, error) {

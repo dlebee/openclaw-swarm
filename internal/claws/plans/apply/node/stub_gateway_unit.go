@@ -89,7 +89,12 @@ func (s *StubGatewayUnitStep) Execute(ctx context.Context, t scaffold.Target) er
 	}
 	defer common.ReturnSSH(ctx, key, client)
 
+	// XDG_RUNTIME_DIR is not set on non-interactive SSH sessions, but
+	// `systemctl --user` refuses to talk to the user manager without it.
+	// linger (enabled for the agent user by ensure-agent-user) keeps
+	// /run/user/<uid> populated, so exporting it explicitly is safe.
 	script := fmt.Sprintf(`set -euo pipefail
+export XDG_RUNTIME_DIR=/run/user/$(id -u)
 mkdir -p ~/.config/systemd/user
 cat > ~/.config/systemd/user/openclaw-gateway.service <<'OPENCLAW_GATEWAY_STUB_EOF'
 %sOPENCLAW_GATEWAY_STUB_EOF

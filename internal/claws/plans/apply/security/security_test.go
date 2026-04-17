@@ -159,15 +159,22 @@ func TestMachineSSHPort_custom(t *testing.T) {
 	}
 }
 
-func TestMachineSSHUser_default(t *testing.T) {
+func TestMachineSSHUser_defaultsToRootWhenNoAgent(t *testing.T) {
 	if got := machineSSHUser(manifestdata.Machine{}); got != "root" {
 		t.Fatalf("machineSSHUser = %q, want root", got)
 	}
 }
 
-func TestMachineSSHUser_custom(t *testing.T) {
-	if got := machineSSHUser(manifestdata.Machine{SSHUser: "deploy"}); got != "deploy" {
-		t.Fatalf("machineSSHUser = %q, want deploy", got)
+func TestMachineSSHUser_prefersAgentUserOverRoot(t *testing.T) {
+	if got := machineSSHUser(manifestdata.Machine{AgentUser: "agent"}); got != "agent" {
+		t.Fatalf("machineSSHUser = %q, want agent (agent_user should win over root default)", got)
+	}
+}
+
+func TestMachineSSHUser_sshUserOverridesAgentUser(t *testing.T) {
+	m := manifestdata.Machine{SSHUser: "deploy", AgentUser: "agent"}
+	if got := machineSSHUser(m); got != "deploy" {
+		t.Fatalf("machineSSHUser = %q, want deploy (explicit ssh_user should win)", got)
 	}
 }
 

@@ -6,6 +6,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/gluwa/openclaw-swarm2/internal/claws/plans/apply/common"
 	"github.com/gluwa/openclaw-swarm2/internal/claws/plans/apply/provisioning"
 	manifestdata "github.com/gluwa/openclaw-swarm2/internal/manifests/data"
 	clawssh "github.com/gluwa/openclaw-swarm2/internal/ssh"
@@ -81,10 +82,9 @@ func machineSSHPort(m manifestdata.Machine) int {
 	return m.SSHPort
 }
 
+// machineSSHUser delegates to common.MachineSSHUser so the mesh phase
+// follows the same SSHUser → AgentUser → root precedence as the rest of
+// the apply plan. Install scripts in this package are sudo-prefixed.
 func machineSSHUser(m manifestdata.Machine) string {
-	u := strings.TrimSpace(m.SSHUser)
-	if u == "" {
-		return "root"
-	}
-	return u
+	return common.MachineSSHUser(m)
 }

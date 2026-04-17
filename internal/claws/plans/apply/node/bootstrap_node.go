@@ -99,7 +99,11 @@ func (s *BootstrapNodeStep) Execute(ctx context.Context, t scaffold.Target) erro
 		envPrefix = "OPENCLAW_ALLOW_INSECURE_PRIVATE_WS=1 "
 	}
 
+	// `openclaw node install` invokes `systemctl --user enable` internally,
+	// which requires XDG_RUNTIME_DIR on non-interactive SSH sessions.
+	// linger (enabled by ensure-agent-user) keeps /run/user/<uid> alive.
 	script := fmt.Sprintf(`set -euo pipefail
+export XDG_RUNTIME_DIR=/run/user/$(id -u)
 export OPENCLAW_GATEWAY_TOKEN=%q
 %sopenclaw node install --host %q --port 18789 --display-name %q --runtime node --force
 `, token, envPrefix, gwHost, nt.Spec.Name)

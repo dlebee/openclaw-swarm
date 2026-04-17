@@ -5,7 +5,6 @@ package gateway
 import (
 	"context"
 	"fmt"
-	"strings"
 	"time"
 
 	"github.com/gluwa/openclaw-swarm2/internal/claws/plans/apply/common"
@@ -99,12 +98,11 @@ func machineSSHPort(m manifestdata.Machine) int {
 	return m.SSHPort
 }
 
+// machineSSHUser delegates to common.MachineSSHUser so the gateway phase
+// follows the same SSHUser → AgentUser → root precedence as the rest of
+// the apply plan.
 func machineSSHUser(m manifestdata.Machine) string {
-	u := strings.TrimSpace(m.SSHUser)
-	if u == "" {
-		return "root"
-	}
-	return u
+	return common.MachineSSHUser(m)
 }
 
 func borrowSSH(ctx context.Context, dial SSHDialFunc, host string, port int, user string) (*xssh.Client, string, error) {

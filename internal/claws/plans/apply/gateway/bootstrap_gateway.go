@@ -95,7 +95,11 @@ func (s *BootstrapGatewayStep) Execute(ctx context.Context, t scaffold.Target) e
 		envPrefix = "OPENCLAW_ALLOW_INSECURE_PRIVATE_WS=1 "
 	}
 
+	// `--install-daemon` invokes `systemctl --user enable` internally, which
+	// needs XDG_RUNTIME_DIR on non-interactive SSH sessions. linger (enabled
+	// by ensure-agent-user) keeps /run/user/<uid> populated.
 	script := fmt.Sprintf(`set -euo pipefail
+export XDG_RUNTIME_DIR=/run/user/$(id -u)
 %sopenclaw onboard --non-interactive --mode local --auth-choice skip \
   --gateway-bind %s --gateway-token %q \
   --install-daemon --skip-health --accept-risk --json

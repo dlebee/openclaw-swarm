@@ -45,3 +45,35 @@ func TestResolveMachineHost_linodeMissingCache(t *testing.T) {
 		t.Fatalf("want empty host for unresolved Linode, got %q", got)
 	}
 }
+
+func TestMachineSSHUser_defaultsToRootWhenNoAgentUser(t *testing.T) {
+	if got := MachineSSHUser(manifestdata.Machine{}); got != "root" {
+		t.Fatalf("MachineSSHUser = %q, want root", got)
+	}
+}
+
+func TestMachineSSHUser_prefersAgentUserOverRoot(t *testing.T) {
+	// This is the core architectural rule: post-provisioning steps dial
+	// as the agent user by default, not root, so user-level systemd
+	// services (openclaw-node, openclaw-gateway) are registered under
+	// an account that has linger enabled.
+	m := manifestdata.Machine{AgentUser: "agent"}
+	if got := MachineSSHUser(m); got != "agent" {
+		t.Fatalf("MachineSSHUser = %q, want agent", got)
+	}
+}
+
+func TestMachineSSHUser_explicitSSHUserWins(t *testing.T) {
+	m := manifestdata.Machine{SSHUser: "deploy", AgentUser: "agent"}
+	if got := MachineSSHUser(m); got != "deploy" {
+		t.Fatalf("MachineSSHUser = %q, want deploy (ssh_user override)", got)
+	}
+}
+
+func TestMachineSSHUser_rootAgentUserStillRoot(t *testing.T) {
+	// Users who explicitly want root for everything can set agent_user: root.
+	m := manifestdata.Machine{AgentUser: "root"}
+	if got := MachineSSHUser(m); got != "root" {
+		t.Fatalf("MachineSSHUser = %q, want root", got)
+	}
+}

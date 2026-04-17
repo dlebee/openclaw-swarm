@@ -7,6 +7,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/gluwa/openclaw-swarm2/internal/claws/plans/apply/common"
 	"github.com/gluwa/openclaw-swarm2/internal/claws/plans/apply/provisioning"
 	manifestdata "github.com/gluwa/openclaw-swarm2/internal/manifests/data"
 	"github.com/gluwa/openclaw-swarm2/internal/platformutil/systemd"
@@ -84,12 +85,13 @@ func machineSSHPort(m manifestdata.Machine) int {
 	return m.SSHPort
 }
 
+// machineSSHUser delegates to common.MachineSSHUser so the security phase
+// follows the same precedence (SSHUser → AgentUser → root) as the rest of
+// the apply plan. Security steps run after provisioning.ensure-agent-user
+// has created the agent user, and all privileged commands in this phase
+// (apt-get, systemctl, ufw) are already sudo-prefixed via platformutil.
 func machineSSHUser(m manifestdata.Machine) string {
-	u := strings.TrimSpace(m.SSHUser)
-	if u == "" {
-		return "root"
-	}
-	return u
+	return common.MachineSSHUser(m)
 }
 
 const (
