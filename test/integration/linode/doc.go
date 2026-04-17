@@ -27,6 +27,8 @@
 //   - provisioning: 2 VMs × ~5 min  = ~$0.003
 //   - security:     2 VMs × ~8 min  = ~$0.005
 //   - gateway:      1 VM  × ~10 min = ~$0.003
+//   - channels:     1 VM  × ~10 min = ~$0.003
+//   - node:         2 VMs × ~15 min = ~$0.008
 //   - mesh:         3 VMs × ~12 min = ~$0.010
 //
 // Leaked VMs are the real cost risk — every test registers a cleanup
@@ -61,6 +63,20 @@
 //     against the multi-bot schema path. Re-asserts loopback bind
 //     after channels apply on a public-IP VM, which is the unique
 //     value-add over the Multipass tier.
+//   - TestNodeSmoke (linode_node_test.go): provisioning + security +
+//     mesh-gateway + mesh-join + gateway + node on two instances
+//     (one gateway, one node) running the production shape:
+//     headscale mode with sslip public hostnames. The first test in
+//     this tier that combines mesh + gateway + node in a single
+//     apply — the same pipeline army.yml / david-army.yml drive in
+//     production. Asserts the node's openclaw-node.service unit
+//     references the gateway's TAILNET IP (recorded by install-
+//     tailscale into the plan cache, picked up by NodeTarget.
+//     GatewayInternalHost's mesh-IP fallback), NOT the public IP —
+//     a regression in either step would show up here directly.
+//     Exercises the install-caddy + Let's Encrypt path which the
+//     Multipass tier can't. Fixture omits exec_policy to cover the
+//     ExecPolicyStep.Applicable=false skip path.
 //   - TestMeshSmoke (linode_mesh_test.go): provisioning + security +
 //     mesh-gateway + mesh-join on three instances. Uses the default
 //     sslip.io public_hostname strategy — so this test also covers

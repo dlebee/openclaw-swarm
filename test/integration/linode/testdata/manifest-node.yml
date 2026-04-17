@@ -1,0 +1,87 @@
+# Linode provisioning + security + mesh + gateway + node smoke-test manifest.
+#
+# Mirror of the Multipass tier's manifest-node.yml, swapped for Linode
+# machine specs (sku / image / region) and for the production
+# public_hostname strategy (sslip). Two machines, one headscale-meshed
+# gateway, one node. Runs the whole production pipeline end-to-end on
+# real cloud infrastructure: provisioning → security → mesh-gateway
+# (with install-caddy + Let's Encrypt) → mesh-join → gateway → node.
+#
+# Why mesh (not mode: docker):
+#
+#   An earlier iteration tried `mode: docker` to skip the mesh phase.
+#   That would have been a shortcut-test, not the production shape.
+#   Every deployed claws system (army.yml, david-army.yml) runs its
+#   gateway + nodes over headscale; a node test that sidesteps the
+#   mesh path exercises a topology nobody actually uses. Running mesh
+#   here means:
+#     - install-caddy + Let's Encrypt ACME for the headscale HTTPS
+#       endpoint (only available on a real public IP)
+#     - headscale-over-HTTPS (matches production traffic, not just
+#       plain http://)
+#     - The node's openclaw-node.service unit references the
+#       gateway's TAILNET IP (100.64.x.y) — recorded into the plan
+#       cache by install-tailscale, pulled out by NodeTarget.
+#       GatewayInternalHost. That's the production code path.
+#
+# About the control URL:
+#
+#   strategy: sslip resolves at apply time to
+#   https://gateway.<dashed-public-ip>.sslip.io — same flow
+#   manifest-mesh.yml uses and same flow david-army.yml uses in
+#   production. The gateway VM asks icanhazip.com for its own IP,
+#   the mesh phase dash-encodes it, glues on .sslip.io, and Caddy
+#   presents a Let's Encrypt cert for that hostname. See
+#   resolveControlURL in internal/claws/plans/apply/mesh/
+#   control_url.go.
+#
+# Why no `exec_policy:` on the node:
+#
+#   Identical reasoning to the Multipass tier — exec_policy is the
+#   node-side gate for agent-dispatched exec calls (see
+#   docs/missconceptions/exec-policy.md). With no agents in this
+#   manifest, the policy is dormant config. Omitting it exercises
+#   the ExecPolicyStep.Applicable=false skip path in the scaffold
+#   executor — the exact code path any user who doesn't declare a
+#   policy would hit.
+#
+# Why g6-standard-1 × 2 (not g6-nanode-1):
+#
+#   `npm install -g openclaw` + first TypeScript compile peak ~900
+#   MB RSS on a cold cache — nanodes (1 GiB) OOM reproducibly.
+#   Standard-1 matches every other fixture in this tier so the
+#   mechanical shape stays uniform; cost envelope is pennies either
+#   way.
+
+prefix: claws-it-linode-node
+
+machines:
+  - name: gateway-host
+    type: linode
+    sku: g6-standard-1
+    image: linode/ubuntu24.04
+    region: us-east
+    bootstrap_user: root
+    agent_user: agent
+  - name: node-host
+    type: linode
+    sku: g6-standard-1
+    image: linode/ubuntu24.04
+    region: us-east
+    bootstrap_user: root
+    agent_user: agent
+
+gateways:
+  - name: gateway
+    reference: gateway-host
+    networking:
+      mode: headscale
+      public_hostname:
+        strategy: sslip
+      preauth_key_source: file
+      preauth_key_file: /var/lib/claws/headscale/preauth.key
+
+nodes:
+  - name: worker-node
+    gateway: gateway
+    reference: node-host

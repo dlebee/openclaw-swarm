@@ -1,0 +1,98 @@
+# Multipass provisioning + security + mesh + gateway + node smoke-test manifest.
+#
+# Two machines, one headscale-meshed gateway, one node. Exercises the
+# node phase end-to-end (install-nodejs + install-openclaw +
+# stub-gateway-unit + bootstrap-node + configure-node + pair-node) on
+# top of a real tailnet so the node-to-gateway dial happens through
+# the mesh (100.64.0.0/10) rather than the Multipass bridge. This is
+# the production shape: every deployed claws system (army.yml,
+# david-army.yml) puts the gateway + nodes behind headscale; running
+# the node test on anything else would exercise a shape that doesn't
+# match how operators actually deploy.
+#
+# Why mesh (not mode: docker):
+#
+#   An earlier iteration of this fixture used `networking.mode: docker`
+#   as a shortcut — it flips NeedsLANBind + NeedsInsecureWS (same
+#   three modes do) without pulling in headscale/caddy/tailscale. But
+#   that means the gateway phase + node phase would exercise the
+#   cross-VM dial over the Multipass bridge's LAN IP, which is a
+#   topology no real deployment uses. If install-tailscale or
+#   GatewayInternalHost's plan-cache mesh-IP fallback ever regresses,
+#   the docker-shortcut version would keep passing because it never
+#   touched either code path. Running mesh here means the node's
+#   openclaw-node.service unit references the gateway's TAILNET IP
+#   (100.64.x.y), recorded into the plan cache by install-tailscale
+#   and pulled out by NodeTarget.GatewayInternalHost — exactly the
+#   production path.
+#
+# About the control URL:
+#
+#   strategy: custom + http://gateway-host.local:8080 mirrors
+#   manifest-mesh.yml. See that fixture's header for the full
+#   rationale; short version: the provisioning phase pins each VM's
+#   mDNS hostname via cloud-init so peer VMs can resolve
+#   `gateway-host.local` → gateway's bridge IP without any runtime
+#   IP discovery or manifest templating. http:// (no Caddy / no
+#   ACME) is the simplest possible control URL; TLS + Let's Encrypt
+#   only makes sense with a public IP, which Multipass doesn't have.
+#
+# preauth_key_source: file with a path that doesn't exist yet tells
+# resolve-preauth-key to auto-generate a key via the headscale CLI on
+# the gateway (see createPreauthKeyOnGateway in
+# internal/claws/plans/apply/mesh/preauth_key.go). No secrets in the
+# fixture, nothing to wire up in CI.
+#
+# Why no `exec_policy:` on the node:
+#
+#   exec_policy is the node-side gate for agent-dispatched exec
+#   calls (see docs/missconceptions/exec-policy.md). With no agents
+#   in this manifest, nothing ever dispatches to the node, so the
+#   policy would be dormant config. Omitting it exercises the
+#   ExecPolicyStep.Applicable=false skip path in the scaffold
+#   executor — exactly the code path any user who doesn't declare a
+#   policy would hit. Production manifests (army.yml) DO set it,
+#   and TestAgentsSmoke will exercise the Applicable=true branch
+#   when it's added.
+#
+# Why 2 CPUs / 2 GiB / 8 GiB disk per VM:
+#
+#   `npm install -g openclaw` + first TypeScript compile OOMs on the
+#   1 GiB/1 CPU shape that the mesh test uses, because the mesh test
+#   never runs the gateway/node phases. Here we do, so we match the
+#   channels/gateway envelope instead. 8 GiB disk easily fits apt
+#   cache + node_modules + journal + tailscale state.
+
+prefix: claws-it-multipass-node
+
+machines:
+  - name: gateway-host
+    type: multipass
+    cpus: 2
+    memory: 2G
+    disk: 8G
+    bootstrap_user: root
+    agent_user: agent
+  - name: node-host
+    type: multipass
+    cpus: 2
+    memory: 2G
+    disk: 8G
+    bootstrap_user: root
+    agent_user: agent
+
+gateways:
+  - name: gateway
+    reference: gateway-host
+    networking:
+      mode: headscale
+      public_hostname:
+        strategy: custom
+        host: "http://gateway-host.local:8080"
+      preauth_key_source: file
+      preauth_key_file: /var/lib/claws/headscale/preauth.key
+
+nodes:
+  - name: worker-node
+    gateway: gateway
+    reference: node-host
