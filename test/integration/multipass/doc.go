@@ -22,4 +22,13 @@
 //     apply plan, and asserts the resulting VM is Running with an IPv4.
 //     Tears down via the same provider's DeleteInstance path so the
 //     destroy flow is covered too.
+//
+// Other tests (see the corresponding file for full header docs):
+// TestSecuritySmoke, TestMeshSmoke, TestGatewaySmoke, TestChannelsSmoke,
+// TestNodeSmoke, TestAgentsSmoke, TestCronAgentWithNodeExec. The last one
+// is the fullest-stack exercise in the tier: provisioning + security +
+// mesh + gateway + node + agents, then post-apply installs Ollama on the
+// gateway VM, pulls qwen2.5:0.5b, registers an every-5s cron job, and
+// asserts at least two scheduler runs fire with status=ok — proving the
+// end-to-end cron → isolated agent → LLM → exec-over-tailnet-ws pipeline.
 package multipass
