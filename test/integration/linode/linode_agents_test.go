@@ -67,13 +67,19 @@ type configTelegramAccount struct {
 	BotToken string `json:"botToken"`
 }
 
-// cliBinding matches `openclaw agents bindings --agent <id> --json`
-// — same shape as the in-tree BindingInfo (service.go:74).
+// cliBinding matches `openclaw agents bindings --agent <id> --json`.
+// The CLI emits nested {agentId, match:{channel, accountId}} — same
+// shape as the in-tree BindingInfo (service.go:77).
 type cliBinding struct {
 	AgentID string `json:"agentId"`
-	Channel string `json:"channel"`
-	Account string `json:"accountId"`
+	Match   struct {
+		Channel string `json:"channel"`
+		Account string `json:"accountId"`
+	} `json:"match"`
 }
+
+func (b cliBinding) Channel() string { return b.Match.Channel }
+func (b cliBinding) Account() string { return b.Match.Account }
 
 // cliAgent matches `openclaw agents list --json` — same shape as
 // the in-tree AgentInfo (service.go:13).
@@ -493,8 +499,8 @@ func assertAgentBinding(t *testing.T, dial provisioning.SSHDialFunc, host string
 		return
 	}
 	for _, b := range bindings {
-		if b.Channel == wantChannel && b.Account == wantAccount {
-			t.Logf("[%s] agents bindings: %s → %s:%s", mc.Name, agentID, b.Channel, b.Account)
+		if b.Channel() == wantChannel && b.Account() == wantAccount {
+			t.Logf("[%s] agents bindings: %s → %s:%s", mc.Name, agentID, b.Channel(), b.Account())
 			return
 		}
 	}
