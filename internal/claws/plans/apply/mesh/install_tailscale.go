@@ -210,7 +210,15 @@ tailscale ip -4
 func (s *InstallTailscaleStep) Verify(ctx context.Context, t scaffold.Target) error {
 	mt := t.Payload.(*MeshTarget)
 	m := mt.Machine
-	client, key, err := common.BorrowSSH(ctx, s.dial, common.ResolveMachineHost(ctx, m), common.MachineSSHPort(m), common.MachineAgentUser(m))
+	// Tailscale bring-up in Execute reconfigures the remote's routing/NAT
+	// tables and can transiently drop in-flight TCP connections, which
+	// makes the immediate follow-up SSH dial from Verify race against
+	// sshd rebinding. On Linode in particular the CGNAT/WireGuard
+	// handshake adds tens of seconds of network churn before things
+	// settle. Use the retrying dialer so Verify gives the network a
+	// chance to converge instead of flipping the whole phase to failed
+	// on a single post-install SSH timeout.
+	client, key, err := common.BorrowSSHWithRetry(ctx, s.dial, common.ResolveMachineHost(ctx, m), common.MachineSSHPort(m), common.MachineAgentUser(m))
 	if err != nil {
 		return fmt.Errorf("install-tailscale verify: dial: %w", err)
 	}

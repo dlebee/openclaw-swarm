@@ -4,6 +4,7 @@ package linode
 
 import (
 	"context"
+	"os"
 	"testing"
 	"time"
 
@@ -101,6 +102,15 @@ func TestPhasesIsolatedNoCache(t *testing.T) {
 	privPath, pubKey := generateEphemeralKey(t)
 	signer := loadSigner(t, privPath)
 
+	if os.Getenv("CLAWS_IT_KEEP_VMS") != "" {
+		data, err := os.ReadFile(privPath)
+		if err == nil {
+			saved := "/tmp/linode-phases-it-key"
+			_ = os.WriteFile(saved, data, 0o600)
+			t.Logf("CLAWS_IT_KEEP_VMS: private key saved to %s (use: ssh -i %s agent@<ip>)", saved, saved)
+		}
+	}
+
 	// --- manifest -----------------------------------------------------------
 
 	m := loadTestManifest(t, "manifest-phases.yml")
@@ -116,6 +126,10 @@ func TestPhasesIsolatedNoCache(t *testing.T) {
 	// Uses prov.ListByTag + DeleteInstance so a mid-phase failure
 	// still tears everything down; no per-phase cleanup needed.
 	t.Cleanup(func() {
+		if os.Getenv("CLAWS_IT_KEEP_VMS") != "" {
+			t.Logf("CLAWS_IT_KEEP_VMS set → leaving VMs up for debug (prefix=%s)", prefix)
+			return
+		}
 		cleanupCtx, ccancel := context.WithTimeout(context.Background(), 3*time.Minute)
 		defer ccancel()
 		insts, err := prov.ListByTag(cleanupCtx, "claws/"+prefix)

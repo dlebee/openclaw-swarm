@@ -233,19 +233,119 @@ type PairedDevice struct {
 	ClientMode  string `json:"clientMode"`
 }
 
-// ListDevices runs `openclaw devices list --json` on the remote host and
-// parses the result. Returns an empty DeviceList (not nil) on any failure.
+// ListDevices returns the gateway's current pending + paired device
+// view. It prefers `openclaw devices list --json` when that succeeds,
+// and falls back to parsing the daemon's on-disk state files when the
+// CLI times out.
+//
+// The CLI fallback is load-bearing on resource-constrained hosts.
+// Node.js on a 1-vCPU Linode (g6-standard-1) spends ~8–12 s just
+// loading the openclaw CLI bundle; that blocks the event loop past
+// the CLI's hard-coded 10 s gateway handshake timer and yields a
+// spurious "gateway timeout after 10000ms" even when the daemon is
+// healthy and reachable on 127.0.0.1:18789. The daemon's own state
+// files (`~/.openclaw/nodes/pending.json`,
+// `~/.openclaw/devices/paired.json`) are written synchronously by
+// the daemon as pairings move through states, so reading them via
+// SSH is a CLI-free, CPU-free path to the same information.
+//
+// On any error (SSH failure, unparseable JSON) we return an empty
+// DeviceList so callers can retry without having to special-case nil.
 func ListDevices(client *xssh.Client) (*DeviceList, error) {
-	out, err := bash.RunOutput(client, `openclaw devices list --json 2>/dev/null || echo "{}"`)
+	if dl, ok := listDevicesViaCLI(client); ok {
+		return dl, nil
+	}
+	return listDevicesFromDisk(client), nil
+}
+
+// listDevicesViaCLI attempts the `openclaw devices list --json` path.
+// ok=false signals the caller should fall back to the on-disk view:
+// either the SSH exec errored, the output was empty (CLI timeout,
+// which we explicitly suppress with 2>/dev/null), or the JSON was
+// unparseable.
+func listDevicesViaCLI(client *xssh.Client) (*DeviceList, bool) {
+	out, err := bash.RunOutput(client, `openclaw devices list --json 2>/dev/null`)
 	if err != nil {
-		return &DeviceList{}, nil
+		return nil, false
 	}
 	raw := strings.TrimSpace(out)
+	if raw == "" {
+		return nil, false
+	}
 	var dl DeviceList
 	if err := json.Unmarshal([]byte(raw), &dl); err != nil {
-		return &DeviceList{}, nil
+		return nil, false
 	}
-	return &dl, nil
+	return &dl, true
+}
+
+// listDevicesFromDisk reads the daemon's pending + paired state files
+// directly. Shape of the files (observed on openclaw 2026.4.x):
+//
+//   ~/.openclaw/nodes/pending.json
+//     { "<requestId>": { "requestId": ..., "displayName": ..., ... } }
+//
+//   ~/.openclaw/devices/paired.json
+//     { "<deviceId>":  { "deviceId": ..., "displayName": ...,
+//                        "clientMode": "node"|"cli", "role": ..., ... } }
+//
+// Missing / empty files are treated as "{}" — a fresh install with
+// no pairings yet is indistinguishable from a transient read miss,
+// and callers already handle both cases by retrying.
+func listDevicesFromDisk(client *xssh.Client) *DeviceList {
+	dl := &DeviceList{}
+
+	if raw, ok := readDaemonStateFile(client, `~/.openclaw/nodes/pending.json`); ok {
+		var m map[string]struct {
+			RequestID   string `json:"requestId"`
+			DisplayName string `json:"displayName"`
+		}
+		if err := json.Unmarshal([]byte(raw), &m); err == nil {
+			for k, v := range m {
+				rid := v.RequestID
+				if rid == "" {
+					rid = k
+				}
+				dl.Pending = append(dl.Pending, PendingDevice{
+					RequestID:   rid,
+					DisplayName: v.DisplayName,
+					Role:        "node",
+				})
+			}
+		}
+	}
+
+	if raw, ok := readDaemonStateFile(client, `~/.openclaw/devices/paired.json`); ok {
+		var m map[string]struct {
+			DisplayName string `json:"displayName"`
+			ClientMode  string `json:"clientMode"`
+		}
+		if err := json.Unmarshal([]byte(raw), &m); err == nil {
+			for _, v := range m {
+				dl.Paired = append(dl.Paired, PairedDevice{
+					DisplayName: v.DisplayName,
+					ClientMode:  v.ClientMode,
+				})
+			}
+		}
+	}
+
+	return dl
+}
+
+// readDaemonStateFile cats a path under the agent user's home and
+// returns (trimmed_content, ok). ok=false when SSH errored or the
+// file was absent/empty; callers should treat that as "no entries".
+func readDaemonStateFile(client *xssh.Client, path string) (string, bool) {
+	out, err := bash.RunOutput(client, fmt.Sprintf(`cat %s 2>/dev/null || true`, path))
+	if err != nil {
+		return "", false
+	}
+	raw := strings.TrimSpace(out)
+	if raw == "" || raw == "{}" {
+		return "", false
+	}
+	return raw, true
 }
 
 // HasPairedLocalDevice reports whether any device in the paired list exists,

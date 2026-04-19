@@ -63,8 +63,23 @@ func (s *PairNodeStep) Execute(ctx context.Context, t scaffold.Target) error {
 	defer common.ReturnSSH(ctx, key, client)
 
 	// Poll for the node's pending device entry and approve it.
+	//
+	// The openclaw CLI on a CPU-starved host (e.g. Linode
+	// g6-standard-1, 1 vCPU) routinely trips its hard-coded 10 s
+	// gateway handshake timer while Node.js is still loading the
+	// CLI bundle, yielding a spurious "gateway timeout after
+	// 10000ms" on approve even though the daemon received and
+	// processed the request. We therefore treat approve failures
+	// as soft — the next ListDevices iteration (which falls back
+	// to reading the daemon's on-disk paired.json when the CLI
+	// also times out) will observe the device as paired and break
+	// the loop via isNodePaired. approve is idempotent on
+	// requestId, so re-sending is safe when the daemon genuinely
+	// missed the first one.
 	const maxAttempts = 15
 	approved := false
+	sawPending := false
+	var lastApproveErr error
 	for i := 0; i < maxAttempts; i++ {
 		dl, err := gwService.ListDevices(client)
 		if err != nil {
@@ -79,8 +94,10 @@ func (s *PairNodeStep) Execute(ctx context.Context, t scaffold.Target) error {
 
 		for _, p := range dl.Pending {
 			if p.DisplayName == nt.Spec.Name && p.Role == "node" {
+				sawPending = true
 				if err := gwService.ApproveDevice(client, p.RequestID); err != nil {
-					return fmt.Errorf("pair-node: approve %s: %w", nt.Spec.Name, err)
+					lastApproveErr = err
+					break
 				}
 				approved = true
 				break
@@ -93,6 +110,10 @@ func (s *PairNodeStep) Execute(ctx context.Context, t scaffold.Target) error {
 		time.Sleep(2 * time.Second)
 	}
 	if !approved {
+		if sawPending && lastApproveErr != nil {
+			return fmt.Errorf("pair-node: node %q remained unpaired after %d approve attempts; last approve error: %w",
+				nt.Spec.Name, maxAttempts, lastApproveErr)
+		}
 		return fmt.Errorf("pair-node: node %q did not appear as pending device after %d attempts", nt.Spec.Name, maxAttempts)
 	}
 
