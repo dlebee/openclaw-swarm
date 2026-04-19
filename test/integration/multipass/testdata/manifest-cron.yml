@@ -1,29 +1,42 @@
 # Multipass provisioning + security + mesh + gateway + node + agents
 # smoke-test manifest that exercises the full cron pipeline end-to-end:
-# scheduler → isolated agent turn → LLM call (Ollama on the gateway VM)
-# → tool-call dispatched over the node websocket to a remote node →
-# run persisted by the scheduler.
+# scheduler → isolated agent turn → LLM call (fake-ollama stub on the
+# gateway VM) → tool-call dispatched over the node websocket to a
+# remote node → run persisted by the scheduler.
 #
 # Topology (mirror of test/integration/docker/testdata/manifest-cron.yml,
 # adapted to run on real VMs over a real tailnet instead of a Docker
 # bridge):
 #
-#   gateway-host   (4 CPU / 6 GiB / 10 GiB disk) — openclaw-gateway +
-#                  Ollama (qwen2.5:0.5b) co-located. Ollama is installed
-#                  post-apply by the test; the test then points
-#                  models.providers.ollama.baseUrl at http://127.0.0.1:
-#                  11434 (loopback, same host). Co-locating Ollama on
-#                  the gateway saves a third VM; a dedicated ollama VM
-#                  would add ~60s of apt/npm plus fresh tailscale
-#                  install without buying any coverage (the gateway ↔
-#                  ollama hop is localhost and fundamentally
-#                  uninteresting; the production-shape traffic is
-#                  gateway ↔ scraper-node over the mesh).
+#   gateway-host   (2 CPU / 2 GiB / 5 GiB disk) — openclaw-gateway +
+#                  fake-ollama stub (test/infra/fake-ollama.py) co-
+#                  located. The stub is SFTP'd up post-apply by the
+#                  test; the test then points
+#                  models.providers.ollama.baseUrl at
+#                  http://localhost:11499 (loopback, same host, non-
+#                  11434 port so it can never be mistaken for a real
+#                  ollama install). Co-locating the stub on the
+#                  gateway saves a third VM that would have added
+#                  ~60s of apt/npm plus fresh tailscale install
+#                  without buying any coverage.
 #   scraper-host   (2 CPU / 2 GiB / 8 GiB disk) — openclaw-node
 #                  (scraper-node). The reporter agent's tools.exec is
 #                  pinned here so every exec tool-call the LLM emits
 #                  rides over the tailnet ws to this VM, proving the
 #                  node-exec dispatch pipeline.
+#
+# Why fake-ollama and not a real Ollama install: the scheduler /
+# agent-session / exec-over-node coverage this test targets is
+# independent of the LLM weights. A real ollama install on Apple
+# Silicon Multipass pulls a 1.3 GiB linux-arm64 tarball; on a slow
+# ISP that alone took ~50 min per run, plus ~30-90s of LLM generate
+# per cron tick with nondeterministic output that forced loose
+# assertions. The fake answers in <1 ms with a scripted exec tool-
+# call (turn 1) + scripted final text (turn 2), cutting the test
+# from ~60-90 min → ~5 min and giving deterministic run summaries.
+# The docker tier's TestCronAgentWithNodeExec still exercises real
+# ollama against a pre-baked oc-ollama-test image, so the "real
+# ollama plugin works" coverage is retained there.
 #
 # Why mode: headscale (not mode: docker shortcut):
 #
@@ -85,40 +98,30 @@
 #   cron failure here is unambiguously a scheduler / LLM / node-exec
 #   regression, not a channels-config regression.
 #
-# Resource envelope (why gateway is fatter than the other Multipass
-# fixtures):
+# Resource envelope (identical to every other Multipass fixture now
+# that fake-ollama removed the LLM install footprint):
 #
-#   Ollama's qwen2.5:0.5b is a ~352 MiB model. During inference on 4
-#   vCPU it needs ~1.2 GiB RAM on top of the node_modules + ts-node
-#   subprocess overhead openclaw-gateway already pays (~900 MiB peak
-#   from TestAgentsSmoke). 8 GiB gives comfortable headroom for the
-#   npm install + a cold-start LLM generate + the scheduler's isolated
-#   session spawning a fresh ts-node per cron run.
+#   gateway-host: 2 CPU / 2 GiB / 5 GiB disk is sufficient — there's
+#   no ollama tarball or model weights to stage, so disk stays under
+#   ~1 GiB during the run; RSS is dominated by openclaw-gateway +
+#   the ts-node subprocess spawned per isolated cron session (well
+#   under 1 GiB total). The previous fixture allocated 4 CPU / 8 GiB
+#   / 20 GiB specifically to give qwen2.5:0.5b inference headroom
+#   and the ollama install tarball room to extract; with fake-ollama
+#   answering in <1 ms that headroom is pure waste.
 #
-#   Why 20 GiB disk (not the 8 GiB every other Multipass fixture
-#   uses): the Ollama install script downloads a 1.3 GiB .tar.zst
-#   tarball for linux-arm64 (the Multipass host is Apple Silicon —
-#   aarch64 — by default). The tarball contains bin/ollama + a
-#   lib/ollama/ tree of GPU runner libraries totalling ~3.5 GiB
-#   uncompressed. Combined with apt cache + node_modules + the
-#   qwen2.5:0.5b model weights (~352 MiB), the total install
-#   footprint runs ~5-6 GiB; the 8 GiB disk every other fixture
-#   uses fills to ~95% during extraction and fails the install
-#   with "no space left on device". 20 GiB gives 2× headroom.
-#
-#   scraper-host stays on 2 CPU / 2 GiB / 8 GiB because its only
-#   job is to accept exec dispatches from the gateway — no LLM, no
-#   Ollama install, no heavy npm paths beyond the standard
-#   openclaw-node bootstrap.
+#   scraper-host stays on 2 CPU / 2 GiB / 8 GiB — its only job is
+#   to accept exec dispatches from the gateway, which was always
+#   well within that envelope.
 
 prefix: claws-it-multipass-cron
 
 machines:
   - name: gateway-host
     type: multipass
-    cpus: 4
-    memory: 8G
-    disk: 20G
+    cpus: 2
+    memory: 2G
+    disk: 5G
     bootstrap_user: root
     agent_user: agent
   - name: scraper-host

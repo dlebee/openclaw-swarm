@@ -1,9 +1,9 @@
 # Linode provisioning + security + mesh + gateway + node + agents
 # smoke-test manifest that exercises the full cron pipeline end-to-end
 # on real cloud infrastructure: scheduler → isolated agent turn → LLM
-# call (Ollama on the gateway VM) → tool-call dispatched over the node
-# websocket to a remote node (scraper-node) → run persisted with
-# status=ok.
+# call (fake-ollama stub on the gateway) → tool-call dispatched over
+# the node websocket to a remote node (scraper-node) → run persisted
+# with status=ok.
 #
 # Mirror of the Multipass tier's manifest-cron.yml, swapped for Linode
 # machine specs (sku / image / region) and the production public_
@@ -12,6 +12,16 @@
 # ask:off, one `reporter` agent with tools.exec pinned to scraper-node,
 # ollama-backed model — stay identical so a cron regression that
 # manifests on one tier will manifest on the other too.
+#
+# Why fake-ollama and not a real Ollama install: the scheduler /
+# agent-session / exec-over-node coverage this tier targets is
+# independent of LLM weights; a real ollama install would add
+# ~400 MiB tarball download + ~352 MiB model pull + ~15-30s cold-
+# start, all of which are uninteresting compared to the things this
+# tier *does* test (Caddy/ACME, real tailnet). The docker tier's
+# TestCronAgentWithNodeExec still covers "real ollama plugin works"
+# against a pre-baked oc-ollama-test image, so the switch here
+# doesn't lose any coverage. See test/infra/fake-ollama.py.
 #
 # What this Linode mirror buys over the Multipass cron test:
 #
@@ -26,33 +36,21 @@
 #     the public internet between two Linode VMs. The node-exec
 #     dispatches from the cron-triggered agent ride the same tailnet
 #     the production operator's traffic does.
-#   - `ollama pull qwen2.5:0.5b` over real egress. Multipass runs
-#     against the local disk cache; this tier exercises the real
-#     ollama registry + tarball download path. A regression in the
-#     openclaw/ollama plugin's handling of slow or chunked downloads
-#     would surface here first.
+#   - `npm install -g openclaw` over real egress. Same paths a
+#     customer deploy would use (the ollama-specific network paths
+#     are out of scope here; see docker tier).
 #
-# Why g6-standard-4 (4 vCPU / 8 GiB) for the gateway:
+# Why g6-standard-1 (1 vCPU / 2 GiB) for both hosts:
 #
-#   ollama qwen2.5:0.5b peaks ~1.2 GiB RSS during generation on top
-#   of the gateway's own ~900 MiB (TypeScript + ts-node subprocess
-#   spawns per isolated cron run, same as TestAgentsSmoke's
-#   envelope). g6-standard-2 (2 CPU / 4 GiB) is right on the OOM
-#   edge when the first cron tick cold-boots a ts-node process
-#   simultaneous with ollama generate; standard-4 (4 CPU / 8 GiB)
-#   gives ~4 GiB headroom AND doubles vCPU so LLM generate latency
-#   stays under 30s per run (avoiding back-pressure from the 5s
-#   cron interval stacking behind slow runs). Note: Linode SKUs
-#   jump 1 → 2 → 4 → 6 → 8 vCPU; there is no standard-3 SKU.
-#   Cost envelope is $0.072/hr vs standard-1's $0.018/hr — pennies
-#   per run, worth the OOM safety AND the faster LLM turn.
-#
-# Why g6-standard-1 for the scraper-host:
-#
-#   scraper-host only runs openclaw-node (which accepts exec
-#   dispatches from the gateway). No LLM, no cron scheduler state.
-#   g6-standard-1 (1 CPU / 2 GiB) matches every other Linode fixture
-#   so the mechanical shape stays uniform.
+#   Without a real LLM the gateway's RSS stays well under 1 GiB
+#   (openclaw-gateway + the ts-node subprocess spawned per isolated
+#   cron run). g6-standard-1 (1 CPU / 2 GiB) is the smallest Linode
+#   SKU and perfectly sufficient here — no OOM risk, no per-run
+#   contention on the 5s cron interval. The previous fixture used
+#   g6-standard-4 (4 CPU / 8 GiB) specifically to give qwen2.5:0.5b
+#   inference headroom; with fake-ollama answering in <1 ms that
+#   headroom is pure waste. Cost drops from ~$0.09 to ~$0.005
+#   per run.
 #
 # Why mode: headscale + strategy: sslip (not custom / not docker):
 #
@@ -80,7 +78,7 @@ prefix: claws-it-linode-cron
 machines:
   - name: gateway-host
     type: linode
-    sku: g6-standard-4
+    sku: g6-standard-1
     image: linode/ubuntu24.04
     region: us-east
     bootstrap_user: root

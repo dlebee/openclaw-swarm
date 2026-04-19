@@ -7,6 +7,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"net"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -16,6 +18,7 @@ import (
 	"github.com/gluwa/openclaw-swarm2/internal/claws/plans/apply/provisioning"
 	"github.com/gluwa/openclaw-swarm2/internal/hosting/linode"
 	manifestdata "github.com/gluwa/openclaw-swarm2/internal/manifests/data"
+	"github.com/gluwa/openclaw-swarm2/internal/platformutil/sshfile"
 	"github.com/gluwa/openclaw-swarm2/internal/scaffold"
 	"github.com/gluwa/openclaw-swarm2/internal/scaffold/progress"
 )
@@ -24,15 +27,25 @@ import (
 // drift in one surfaces in both. Values match the docker tier's
 // TestCronAgentWithNodeExec for identical scheduler coverage across
 // Docker / Multipass / Linode.
+//
+// LLM backend: the reporter agent's "ollama" provider is pointed at
+// a fake-ollama stub served by the gateway VM itself (not a real
+// ollama install + qwen2.5:0.5b pull). See test/infra/fake-ollama.py
+// for the stub and the package doc.go for the rationale. The fake
+// still advertises the qwen2.5:0.5b model name so openclaw.json stays
+// identical to the docker tier and so a regression in the agent's
+// model-ref parsing surfaces uniformly across tiers.
 const (
 	linodeCronJobName        = "reporter-itest-linode"
 	linodeCronAgentID        = "reporter"
 	linodeCronTargetNodeName = "scraper-node"
 	linodeCronInterval       = "5s"
 	linodeCronWantRuns       = 2
-	linodeCronRunsTimeout    = 10 * time.Minute
+	linodeCronRunsTimeout    = 5 * time.Minute
 	linodeOllamaModel        = "qwen2.5:0.5b"
-	linodeOllamaInstallURL   = "https://ollama.com/install.sh"
+	linodeFakeOllamaPort     = 11499
+	linodeFakeOllamaUnit     = "fake-ollama"
+	linodeFakeOllamaRemote   = "/home/agent/fake-ollama.py"
 )
 
 type linodeCronJobJSON struct {
@@ -58,10 +71,27 @@ type linodeCronRunsPage struct {
 // Multipass tier's TestCronAgentWithNodeExec. It runs the full
 // production-shape cron pipeline end-to-end on real Linode VMs:
 // provisioning → security → mesh (with Caddy + Let's Encrypt ACME)
-// → gateway → node → agents → ollama install → cron job →
-// scheduler fires → isolated agent turn → LLM call (local ollama)
-// → exec tool-call dispatched over the tailnet ws to scraper-node
-// → run persisted with status=ok.
+// → gateway → node → agents → fake-ollama start → cron job →
+// scheduler fires → isolated agent turn → fake LLM returns exec
+// tool call → exec dispatched over the tailnet ws to scraper-node
+// → tool result returned → fake LLM returns final text → run
+// persisted with status=ok.
+//
+// Why fake-ollama instead of real ollama + qwen2.5:0.5b: the
+// scheduler / agent-session / exec-over-node coverage this tier
+// cares about is independent of the LLM weights. A real ollama
+// install costs ~400 MiB tarball download on amd64 + ~352 MiB model
+// pull + ~15-30s cold-start on the first cron tick, with
+// nondeterministic LLM output that forces slow timeouts and occasional
+// flakes. The fake responds in <1 ms with a scripted exec tool call
+// (turn 1) + scripted final text (turn 2), cutting the test from
+// ~14 min → ~5 min and removing the only source of cron run duration
+// variance. The docker tier still exercises real ollama (the
+// oc-ollama-test image bakes qwen2.5:0.5b for free), so "real ollama
+// plugin actually works" remains covered; this tier is about claws
+// plumbing on a real cloud VM, which is exactly what fake-ollama
+// leaves intact. See test/infra/fake-ollama.py for the stub and
+// startFakeOllamaOnLinodeVM below for the boot sequence.
 //
 // Why this Linode mirror is worth the dollar-pennies cost on top
 // of the Multipass tier's identical assertions:
@@ -77,19 +107,17 @@ type linodeCronRunsPage struct {
 //     doesn't expose real MTU or timing characteristics; a
 //     regression in how openclaw-node handles fragmented exec
 //     dispatches or slow tailnet acks shows up here.
-//   - `npm install -g openclaw` + `ollama pull qwen2.5:0.5b` via
-//     real public egress (Linode's network → npm registry, ollama
-//     tarball CDN). Same paths a customer deploy would use.
+//   - `npm install -g openclaw` over real public egress. Same path
+//     a customer deploy would use.
 //
-// Cost envelope: ~25-40 min on g6-standard-4 + g6-standard-1 at
-// us-east ≈ $0.072/hr + $0.018/hr ≈ $0.09 per run. 50 min cap
-// absorbs cold apt/npm caches, slow ollama downloads on first
-// invocation, Let's Encrypt rate-limit backoff, and LLM cold-
-// start on the first cron tick.
+// Cost envelope: ~5-8 min on g6-standard-1 + g6-standard-1 at
+// us-east ≈ 2 × $0.018/hr ≈ ~$0.005 per run. 15 min cap absorbs
+// cold apt/npm caches and Let's Encrypt rate-limit backoff; there
+// is no LLM cold-start contribution any more.
 func TestCronAgentWithNodeExec(t *testing.T) {
 	tok := loadLinodeToken(t)
 
-	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Minute)
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Minute)
 	defer cancel()
 	ctx = scaffold.EnsurePlanCache(ctx)
 
@@ -285,16 +313,20 @@ func TestCronAgentWithNodeExec(t *testing.T) {
 	assertNodeUnitActive(t, dial, nodePublicIP, nodeMachine)
 	assertNodePairedOnGateway(t, dial, gwPublicIP, gwMachine, nd.Name)
 
-	// --- Ollama install + model pull on the gateway VM ---------------------
+	// --- Fake Ollama stub on the gateway VM --------------------------------
+	//
+	// SFTP-upload test/infra/fake-ollama.py and start it under
+	// systemd --user so it survives SSH disconnects and gets
+	// cleaned up automatically when the VM is deleted. See
+	// startFakeOllamaOnLinodeVM for the boot + readiness sequence
+	// and the package doc.go for why we use a stub here instead
+	// of installing real ollama.
 
-	t.Log("milestone: installing Ollama on gateway VM")
-	installOllamaOnLinodeVM(t, dial, gwPublicIP, gwMachine)
+	t.Log("milestone: uploading + starting fake-ollama on gateway VM")
+	startFakeOllamaOnLinodeVM(t, dial, gwPublicIP, gwMachine)
 
-	t.Logf("milestone: pulling ollama model %s", linodeOllamaModel)
-	pullOllamaModelLinode(t, dial, gwPublicIP, gwMachine, linodeOllamaModel)
-
-	t.Log("milestone: sanity-checking Ollama generate on loopback")
-	verifyLinodeOllamaReachable(t, dial, gwPublicIP, gwMachine)
+	t.Log("milestone: sanity-checking fake-ollama on loopback")
+	verifyFakeOllamaReachable(t, dial, gwPublicIP, gwMachine)
 
 	t.Log("milestone: configuring models.providers.ollama.baseUrl")
 	configureLinodeOllamaProvider(t, dial, gwPublicIP, gwMachine)
@@ -337,115 +369,185 @@ func TestCronAgentWithNodeExec(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// Ollama helpers
+// Fake ollama helpers
 // ---------------------------------------------------------------------------
 
-// installOllamaOnLinodeVM installs Ollama via the canonical vendor
-// install script, then waits for the ollama.service API to answer
-// on 127.0.0.1:11434. See multipass tier's installOllamaOnVM for
-// the full rationale; this is a line-for-line adaptation that
-// uses the linode tier's sshRunAsGatewayAgent.
-func installOllamaOnLinodeVM(t *testing.T, dial provisioning.SSHDialFunc, host string, mc manifestdata.Machine) {
+// startFakeOllamaOnLinodeVM uploads test/infra/fake-ollama.py and
+// starts it as a systemd --user service on the gateway. We use
+// systemd --user (not nohup + disown) because:
+//
+//   - The security phase runs `loginctl enable-linger agent` so
+//     user units survive SSH disconnects unconditionally; this is
+//     the same mechanism the gateway/node's own openclaw-gateway
+//     and openclaw-node units rely on, so reusing it here means
+//     "if fake-ollama doesn't survive, neither would the gateway"
+//     — which would have surfaced long before cron.
+//   - systemd-run cleanly captures logs (`journalctl --user -u
+//     fake-ollama`) which the test can pull if readiness or a
+//     cron run fails.
+//   - The unit auto-stops on shutdown when Linode tears the VM
+//     down, so there's no "dangling background process" cleanup.
+//
+// The script is uploaded via SFTP (sshfile.WriteFile) rather than
+// a heredoc over SSH so non-trivial indentation + triple-quoted
+// Python strings survive the round trip intact.
+func startFakeOllamaOnLinodeVM(t *testing.T, dial provisioning.SSHDialFunc, host string, mc manifestdata.Machine) {
 	t.Helper()
-	install := `set -eux
-if command -v ollama >/dev/null 2>&1; then
-    echo "ollama already installed: $(ollama --version 2>&1 | head -n1)"
-    exit 0
-fi
-curl -fsSL ` + linodeOllamaInstallURL + ` | sh
-`
-	out, err := sshRunAsGatewayAgentLong(t, dial, host, mc, install, 8*time.Minute)
+
+	scriptPath := findFakeOllamaScript(t)
+	data, err := os.ReadFile(scriptPath)
 	if err != nil {
-		t.Fatalf("[%s] install ollama: %v\n%s", mc.Name, err, out)
+		t.Fatalf("read fake-ollama.py: %v", err)
 	}
 
-	// Wait for the systemd-managed ollama API to answer.
-	// Longer envelope than Multipass because Linode's disk IO +
-	// a fresh ubuntu24.04 image's apt state can add a few extra
-	// seconds.
-	deadline := time.Now().Add(90 * time.Second)
+	dctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+	user := mc.AgentUser
+	if user == "" {
+		user = "root"
+	}
+	client, err := dial(dctx, host, 22, user)
+	if err != nil {
+		t.Fatalf("[%s] dial for fake-ollama upload: %v", mc.Name, err)
+	}
+	defer client.Close()
+
+	if err := sshfile.WriteFile(client, linodeFakeOllamaRemote, data); err != nil {
+		t.Fatalf("[%s] upload fake-ollama.py to %s: %v", mc.Name, linodeFakeOllamaRemote, err)
+	}
+	t.Logf("[%s] fake-ollama.py uploaded (%d bytes) to %s", mc.Name, len(data), linodeFakeOllamaRemote)
+
+	// Stop any stale instance (safe no-op on first boot) + start
+	// fresh. --property=Type=simple keeps systemd happy with a
+	// script that blocks in serve_forever(). --setenv pins the
+	// port so a `FAKE_OLLAMA_PORT` drift in the python defaults
+	// wouldn't break the test.
+	startScript := fmt.Sprintf(`set -eux
+chmod +x %[2]s
+systemctl --user stop %[1]s 2>/dev/null || true
+systemctl --user reset-failed %[1]s 2>/dev/null || true
+systemd-run --user \
+    --unit=%[1]s \
+    --property=Type=simple \
+    --setenv=FAKE_OLLAMA_PORT=%[3]d \
+    /usr/bin/python3 %[2]s
+`, linodeFakeOllamaUnit, linodeFakeOllamaRemote, linodeFakeOllamaPort)
+
+	out, err := sshRunAsGatewayAgent(t, dial, host, mc, startScript)
+	if err != nil {
+		t.Fatalf("[%s] systemd-run fake-ollama: %v\n%s", mc.Name, err, out)
+	}
+
+	// Wait for the stub to answer /api/tags on loopback. The
+	// systemd transient unit is "active" almost immediately but
+	// Python's http.server needs a few hundred ms to bind the
+	// socket; 30s is ample headroom for slow disk-caches.
+	deadline := time.Now().Add(30 * time.Second)
 	var last string
 	for time.Now().Before(deadline) {
 		out, err := sshRunAsGatewayAgent(t, dial, host, mc,
-			`curl -sS --max-time 3 http://127.0.0.1:11434/api/tags 2>&1 || echo "(curl failed)"`)
-		if err == nil && strings.Contains(out, "\"models\"") {
-			t.Logf("[%s] ollama API ready: %s", mc.Name, linodeTruncate(out, 120))
+			fmt.Sprintf(`curl -sS --max-time 3 http://127.0.0.1:%d/api/tags 2>&1 || echo "(curl failed)"`, linodeFakeOllamaPort))
+		if err == nil && strings.Contains(out, linodeOllamaModel) {
+			t.Logf("[%s] fake-ollama ready on :%d: %s", mc.Name, linodeFakeOllamaPort, linodeTruncate(out, 120))
 			return
 		}
 		last = out
-		time.Sleep(2 * time.Second)
+		time.Sleep(1 * time.Second)
 	}
-	t.Fatalf("[%s] ollama API never came up on 127.0.0.1:11434 (last: %s)", mc.Name, last)
+
+	// Pull journal tail so the failure log says *why* the stub
+	// didn't come up (stdlib import error, port in use, etc.).
+	journal, _ := sshRunAsGatewayAgent(t, dial, host, mc,
+		fmt.Sprintf(`journalctl --user -u %s --no-pager -n 40 2>&1 || true`, linodeFakeOllamaUnit))
+	t.Fatalf("[%s] fake-ollama never answered on :%d (last curl: %s)\n--- journal ---\n%s",
+		mc.Name, linodeFakeOllamaPort, last, journal)
 }
 
-func pullOllamaModelLinode(t *testing.T, dial provisioning.SSHDialFunc, host string, mc manifestdata.Machine, model string) {
-	t.Helper()
-	// 10 min cap — on a fresh Linode instance the ollama model
-	// tarball egress is usually fast (100+ MB/s from us-east) but
-	// first-run DNS/CDN warmup can add a surprising amount.
-	cmd := fmt.Sprintf(`ollama pull %q 2>&1`, model)
-	out, err := sshRunAsGatewayAgentLong(t, dial, host, mc, cmd, 10*time.Minute)
-	if err != nil {
-		t.Fatalf("[%s] ollama pull %q: %v\n%s", mc.Name, model, err, out)
-	}
-	if !strings.Contains(out, "success") && !strings.Contains(out, "writing manifest") {
-		t.Logf("[%s] ollama pull output (soft): %s", mc.Name, linodeTruncate(out, 400))
-	}
-}
-
-func verifyLinodeOllamaReachable(t *testing.T, dial provisioning.SSHDialFunc, host string, mc manifestdata.Machine) {
+// verifyFakeOllamaReachable sanity-pings /api/chat on the fake to
+// prove the stub is alive + returns the expected tool-call payload
+// before we hand off to the cron scheduler. A failure here pins the
+// regression to fake-ollama itself rather than to the openclaw/ollama
+// plugin or the cron scheduler.
+func verifyFakeOllamaReachable(t *testing.T, dial provisioning.SSHDialFunc, host string, mc manifestdata.Machine) {
 	t.Helper()
 	payload := fmt.Sprintf(
-		`curl -sS --max-time 120 http://127.0.0.1:11434/api/generate `+
+		`curl -sS --max-time 5 http://127.0.0.1:%d/api/chat `+
 			`-H "Content-Type: application/json" `+
-			`-d '{"model":%q,"prompt":"Reply with one short English sentence.","stream":false}'`,
-		linodeOllamaModel,
+			`-d '{"messages":[{"role":"user","content":"probe"}]}'`,
+		linodeFakeOllamaPort,
 	)
-	out, err := sshRunAsGatewayAgentLong(t, dial, host, mc, payload, 3*time.Minute)
+	out, err := sshRunAsGatewayAgent(t, dial, host, mc, payload)
 	if err != nil {
-		t.Fatalf("[%s] ollama generate: %v\n%s", mc.Name, err, out)
+		t.Fatalf("[%s] fake-ollama /api/chat probe: %v\n%s", mc.Name, err, out)
 	}
-	var resp struct {
-		Response string `json:"response"`
+	if !strings.Contains(out, `"tool_calls"`) || !strings.Contains(out, `"exec"`) {
+		t.Fatalf("[%s] fake-ollama didn't return an exec tool call:\n%s", mc.Name, out)
 	}
-	raw := strings.TrimSpace(out)
-	if err := json.Unmarshal([]byte(raw), &resp); err != nil {
-		t.Fatalf("[%s] parse ollama json: %v\nraw=%s", mc.Name, err, raw)
-	}
-	if strings.TrimSpace(resp.Response) == "" {
-		t.Fatalf("[%s] empty ollama response: %s", mc.Name, raw)
-	}
-	t.Logf("[%s] ollama ok: %q", mc.Name, linodeTruncate(resp.Response, 80))
+	t.Logf("[%s] fake-ollama ok: %s", mc.Name, linodeTruncate(out, 120))
 }
 
-// configureLinodeOllamaProvider points the gateway's Ollama provider at
-// the co-located Ollama daemon. We deliberately use the hostname
-// "localhost" (not "127.0.0.1") so the ollama plugin's
+// configureLinodeOllamaProvider points the gateway's Ollama provider
+// at the fake-ollama stub on 127.0.0.1:<fake port>. We use the
+// hostname "localhost" (not "127.0.0.1") so the ollama plugin's
 // hasMeaningfulExplicitOllamaConfig() check treats the baseUrl as
-// non-default and mints a synthetic local auth token. The plugin's
-// check is a literal string compare against OLLAMA_DEFAULT_BASE_URL
-// ("http://127.0.0.1:11434") so any string-different-but-routing-
-// equivalent URL works — "localhost" still resolves to 127.0.0.1 at
-// dial time. Without this, isolated cron-agent sessions fail with
-// "No API key found for provider 'ollama'" because auth-profiles.json
-// for agent "reporter" doesn't inherit the synthetic key.
+// non-default and mints a synthetic local auth token — without that,
+// isolated cron-agent sessions fail with "No API key found for
+// provider 'ollama'". The plugin's check is a literal string compare
+// against OLLAMA_DEFAULT_BASE_URL ("http://127.0.0.1:11434") so any
+// string-different-but-routing-equivalent URL works; "localhost" still
+// resolves to 127.0.0.1 at dial time. The non-11434 port also means
+// this config can never be mistaken for "point at a real ollama
+// install"; if a future refactor accidentally drops the fake, cron
+// runs fail loudly with a connection-refused instead of silently
+// hitting a stale real-ollama daemon.
 func configureLinodeOllamaProvider(t *testing.T, dial provisioning.SSHDialFunc, host string, mc manifestdata.Machine) {
 	t.Helper()
-	script := `set -e
+	script := fmt.Sprintf(`set -e
 node -e '
 const fs = require("fs"), os = require("os");
 const p = os.homedir() + "/.openclaw/openclaw.json";
 const c = JSON.parse(fs.readFileSync(p, "utf8"));
 if (!c.models) c.models = {};
 if (!c.models.providers) c.models.providers = {};
-c.models.providers.ollama = { baseUrl: "http://localhost:11434", models: [] };
+c.models.providers.ollama = { baseUrl: "http://localhost:%d", models: [] };
 fs.writeFileSync(p, JSON.stringify(c, null, 2) + "\n");
 '
-`
+`, linodeFakeOllamaPort)
 	out, err := sshRunAsGatewayAgent(t, dial, host, mc, script)
 	if err != nil {
 		t.Fatalf("[%s] configure ollama provider: %v\n%s", mc.Name, err, out)
 	}
+}
+
+// findFakeOllamaScript resolves test/infra/fake-ollama.py relative
+// to the running test binary's source tree. Tests run with go test
+// under the package directory; we walk up until we find the repo
+// root marker "go.mod" and then join the known relative path. This
+// avoids baking an absolute path into the fixture and lets the test
+// work from any checkout location.
+func findFakeOllamaScript(t *testing.T) string {
+	t.Helper()
+	wd, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("getwd: %v", err)
+	}
+	dir := wd
+	for range 10 {
+		if _, err := os.Stat(filepath.Join(dir, "go.mod")); err == nil {
+			p := filepath.Join(dir, "test", "infra", "fake-ollama.py")
+			if _, err := os.Stat(p); err == nil {
+				return p
+			}
+			t.Fatalf("fake-ollama.py not at %s", p)
+		}
+		parent := filepath.Dir(dir)
+		if parent == dir {
+			break
+		}
+		dir = parent
+	}
+	t.Fatalf("could not find repo root (go.mod) walking up from %s", wd)
+	return ""
 }
 
 // ---------------------------------------------------------------------------

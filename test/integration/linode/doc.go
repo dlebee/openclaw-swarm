@@ -100,18 +100,24 @@
 //     which the Multipass tier can't exercise (no public IP, no
 //     certificate).
 //   - TestCronAgentWithNodeExec (linode_cron_test.go): full
-//     production-shape cron pipeline on two instances (g6-standard-
-//     4 gateway + g6-standard-1 scraper-node). Runs provisioning +
-//     security + mesh (Caddy + Let's Encrypt) + gateway + node +
-//     agents, then post-apply installs Ollama on the gateway VM,
-//     pulls qwen2.5:0.5b, points models.providers.ollama.baseUrl
-//     at 127.0.0.1:11434, registers an every-5s cron job, and
-//     asserts the scheduler fires at least two runs with status=ok.
-//     The cron-triggered isolated agent dispatches exec tool-calls
-//     to scraper-node over the tailnet ws — the only test on this
-//     tier that proves mesh + gateway + node + agents + scheduler
-//     all cooperate under real traffic (not just "config landed").
+//     production-shape cron pipeline on two instances (both
+//     g6-standard-1). Runs provisioning + security + mesh (Caddy +
+//     Let's Encrypt) + gateway + node + agents, then post-apply
+//     SFTP-uploads test/infra/fake-ollama.py to the gateway VM and
+//     starts it under systemd --user as the LLM backend, points
+//     models.providers.ollama.baseUrl at http://localhost:11499,
+//     registers an every-5s cron job, and asserts the scheduler
+//     fires at least two runs with status=ok. The cron-triggered
+//     isolated agent dispatches exec tool-calls to scraper-node
+//     over the tailnet ws — the only test on this tier that
+//     proves mesh + gateway + node + agents + scheduler all
+//     cooperate under real traffic (not just "config landed").
 //     Fixture sets node.exec_policy={security:full, ask:off} to
 //     cover the Applicable=true branch TestNodeSmoke deliberately
-//     omits. Cost envelope: ~25-40 min ≈ $0.09 per run.
+//     omits. Uses fake-ollama instead of a real ollama install
+//     because the scheduler / agent / exec-over-node coverage is
+//     independent of LLM weights, and the docker tier's identical
+//     test already exercises the real ollama plugin against a
+//     pre-baked image. Cost envelope: ~5-8 min ≈ $0.005 per run
+//     (vs. ~$0.09 for the earlier real-ollama variant).
 package linode
