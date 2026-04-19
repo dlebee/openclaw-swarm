@@ -1,0 +1,50 @@
+# Multipass: provisioning + security + automations (non-manual only).
+#
+# `claws apply` injects automations with manual: false (or unset). Manual
+# automations are opt-in via IncludeManualAutomations / `claws automations apply`.
+# This fixture carries both so TestProvisioningSecurityAutomationSmoke can
+# assert the manual block never gets a scaffold phase in the default pipeline.
+
+prefix: claws-it-multipass-auto-smoke
+
+machines:
+  - name: gateway-host
+    type: multipass
+    cpus: 1
+    memory: 1G
+    disk: 5G
+    bootstrap_user: root
+    agent_user: agent
+
+  - name: node-host
+    type: multipass
+    cpus: 1
+    memory: 1G
+    disk: 5G
+    bootstrap_user: root
+    agent_user: agent
+
+automations:
+  # Phase name in the apply plan = automation name (see automations.addAutomationPhase).
+  - name: it-nonmanual-auto
+    machines: [gateway-host, node-host]
+    concurrency: 2
+    steps:
+      - name: write-marker
+        kind: bash
+        # Idempotent check: succeed only when work is already done. (A bare
+        # `test ! -f` exits 0 when the file is missing, so Check would report
+        # "satisfied" and scaffold would skip Execute — the opposite of what we want.)
+        check: test -f /tmp/claws-it-nonmanual-marker && grep -q nonmanual-ok /tmp/claws-it-nonmanual-marker
+        execute: |
+          echo "nonmanual-ok" > /tmp/claws-it-nonmanual-marker
+        verify: grep -q nonmanual-ok /tmp/claws-it-nonmanual-marker
+
+  - name: it-manual-never
+    manual: true
+    machines: [gateway-host]
+    steps:
+      - name: must-not-run
+        kind: bash
+        execute: |
+          echo "bad" > /tmp/claws-it-manual-marker
