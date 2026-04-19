@@ -167,15 +167,29 @@ jobs:
           echo "::add-mask::$KEYCHAIN_PASSWORD"
           echo "KEYCHAIN_PASSWORD=$KEYCHAIN_PASSWORD" >> "$GITHUB_ENV"
 
-          echo "$MACOS_CERT_P12_BASE64" | base64 --decode > "$CERT_PATH"
+          # Use printf '%s' (not echo) so a trailing newline in the secret
+          # can't sneak into the decoded bytes. base64 --decode tolerates
+          # interior whitespace regardless.
+          printf '%s' "$MACOS_CERT_P12_BASE64" | base64 --decode > "$CERT_PATH"
+
+          # Diagnostic: confirm the decoded file is a real PKCS#12.
+          # A valid PKCS#12 / DER always starts with 0x30 0x82.
+          echo "Decoded cert file:"
+          ls -la "$CERT_PATH"
+          echo "First 4 bytes (should start with '3082'):"
+          xxd -l 4 "$CERT_PATH" | head -1
 
           security create-keychain  -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
           security set-keychain-settings -lut 21600 "$KEYCHAIN_PATH"
           security unlock-keychain  -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
 
+          # -f pkcs12 is an explicit format hint — prevents `security` from
+          # guessing wrong and returning the opaque "invalid parameters" error
+          # on some runner images.
           security import "$CERT_PATH" \
             -k "$KEYCHAIN_PATH" \
             -P "$MACOS_CERT_PASSWORD" \
+            -f pkcs12 \
             -T /usr/bin/codesign \
             -T /usr/bin/security
 
