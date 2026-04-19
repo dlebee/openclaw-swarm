@@ -63,8 +63,10 @@ func (s *InstallCaddyStep) Execute(ctx context.Context, t scaffold.Target) error
 	}
 	defer common.ReturnSSH(ctx, key, client)
 
-	v, _ := scaffold.PlanCacheGet(ctx, CacheKeyControlURL)
-	controlURL, _ := v.(string)
+	controlURL, err := getOrResolveControlURL(ctx, s.dial, mt)
+	if err != nil {
+		return fmt.Errorf("install-caddy: %w", err)
+	}
 	hostname := HostnameFromControlURL(controlURL)
 	if hostname == "" {
 		return fmt.Errorf("install-caddy: could not extract hostname from control URL %q", controlURL)

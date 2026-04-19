@@ -139,14 +139,32 @@ func Stop(client *xssh.Client, unit string, userMode bool) error {
 }
 
 // Restart restarts a unit.
+//
+// Services that fail-fast during their initial settling window (e.g. a node
+// daemon that exits while waiting for its gateway pairing to be approved)
+// can hit systemd's default StartLimitBurst and land in
+// `failed (Result: start-limit-hit)`. Once in that state, `systemctl
+// restart` refuses with "Job for <unit>.service failed" until the failure
+// counter is cleared. We preemptively `reset-failed` (no-op on healthy
+// units) so a legitimate restart after the service's external precondition
+// becomes satisfiable doesn't spuriously fail because of earlier self-
+// induced restarts. Retry once on transient errors to absorb the narrow
+// race where systemd is still tearing down the previous cgroup when we
+// issue the restart.
 func Restart(client *xssh.Client, unit string, userMode bool) error {
 	if err := validateUnit(unit); err != nil {
 		return err
 	}
 	ctl, env := ctlPrefix(userMode)
-	script := fmt.Sprintf(`set -euo pipefail
-%s%s restart %s
-`, env, ctl, unit)
+	script := fmt.Sprintf(`set -uo pipefail
+%s%s reset-failed %s 2>/dev/null || true
+if %s restart %s; then
+  exit 0
+fi
+sleep 2
+%s reset-failed %s 2>/dev/null || true
+%s restart %s
+`, env, ctl, unit, ctl, unit, ctl, unit, ctl, unit)
 	return sshutil.RunBashStdin(client, script)
 }
 

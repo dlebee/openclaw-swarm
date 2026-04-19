@@ -49,10 +49,9 @@ func (s *InstallHeadscaleStep) Execute(ctx context.Context, t scaffold.Target) e
 	}
 	defer common.ReturnSSH(ctx, key, client)
 
-	v, _ := scaffold.PlanCacheGet(ctx, CacheKeyControlURL)
-	controlURL, _ := v.(string)
-	if controlURL == "" {
-		return fmt.Errorf("install-headscale: control URL not resolved")
+	controlURL, err := getOrResolveControlURL(ctx, s.dial, mt)
+	if err != nil {
+		return fmt.Errorf("install-headscale: %w", err)
 	}
 
 	cfgYAML, err := headscaleConfigYAML(controlURL)

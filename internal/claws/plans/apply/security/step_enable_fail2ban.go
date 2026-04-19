@@ -40,7 +40,7 @@ func (s *EnableFail2banStep) Check(ctx context.Context, t scaffold.Target) (bool
 	if !ok {
 		return false, nil
 	}
-	host := machineHost(mt)
+	host := machineHost(ctx, mt)
 	if host == "" {
 		return false, nil
 	}
@@ -62,7 +62,7 @@ func (s *EnableFail2banStep) Execute(ctx context.Context, t scaffold.Target) err
 	if !ok {
 		return fmt.Errorf("enable-fail2ban: expected *MachineTarget for %q", t.ID)
 	}
-	host := machineHost(mt)
+	host := machineHost(ctx, mt)
 	if host == "" {
 		return fmt.Errorf("enable-fail2ban: no reachable host for %q", t.ID)
 	}
@@ -112,7 +112,7 @@ func (s *EnableFail2banStep) Verify(ctx context.Context, t scaffold.Target) erro
 	if !ok {
 		return fmt.Errorf("enable-fail2ban verify: expected *MachineTarget for %q", t.ID)
 	}
-	host := machineHost(mt)
+	host := machineHost(ctx, mt)
 	if host == "" {
 		return fmt.Errorf("enable-fail2ban verify: no reachable host for %q", t.ID)
 	}

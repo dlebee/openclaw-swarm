@@ -7,17 +7,24 @@ import (
 	"strings"
 
 	"github.com/gluwa/openclaw-swarm2/internal/claws/plans/apply/common"
+	manifestdata "github.com/gluwa/openclaw-swarm2/internal/manifests/data"
 	"github.com/gluwa/openclaw-swarm2/internal/platformutil/bash"
 	"github.com/gluwa/openclaw-swarm2/internal/scaffold"
 )
 
 // InstallTailscaleStep installs Tailscale and joins the mesh on every target machine.
 type InstallTailscaleStep struct {
-	dial SSHDialFunc
+	dial     SSHDialFunc
+	gateways []manifestdata.Gateway
+	machines []manifestdata.Machine
 }
 
 func NewInstallTailscaleStep(opts Options) *InstallTailscaleStep {
-	return &InstallTailscaleStep{dial: opts.SSHDial}
+	return &InstallTailscaleStep{
+		dial:     opts.SSHDial,
+		gateways: opts.Gateways,
+		machines: opts.Machines,
+	}
 }
 
 func (*InstallTailscaleStep) Name() string { return "install-tailscale" }
@@ -72,15 +79,24 @@ echo "container-skip-join"
 		return nil
 	}
 
-	v, _ := scaffold.PlanCacheGet(ctx, CacheKeyControlURL)
-	controlURL, _ := v.(string)
-	if controlURL == "" {
-		return fmt.Errorf("install-tailscale: control URL not resolved")
+	// Re-derive control URL + preauth key on cache miss. In a full apply run
+	// mesh-gateway seeded both cache keys before mesh-join reached this step;
+	// on a cold `--only mesh-join` invocation the cache is empty and we
+	// re-do the work from scratch (manifest → gateway VM disk → headscale
+	// CLI if needed). The gateway MeshTarget is synthesised from the mesh
+	// Options so every caller — gateway host joining its own mesh or node
+	// hosts joining a remote gateway — takes the same path.
+	gwMT, err := s.lookupGatewayMeshTarget(mt)
+	if err != nil {
+		return fmt.Errorf("install-tailscale: %w", err)
 	}
-	v, _ = scaffold.PlanCacheGet(ctx, CacheKeyPreauthKey)
-	authKey, _ := v.(string)
-	if authKey == "" {
-		return fmt.Errorf("install-tailscale: preauth key not resolved")
+	controlURL, err := getOrResolveControlURL(ctx, s.dial, gwMT)
+	if err != nil {
+		return fmt.Errorf("install-tailscale: %w", err)
+	}
+	authKey, err := getOrResolvePreauthKey(ctx, s.dial, gwMT)
+	if err != nil {
+		return fmt.Errorf("install-tailscale: %w", err)
 	}
 	// Strip scheme/port to get the bare hostname we'll seed into /etc/hosts
 	// below. HostnameFromControlURL handles http://host:port, https://host/,
@@ -213,4 +229,36 @@ func (s *InstallTailscaleStep) Verify(ctx context.Context, t scaffold.Target) er
 		return fmt.Errorf("install-tailscale verify: no tailscale IP on %s", m.Name)
 	}
 	return nil
+}
+
+// lookupGatewayMeshTarget returns a *MeshTarget representing the headscale
+// gateway that the caller's mesh target should join. For the gateway host
+// itself the payload already carries Gateway+Machine, so we return it
+// unchanged. For node hosts we scan the mesh Options for the first
+// headscale gateway whose Reference points at a known machine. We assume a
+// manifest has at most one headscale gateway per run — apply.BuildPlan's
+// mesh phase is single-control-plane by design (see mesh.AddPhase), and
+// mixing two control planes in one manifest isn't supported anywhere else
+// either. If that invariant ever loosens, install_tailscale would need to
+// map each target to its designated gateway instead of taking the first.
+func (s *InstallTailscaleStep) lookupGatewayMeshTarget(mt *MeshTarget) (*MeshTarget, error) {
+	if mt.IsGatewayHost && mt.Gateway != nil {
+		return mt, nil
+	}
+	for i := range s.gateways {
+		gw := &s.gateways[i]
+		if gw.Networking == nil || !strings.EqualFold(strings.TrimSpace(gw.Networking.Mode), "headscale") {
+			continue
+		}
+		for _, m := range s.machines {
+			if m.Name == gw.Reference {
+				return &MeshTarget{
+					Machine:       m,
+					Gateway:       gw,
+					IsGatewayHost: true,
+				}, nil
+			}
+		}
+	}
+	return nil, fmt.Errorf("lookup headscale gateway for %q: none found in manifest", mt.Machine.Name)
 }

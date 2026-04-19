@@ -1,6 +1,7 @@
 package scaffold
 
 import (
+	"context"
 	"fmt"
 
 	"github.com/gluwa/openclaw-swarm2/internal/scaffold/progress"
@@ -11,6 +12,14 @@ const defaultConcurrency = 4
 // Plan is a mutable builder; call Build() for an ExecutablePlan.
 type Plan struct {
 	Phases []*Phase
+
+	// PreRun, if non-nil, is invoked by ExecutablePlan.Execute after
+	// EnsurePlanCache and before any phase runs. Used by apply.BuildPlan to
+	// install plan-scoped fallback resolvers (host resolver, mesh IP
+	// resolver) so a cold `--only <phase>` invocation can lazily re-hydrate
+	// state that would normally be populated by an earlier phase's cache
+	// writes. Returning an error aborts the run before the first phase.
+	PreRun func(ctx context.Context) error
 }
 
 // New creates an empty plan.
@@ -63,5 +72,5 @@ func (p *Plan) Build(obs ...progress.BuildObserver) (*ExecutablePlan, error) {
 		}
 	}
 	compiled := compilePlan(p, obs)
-	return &ExecutablePlan{compiled: compiled}, nil
+	return &ExecutablePlan{compiled: compiled, preRun: p.PreRun}, nil
 }

@@ -4,10 +4,12 @@ package node
 
 import (
 	"context"
+	"fmt"
 	"strings"
 
 	"github.com/gluwa/openclaw-swarm2/internal/claws/plans/apply/common"
 	manifestdata "github.com/gluwa/openclaw-swarm2/internal/manifests/data"
+	"github.com/gluwa/openclaw-swarm2/internal/platformutil/bash"
 	"github.com/gluwa/openclaw-swarm2/internal/scaffold"
 )
 
@@ -37,26 +39,72 @@ func (nt *NodeTarget) GetMachine() manifestdata.Machine { return nt.Machine }
 //     openclaw's client refuses plaintext ws:// to public IPs ("SECURITY
 //     ERROR: Cannot connect over plaintext"). The tailnet address (100.x/8
 //     RFC6598) bypasses that guard AND is routable between mesh peers.
-//  3. Manifest-declared GWMach.Host (static non-Linode gateway on a private
+//  3. SSH fallback: when the gateway is on a headscale mesh and neither of
+//     the above produced a value, SSH into the gateway VM and read
+//     `tailscale ip -4`, caching the result. This covers cold-start runs
+//     (`claws apply --only node`) where mesh-join never ran in this process
+//     and the cache is empty — we'd otherwise silently fall through to
+//     the public IP and bootstrap-node would install a unit that dials a
+//     plaintext ws:// to a public address, tripping openclaw's security
+//     guard. Requires dial to be non-nil; when it's nil (tests, describe-
+//     only) we skip the probe.
+//  4. Manifest-declared GWMach.Host (static non-Linode gateway on a private
 //     network the manifest already knows about).
-//  4. Plan-cache public host recorded by provisioning.create-machine (last
+//  5. Plan-cache public host recorded by provisioning.create-machine (last
 //     resort — only works for loopback-bound gateways or when openclaw's
 //     insecure-ws guard is satisfied some other way).
 //
 // Pre-cache fallback matters for standalone gateways (BYOS hosts that
 // already have Host set in the manifest); for Linode-provisioned gateways
 // the manifest Host is empty and the plan cache is the only source of truth.
-func (nt *NodeTarget) GatewayInternalHost(ctx context.Context) string {
+func (nt *NodeTarget) GatewayInternalHost(ctx context.Context, dial common.SSHDialFunc) string {
 	if h := strings.TrimSpace(nt.GWMach.InternalHost); h != "" {
 		return h
 	}
 	if ip, ok := scaffold.LookupPlanMachineMeshIP(ctx, nt.GWMach.Name); ok && ip != "" {
 		return ip
 	}
+	if nt.onHeadscale() && dial != nil {
+		if ip, err := readGatewayMeshIP(ctx, dial, nt.GWMach); err == nil && ip != "" {
+			scaffold.RecordPlanMachineMeshIP(ctx, nt.GWMach.Name, ip)
+			return ip
+		}
+	}
 	if h := strings.TrimSpace(nt.GWMach.Host); h != "" {
 		return h
 	}
 	return common.ResolveMachineHost(ctx, nt.GWMach)
+}
+
+func (nt *NodeTarget) onHeadscale() bool {
+	if nt.Gateway.Networking == nil {
+		return false
+	}
+	return strings.EqualFold(strings.TrimSpace(nt.Gateway.Networking.Mode), "headscale")
+}
+
+// readGatewayMeshIP SSHes into gwMach and returns the IPv4 address reported
+// by `tailscale ip -4`. Only called on cold-start runs where the plan-cache
+// mesh-IP entry hasn't been populated by mesh.install-tailscale. Returns an
+// empty string + error if tailscale isn't installed or isn't in a logged-in
+// state on the gateway — both are recoverable via a full apply run, which
+// is the right signal to propagate upward rather than guessing a host.
+func readGatewayMeshIP(ctx context.Context, dial common.SSHDialFunc, gwMach manifestdata.Machine) (string, error) {
+	host := common.ResolveMachineHost(ctx, gwMach)
+	if host == "" {
+		return "", fmt.Errorf("gateway host not resolvable for %q", gwMach.Name)
+	}
+	client, key, err := common.BorrowSSH(ctx, dial, host, common.MachineSSHPort(gwMach), common.MachineAgentUser(gwMach))
+	if err != nil {
+		return "", fmt.Errorf("dial gateway %q: %w", gwMach.Name, err)
+	}
+	defer common.ReturnSSH(ctx, key, client)
+
+	out, err := bash.RunOutput(client, `tailscale ip -4 2>/dev/null | head -n 1`)
+	if err != nil {
+		return "", fmt.Errorf("tailscale ip on %q: %w", gwMach.Name, err)
+	}
+	return strings.TrimSpace(out), nil
 }
 
 // BuildNodeTargets creates scaffold targets from manifest nodes, resolving

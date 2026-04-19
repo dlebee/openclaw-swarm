@@ -68,12 +68,28 @@ func returnSSH(ctx context.Context, key string, c *xssh.Client) {
 }
 
 // machineHost resolves the reachable host address for a MachineTarget.
-// Linode machines use Instance.PublicIPv4; static SSH machines use Spec.Host.
-func machineHost(mt *provisioning.MachineTarget) string {
+//
+// Precedence:
+//
+//  1. mt.Instance.PublicIPv4 (set in this process by provisioning.create-
+//     machine's Check/Execute).
+//  2. common.ResolveMachineHost, which consults the plan cache and, on a
+//     cold start (`--only security` in a brand-new process), falls through
+//     to the plan-scoped HostResolverFn installed by apply.BuildPlan —
+//     re-hydrating from the live provider.
+//  3. mt.Spec.Host as a final static-SSH fallback.
+//
+// The ctx-less call site exists on helper paths that never had a ctx
+// (test doubles, describe-only tools). Those callers can only rely on
+// the Instance / Spec.Host branches.
+func machineHost(ctx context.Context, mt *provisioning.MachineTarget) string {
 	if mt.Instance != nil {
 		if h := strings.TrimSpace(mt.Instance.PublicIPv4); h != "" {
 			return h
 		}
+	}
+	if h := common.ResolveMachineHost(ctx, mt.Spec); h != "" {
+		return h
 	}
 	return strings.TrimSpace(mt.Spec.Host)
 }

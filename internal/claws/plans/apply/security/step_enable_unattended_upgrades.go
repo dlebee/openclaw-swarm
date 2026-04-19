@@ -31,7 +31,7 @@ func (s *EnableUnattendedUpgradesStep) Check(ctx context.Context, t scaffold.Tar
 	if !ok {
 		return false, nil
 	}
-	host := machineHost(mt)
+	host := machineHost(ctx, mt)
 	if host == "" {
 		return false, nil
 	}
@@ -53,7 +53,7 @@ func (s *EnableUnattendedUpgradesStep) Execute(ctx context.Context, t scaffold.T
 	if !ok {
 		return fmt.Errorf("enable-unattended-upgrades: expected *MachineTarget for %q", t.ID)
 	}
-	host := machineHost(mt)
+	host := machineHost(ctx, mt)
 	if host == "" {
 		return fmt.Errorf("enable-unattended-upgrades: no reachable host for %q", t.ID)
 	}
@@ -74,7 +74,7 @@ func (s *EnableUnattendedUpgradesStep) Verify(ctx context.Context, t scaffold.Ta
 	if !ok {
 		return fmt.Errorf("enable-unattended-upgrades verify: expected *MachineTarget for %q", t.ID)
 	}
-	host := machineHost(mt)
+	host := machineHost(ctx, mt)
 	if host == "" {
 		return fmt.Errorf("enable-unattended-upgrades verify: no reachable host for %q", t.ID)
 	}

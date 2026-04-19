@@ -29,7 +29,7 @@ func (s *EnableUFWStep) Check(ctx context.Context, t scaffold.Target) (bool, err
 	if !ok {
 		return false, nil
 	}
-	host := machineHost(mt)
+	host := machineHost(ctx, mt)
 	if host == "" {
 		return false, nil
 	}
@@ -51,7 +51,7 @@ func (s *EnableUFWStep) Execute(ctx context.Context, t scaffold.Target) error {
 	if !ok {
 		return fmt.Errorf("enable-ufw: expected *MachineTarget for %q", t.ID)
 	}
-	host := machineHost(mt)
+	host := machineHost(ctx, mt)
 	if host == "" {
 		return fmt.Errorf("enable-ufw: no reachable host for %q", t.ID)
 	}
@@ -76,7 +76,7 @@ func (s *EnableUFWStep) Verify(ctx context.Context, t scaffold.Target) error {
 	if !ok {
 		return fmt.Errorf("enable-ufw verify: expected *MachineTarget for %q", t.ID)
 	}
-	host := machineHost(mt)
+	host := machineHost(ctx, mt)
 	if host == "" {
 		return fmt.Errorf("enable-ufw verify: no reachable host for %q", t.ID)
 	}

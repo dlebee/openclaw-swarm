@@ -1,0 +1,103 @@
+# Multipass provisioning + security + mesh + gateway + channels + node +
+# agents fixture for TestPhasesIsolatedNoCache. This fixture adds a
+# single telegram channel on top of the manifest-cron.yml shape so
+# every conditional AddPhase call in internal/claws/plans/apply/apply.go
+# fires and the `channels` phase is covered alongside the others.
+#
+# Why this isn't a verbatim copy of manifest-cron.yml: BuildPlan only
+# invokes channels.AddPhase when BuildChannelTargets returns a non-
+# empty slice, which requires at least one gateway.channels[] entry.
+# manifest-cron.yml omits channels by design (the cron test uses
+# `cron add --no-deliver` to decouple from channel-delivery — see
+# manifest-cron.yml header). For TestPhasesIsolatedNoCache we WANT
+# every conditional phase present, so a single telegram channel is
+# the cheapest addition that brings the `channels` phase into
+# plan.PhaseNames().
+#
+# Why telegram specifically (and why a fake token is fine): telegram
+# is the only production channel type whose `openclaw channels add`
+# lifecycle hook is purely local — no network call, no handshake
+# (see onAccountConfigChanged in the telegram plugin; only clears
+# local polling offsets). The daemon's first getUpdates poll would
+# reach Telegram with the fake token and 401, but
+# TestPhasesIsolatedNoCache never waits for a poll — it only cares
+# that the `channels` apply phase converges, which happens before
+# the daemon starts polling. Slack would need both botToken +
+# appToken *and* an initial socket mode handshake; Discord opens a
+# persistent ws at gateway start. Telegram is the cleanest "add
+# succeeds offline" channel, matching the pattern in
+# manifest-channels.yml and manifest-agents.yml.
+#
+# Topology (identical to manifest-cron.yml so phase-specific assertions
+# stay reusable across tests):
+#
+#   gateway-host   (2 CPU / 2 GiB / 5 GiB disk) — runs openclaw-gateway
+#                  and the telegram channel daemon. No fake-ollama
+#                  here: TestPhasesIsolatedNoCache does not trigger
+#                  agent turns, only applies config.
+#   scraper-host   (2 CPU / 2 GiB / 8 GiB disk) — runs openclaw-node
+#                  (scraper-node). Same exec_policy as manifest-cron.yml
+#                  so the `node` phase exercises the ExecPolicyStep
+#                  Applicable=true branch.
+#
+# Why keep nodes + agents even though this test doesn't fire a cron:
+# the whole point of TestPhasesIsolatedNoCache is to exercise every
+# conditional phase, so dropping nodes or agents would narrow the
+# coverage envelope. The per-phase assertion is "does ex.Execute with
+# OnlyPhases=[<phase>] against a fresh plan + empty cache return nil" —
+# having all phases present is the maximal signal.
+
+prefix: claws-it-multipass-phases
+
+machines:
+  - name: gateway-host
+    type: multipass
+    cpus: 2
+    memory: 2G
+    disk: 5G
+    bootstrap_user: root
+    agent_user: agent
+  - name: scraper-host
+    type: multipass
+    cpus: 2
+    memory: 2G
+    disk: 8G
+    bootstrap_user: root
+    agent_user: agent
+
+gateways:
+  - name: gateway
+    reference: gateway-host
+    networking:
+      mode: headscale
+      public_hostname:
+        strategy: custom
+        host: "http://gateway-host.local:8080"
+      preauth_key_source: file
+      preauth_key_file: /var/lib/claws/headscale/preauth.key
+    channels:
+      - kind: telegram
+        name: telegram-main
+        token_env: TELEGRAM_MAIN_BOT_TOKEN
+        default: true
+
+nodes:
+  - name: scraper-node
+    gateway: gateway
+    reference: scraper-host
+    exec_policy:
+      security: full
+      ask: "off"
+
+agents:
+  - id: reporter
+    gateway: gateway
+    workspace: ~/.openclaw/workspace
+    model: { primary: "ollama/qwen2.5:0.5b" }
+    tools:
+      exec: { host: node, node: scraper-node, security: full }
+    soul: |
+      You are a terse reporter for integration testing.
+      When asked for a sentence, reply with exactly one short English sentence.
+    identity:
+      name: Reporter

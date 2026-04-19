@@ -58,6 +58,30 @@ func (s *ResolveControlURLStep) Verify(ctx context.Context, _ scaffold.Target) e
 	return nil
 }
 
+// getOrResolveControlURL returns the control URL for this plan run, preferring
+// the plan-cache entry seeded by resolve-control-url. On a cold start
+// (`claws apply --only mesh-gateway` / `--only mesh-join` without resolve-
+// control-url having run in this process) the cache is empty; we then
+// re-derive the URL from the manifest's networking.public_hostname — a pure
+// function of the gateway spec for strategy=custom, and an SSH "curl
+// icanhazip" probe against the gateway VM for strategy=sslip. The
+// re-derived value is written back to the cache so follow-up calls in the
+// same run (install-headscale → install-caddy → install-tailscale) share
+// one resolution instead of three.
+func getOrResolveControlURL(ctx context.Context, dial SSHDialFunc, mt *MeshTarget) (string, error) {
+	if v, ok := scaffold.PlanCacheGet(ctx, CacheKeyControlURL); ok {
+		if s, _ := v.(string); s != "" {
+			return s, nil
+		}
+	}
+	url, err := resolveControlURL(ctx, dial, mt, mt.Gateway)
+	if err != nil {
+		return "", fmt.Errorf("resolve control URL: %w", err)
+	}
+	scaffold.PlanCacheSet(ctx, CacheKeyControlURL, url)
+	return url, nil
+}
+
 func resolveControlURL(ctx context.Context, dial SSHDialFunc, mt *MeshTarget, gw *manifestdata.Gateway) (string, error) {
 	if gw.Networking == nil {
 		return "", fmt.Errorf("gateway %q has no networking block", gw.Name)

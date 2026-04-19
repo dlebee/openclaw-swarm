@@ -1,0 +1,98 @@
+# Linode provisioning + security + mesh + gateway + channels + node +
+# agents fixture for TestPhasesIsolatedNoCache. Mirror of the
+# Multipass tier's manifest-phases.yml but with Linode machine specs
+# (sku/image/region) and the production public_hostname strategy
+# (sslip). Adds a single telegram channel on top of the manifest-cron.yml
+# shape so every conditional AddPhase call in apply.BuildPlan fires
+# and the `channels` phase is covered alongside the others.
+#
+# Why this isn't a verbatim copy of manifest-cron.yml: BuildPlan only
+# invokes channels.AddPhase when BuildChannelTargets returns a non-
+# empty slice, which requires at least one gateway.channels[] entry.
+# manifest-cron.yml omits channels by design (its cron test uses
+# `cron add --no-deliver` to decouple from channel-delivery). For
+# TestPhasesIsolatedNoCache we WANT every conditional phase present,
+# so a single telegram channel is the cheapest addition.
+#
+# Why telegram + fake token is fine: `openclaw channels add` is
+# offline — onAccountConfigChanged only clears local polling offsets
+# (no network). The daemon's first getUpdates poll would hit Telegram
+# with the fake token and 401, but TestPhasesIsolatedNoCache never
+# waits for a poll; it only cares that the `channels` apply phase
+# converges, which completes before the daemon starts polling.
+#
+# Topology (identical to manifest-cron.yml so phase-specific
+# assertions stay reusable if we ever reshape the test):
+#
+#   gateway-host   (g6-standard-1, us-east) — runs openclaw-gateway
+#                  and the telegram channel daemon. No fake-ollama
+#                  here: this test does not trigger agent turns,
+#                  only applies config.
+#   scraper-host   (g6-standard-1, us-east) — runs openclaw-node
+#                  (scraper-node). Same exec_policy as manifest-cron.yml.
+#
+# Why nodes + agents are kept: the whole point of
+# TestPhasesIsolatedNoCache is to exercise every conditional phase,
+# so dropping nodes or agents would narrow the coverage envelope.
+# Per-phase assertion is "ex.Execute with OnlyPhases=[<phase>]
+# against a fresh plan + empty cache returns nil" — maximal signal
+# requires maximal phase population.
+#
+# Cost envelope: ~$0.005 per run (two g6-standard-1 × ~15 min).
+# Cleanup is end-of-test via tag scan; a leaked prefix costs
+# ~$0.018/hr per VM so the cleanup hook runs before every
+# apply (registered up front).
+
+prefix: claws-it-linode-phases
+
+machines:
+  - name: gateway-host
+    type: linode
+    sku: g6-standard-1
+    image: linode/ubuntu24.04
+    region: us-east
+    bootstrap_user: root
+    agent_user: agent
+  - name: scraper-host
+    type: linode
+    sku: g6-standard-1
+    image: linode/ubuntu24.04
+    region: us-east
+    bootstrap_user: root
+    agent_user: agent
+
+gateways:
+  - name: gateway
+    reference: gateway-host
+    networking:
+      mode: headscale
+      public_hostname:
+        strategy: sslip
+      preauth_key_source: file
+      preauth_key_file: /var/lib/claws/headscale/preauth.key
+    channels:
+      - kind: telegram
+        name: telegram-main
+        token_env: TELEGRAM_MAIN_BOT_TOKEN
+        default: true
+
+nodes:
+  - name: scraper-node
+    gateway: gateway
+    reference: scraper-host
+    exec_policy:
+      security: full
+      ask: "off"
+
+agents:
+  - id: reporter
+    gateway: gateway
+    workspace: ~/.openclaw/workspace
+    model: { primary: "ollama/qwen2.5:0.5b" }
+    tools:
+      exec: { host: node, node: scraper-node, security: full }
+    soul: |
+      You are a terse reporter for integration testing.
+      When asked for a sentence, reply with exactly one short English sentence.
+    identity:
+      name: Reporter

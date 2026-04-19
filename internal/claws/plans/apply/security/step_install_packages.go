@@ -29,7 +29,7 @@ func (s *InstallPackagesStep) Check(ctx context.Context, t scaffold.Target) (boo
 	if !ok {
 		return false, nil
 	}
-	host := machineHost(mt)
+	host := machineHost(ctx, mt)
 	if host == "" {
 		return false, nil
 	}
@@ -53,7 +53,7 @@ func (s *InstallPackagesStep) Execute(ctx context.Context, t scaffold.Target) er
 	if !ok {
 		return fmt.Errorf("install-security-packages: expected *MachineTarget for %q", t.ID)
 	}
-	host := machineHost(mt)
+	host := machineHost(ctx, mt)
 	if host == "" {
 		return fmt.Errorf("install-security-packages: no reachable host for %q", t.ID)
 	}
@@ -77,7 +77,7 @@ func (s *InstallPackagesStep) Verify(ctx context.Context, t scaffold.Target) err
 	if !ok {
 		return fmt.Errorf("install-security-packages verify: expected *MachineTarget for %q", t.ID)
 	}
-	host := machineHost(mt)
+	host := machineHost(ctx, mt)
 	if host == "" {
 		return fmt.Errorf("install-security-packages verify: no reachable host for %q", t.ID)
 	}

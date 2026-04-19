@@ -7,6 +7,7 @@ import (
 // ExecutablePlan is the compiled result of Plan.Build().
 type ExecutablePlan struct {
 	compiled []compiledPhase
+	preRun   func(ctx context.Context) error
 }
 
 // PhaseNames returns the ordered phase names in the compiled plan. Mirrors
@@ -42,7 +43,16 @@ func (e *ExecutablePlan) DescribeStyledWithHints(ctx context.Context, width int,
 	return renderPreparedPlanTree(cells, width, h), nil
 }
 
-// Execute runs the plan.
+// Execute runs the plan. If a PreRun hook was attached via Plan.PreRun it is
+// invoked after EnsurePlanCache and before the first phase runs, so the hook
+// can seed plan-cache state (e.g. host / mesh-IP resolvers) that every phase
+// may rely on regardless of phase filtering.
 func (e *ExecutablePlan) Execute(ctx context.Context, opts ExecuteOptions) error {
+	ctx = EnsurePlanCache(ctx)
+	if e.preRun != nil {
+		if err := e.preRun(ctx); err != nil {
+			return err
+		}
+	}
 	return runPlan(ctx, e.compiled, opts)
 }

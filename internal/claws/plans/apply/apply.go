@@ -12,6 +12,7 @@ import (
 
 	"github.com/gluwa/openclaw-swarm2/internal/claws/plans/apply/agents"
 	"github.com/gluwa/openclaw-swarm2/internal/claws/plans/apply/channels"
+	"github.com/gluwa/openclaw-swarm2/internal/claws/plans/apply/common"
 	"github.com/gluwa/openclaw-swarm2/internal/claws/plans/apply/gateway"
 	"github.com/gluwa/openclaw-swarm2/internal/claws/plans/apply/mesh"
 	"github.com/gluwa/openclaw-swarm2/internal/claws/plans/apply/node"
@@ -117,6 +118,41 @@ func BuildPlan(o BuildOptions) (*scaffold.Plan, error) {
 		agents.AddPhase(p, agentTargets, agents.Options{
 			SSHDial: agents.SSHDialFunc(o.SSHDial),
 		})
+	}
+
+	// PreRun installs a host resolver that every non-provisioning phase
+	// consults via common.ResolveMachineHost when the per-machine host
+	// isn't in the plan cache yet. On a hot run (full apply pipeline)
+	// provisioning.create-machine writes the entries first and this
+	// resolver is never hit. On a cold `--only <phase>` run — or any
+	// run where an earlier phase was skipped — the resolver lazily
+	// re-hydrates from the provider, so phases don't need to couple
+	// their correctness to an earlier phase's in-memory state. One-shot
+	// guarded by a plan-cache flag so a run doesn't re-ListByTag for
+	// every machine lookup.
+	if o.Provider != nil {
+		provider := o.Provider
+		prefix := o.Manifest.Prefix
+		machines := o.Manifest.Machines
+		p.PreRun = func(ctx context.Context) error {
+			common.RegisterHostResolver(ctx, func(ctx context.Context, machineName string) (string, bool, error) {
+				if h, ok := scaffold.LookupPlanMachineHost(ctx, machineName); ok && h != "" {
+					return h, true, nil
+				}
+				if _, done := scaffold.PlanCacheGet(ctx, "APPLY_HOST_RESOLVER_DONE"); !done {
+					targets := provisioning.BuildMachineTargets(machines)
+					if err := provisioning.ResolveHostedInstances(ctx, provider, prefix, targets); err != nil {
+						return "", false, err
+					}
+					scaffold.PlanCacheSet(ctx, "APPLY_HOST_RESOLVER_DONE", true)
+				}
+				if h, ok := scaffold.LookupPlanMachineHost(ctx, machineName); ok && h != "" {
+					return h, true, nil
+				}
+				return "", false, nil
+			})
+			return nil
+		}
 	}
 	return p, nil
 }

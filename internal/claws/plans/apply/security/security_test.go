@@ -125,7 +125,7 @@ func TestMachineHost_instanceIPv4(t *testing.T) {
 		Spec:     manifestdata.Machine{Name: "web", Host: "static.example.com"},
 		Instance: &hosting.Instance{PublicIPv4: "203.0.113.1"},
 	}
-	if got := machineHost(mt); got != "203.0.113.1" {
+	if got := machineHost(context.Background(), mt); got != "203.0.113.1" {
 		t.Fatalf("machineHost = %q, want 203.0.113.1", got)
 	}
 }
@@ -135,14 +135,14 @@ func TestMachineHost_fallbackToSpecHost(t *testing.T) {
 		Spec:     manifestdata.Machine{Name: "jump", Host: "static.example.com"},
 		Instance: nil,
 	}
-	if got := machineHost(mt); got != "static.example.com" {
+	if got := machineHost(context.Background(), mt); got != "static.example.com" {
 		t.Fatalf("machineHost = %q, want static.example.com", got)
 	}
 }
 
 func TestMachineHost_emptyWhenNone(t *testing.T) {
 	mt := &provisioning.MachineTarget{Spec: manifestdata.Machine{Name: "x"}, Instance: nil}
-	if got := machineHost(mt); got != "" {
+	if got := machineHost(context.Background(), mt); got != "" {
 		t.Fatalf("machineHost = %q, want empty", got)
 	}
 }

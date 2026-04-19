@@ -47,21 +47,69 @@ func MachineHost(m manifestdata.Machine) string {
 	return strings.TrimSpace(m.Host)
 }
 
+// HostResolverFn is a last-resort lookup installed on the plan cache by
+// apply.BuildPlan. ResolveMachineHost invokes it when both the plan cache
+// (populated by provisioning.create-machine) and the manifest's Spec.Host
+// are empty — the cold-start case where an operator runs
+// `claws apply --only <phase>` without provisioning having written any
+// per-machine host entry in this process.
+//
+// The resolver is expected to query the hosting provider (ListByTag /
+// match-by-label) and record the discovered PublicIPv4 into the plan cache
+// via scaffold.RecordPlanMachineHost before returning, so subsequent calls
+// in the same run are zero-cost cache hits.
+//
+// Returning ("", false, nil) means "no fallback available" (e.g. SSH-only
+// machine, empty manifest prefix); returning an error aborts the calling
+// step with that error.
+type HostResolverFn func(ctx context.Context, machineName string) (string, bool, error)
+
+const planCacheHostResolverKey = "APPLY_HOST_RESOLVER"
+
+// RegisterHostResolver installs fn on ctx's plan cache so every subsequent
+// ResolveMachineHost call in the same run can trigger lazy host re-hydration
+// when the per-machine cache entry is still absent. Safe to call multiple
+// times; the most recent fn wins.
+func RegisterHostResolver(ctx context.Context, fn HostResolverFn) {
+	if fn == nil {
+		return
+	}
+	scaffold.PlanCacheSet(ctx, planCacheHostResolverKey, fn)
+}
+
 // ResolveMachineHost returns the reachable SSH address for m, preferring the
 // plan-cache entry recorded by create-machine (for Linode instances, both
 // existing-discovered in Check and fresh-created in Execute) over the
 // manifest's static Spec.Host. Falls back to Spec.Host when no cache entry
 // exists — which is exactly how non-Linode (static SSH) machines work today.
 //
-// This lets every downstream phase — mesh, gateway, channels, node, agents,
-// automations — dial Linode machines by their freshly resolved IP without
-// each phase having to thread a *provisioning.MachineTarget pointer through
-// its own target struct.
+// On a cold start (e.g. `claws apply --only security` in a brand-new process
+// where provisioning never ran this invocation), both the cache and the
+// manifest Host are empty for hosted machines. Before surrendering we consult
+// the plan-cache-installed HostResolverFn (see RegisterHostResolver), which
+// apply.BuildPlan wires up to call provisioning.ResolveHostedInstances
+// against the live provider — reconstructing PublicIPv4 from the running
+// infrastructure itself rather than from a previous phase's in-memory state.
+//
+// Errors from the resolver are swallowed (returns empty string) so callers
+// can still distinguish "no host" from "resolver failed" via the downstream
+// dial failure; this mirrors how LookupPlanMachineHost's ok=false used to
+// fall through to MachineHost silently.
 func ResolveMachineHost(ctx context.Context, m manifestdata.Machine) string {
 	if h, ok := scaffold.LookupPlanMachineHost(ctx, m.Name); ok && h != "" {
 		return h
 	}
-	return MachineHost(m)
+	if h := MachineHost(m); h != "" {
+		return h
+	}
+	if v, ok := scaffold.PlanCacheGet(ctx, planCacheHostResolverKey); ok {
+		if fn, ok := v.(HostResolverFn); ok && fn != nil {
+			if h, ok, err := fn(ctx, m.Name); err == nil && ok && strings.TrimSpace(h) != "" {
+				return strings.TrimSpace(h)
+			}
+		}
+	}
+	return ""
 }
 
 func MachineSSHPort(m manifestdata.Machine) int {
