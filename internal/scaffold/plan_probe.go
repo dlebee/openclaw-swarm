@@ -11,7 +11,7 @@ func annotatePlanCellsWithProbe(ctx context.Context, compiled []compiledPhase, h
 	var out []annotatedCell
 	seq := 0
 	for _, ph := range compiled {
-		if skipName(ph.name, h.SkipPhases) {
+		if phaseFiltered(ph.name, h.OnlyPhases, h.SkipPhases) {
 			for _, t := range ph.targets {
 				for _, s := range ph.steps {
 					out = append(out, annotatedCell{

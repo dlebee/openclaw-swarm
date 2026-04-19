@@ -359,6 +359,123 @@ func TestExecute_skipPhase(t *testing.T) {
 	}
 }
 
+// TestExecute_onlyPhases: a non-empty OnlyPhases list restricts execution to
+// the listed phases. Every other phase is skipped (not even probed).
+func TestExecute_onlyPhases(t *testing.T) {
+	a := &mockStep{name: "A", applicable: true}
+	b := &mockStep{name: "B", applicable: true}
+	c := &mockStep{name: "C", applicable: true}
+	p := New()
+	ph1 := p.AddPhase("p1")
+	ph1.AddTargets(Target{ID: "t1"})
+	ph1.AddStep(a)
+	ph2 := p.AddPhase("p2")
+	ph2.AddTargets(Target{ID: "t2"})
+	ph2.AddStep(b)
+	ph3 := p.AddPhase("p3")
+	ph3.AddTargets(Target{ID: "t3"})
+	ph3.AddStep(c)
+
+	ex, _ := p.Build()
+	err := ex.Execute(context.Background(), ExecuteOptions{
+		Progress:   progress.Noop{},
+		OnlyPhases: []string{"p1", "p3"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(strings.Join(a.calls, ","), "execute") {
+		t.Fatalf("p1 should have executed: %v", a.calls)
+	}
+	if strings.Contains(strings.Join(b.calls, ","), "applicable") {
+		t.Fatalf("p2 should have been skipped entirely, got %v", b.calls)
+	}
+	if !strings.Contains(strings.Join(c.calls, ","), "execute") {
+		t.Fatalf("p3 should have executed: %v", c.calls)
+	}
+}
+
+// TestExecute_onlyPhasesIntersectSkip: SkipPhases is applied AFTER OnlyPhases,
+// so asking to run {p1,p2} but skip {p2} runs only p1.
+func TestExecute_onlyPhasesIntersectSkip(t *testing.T) {
+	a := &mockStep{name: "A", applicable: true}
+	b := &mockStep{name: "B", applicable: true}
+	p := New()
+	ph1 := p.AddPhase("p1")
+	ph1.AddTargets(Target{ID: "t1"})
+	ph1.AddStep(a)
+	ph2 := p.AddPhase("p2")
+	ph2.AddTargets(Target{ID: "t2"})
+	ph2.AddStep(b)
+
+	ex, _ := p.Build()
+	err := ex.Execute(context.Background(), ExecuteOptions{
+		Progress:   progress.Noop{},
+		OnlyPhases: []string{"p1", "p2"},
+		SkipPhases: []string{"p2"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(strings.Join(a.calls, ","), "execute") {
+		t.Fatalf("p1 should have executed: %v", a.calls)
+	}
+	if strings.Contains(strings.Join(b.calls, ","), "applicable") {
+		t.Fatalf("p2 should have been skipped by deny-list: %v", b.calls)
+	}
+}
+
+// TestDescribeStyledWithHints_onlyPhases: phases not in OnlyPhases render as
+// "skipped (phase)" in the prepared-plan tree, same as SkipPhases.
+func TestDescribeStyledWithHints_onlyPhases(t *testing.T) {
+	a := &mockStep{name: "A", applicable: true}
+	p := New()
+	ph1 := p.AddPhase("p1")
+	ph1.AddTargets(Target{ID: "t1"})
+	ph1.AddStep(a)
+	ph2 := p.AddPhase("p2")
+	ph2.AddTargets(Target{ID: "t2"})
+	ph2.AddStep(a)
+	ex, err := p.Build()
+	if err != nil {
+		t.Fatal(err)
+	}
+	s, err := ex.DescribeStyledWithHints(context.Background(), 80, PlanDisplayHints{
+		OnlyPhases: []string{"p1"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(s, "Only phases: p1.") {
+		t.Fatalf("want only-phases header note, got: %q", s)
+	}
+	if !strings.Contains(s, "skipped") {
+		t.Fatalf("want skipped status for p2 cell, got: %q", s)
+	}
+}
+
+func TestPhaseNames(t *testing.T) {
+	p := New()
+	ph1 := p.AddPhase("p1")
+	ph1.AddTargets(Target{ID: "t1"})
+	ph1.AddStep(&mockStep{name: "A", applicable: true})
+	ph2 := p.AddPhase("p2")
+	ph2.AddTargets(Target{ID: "t2"})
+	ph2.AddStep(&mockStep{name: "B", applicable: true})
+	got := p.PhaseNames()
+	if len(got) != 2 || got[0] != "p1" || got[1] != "p2" {
+		t.Fatalf("Plan.PhaseNames: %v", got)
+	}
+	ex, err := p.Build()
+	if err != nil {
+		t.Fatal(err)
+	}
+	got = ex.PhaseNames()
+	if len(got) != 2 || got[0] != "p1" || got[1] != "p2" {
+		t.Fatalf("ExecutablePlan.PhaseNames: %v", got)
+	}
+}
+
 func TestExecWithConfirm_declined(t *testing.T) {
 	a := &mockStep{name: "A", applicable: true}
 	p := New()

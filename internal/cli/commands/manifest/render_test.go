@@ -12,7 +12,7 @@ func TestRenderManifest_containsSections(t *testing.T) {
 		Prefix:    "lab",
 		NodeMajor: 22,
 		Machines: []data.Machine{
-			{Name: "m1", Type: data.MachineTypeSSH, Region: "us", SSHUser: "u", AgentUser: "a"},
+			{Name: "m1", Type: data.MachineTypeSSH, Region: "us", BootstrapUser: "u", AgentUser: "a"},
 		},
 		Gateways: []data.Gateway{{Name: "gw1", Reference: "m1"}},
 	}

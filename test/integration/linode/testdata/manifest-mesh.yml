@@ -1,0 +1,79 @@
+# Linode provisioning + security + mesh smoke-test manifest.
+#
+# Three bare Linode machines + one headscale gateway spec. Mirrors the
+# Multipass tier's manifest-mesh.yml topology (gateway-host +
+# node-host-1 + node-host-2) but swaps the mDNS control URL for the
+# production default:
+#
+#   strategy: sslip
+#
+# which resolves at apply time to
+#
+#   https://mesh-gw.<dashed-public-ip>.sslip.io
+#
+# See resolveControlURL in internal/claws/plans/apply/mesh/control_url.go:
+# the gateway VM asks `curl icanhazip.com` for its own IP, we dash-
+# encode it, and glue on the sslip.io suffix. sslip.io resolves that
+# back to the IP publicly, which is exactly what Caddy needs for ACME
+# (Let's Encrypt HTTP-01 challenge) and what tailscaled needs to reach
+# the control server. This is the same flow david-army.yml drives in
+# production — integration-testing it here is the whole point of the
+# Linode tier existing separately from the Multipass one.
+#
+# Phases exercised: provisioning, security, mesh-gateway, mesh-join.
+# The install-caddy + Let's Encrypt cert dance happens in mesh-gateway
+# (HTTPS control URL => InstallCaddyStep is applicable). Downstream
+# gateway/channels/node/agents are deliberately not run; this fixture
+# is about the mesh wire working over a real public URL, nothing past
+# it.
+#
+# preauth_key_source: file with a path that doesn't exist yet tells
+# resolve-preauth-key to auto-create a key via the headscale CLI on
+# the gateway (see createPreauthKeyOnGateway in
+# internal/claws/plans/apply/mesh/preauth_key.go). No secrets in the
+# fixture, no env vars to wire up for CI.
+
+prefix: claws-it-linode-mesh
+
+machines:
+  - name: gateway-host
+    type: linode
+    sku: g6-standard-1
+    image: linode/ubuntu24.04
+    region: us-east
+    bootstrap_user: root
+    agent_user: agent
+
+  - name: node-host-1
+    type: linode
+    sku: g6-standard-1
+    image: linode/ubuntu24.04
+    region: us-east
+    bootstrap_user: root
+    agent_user: agent
+
+  - name: node-host-2
+    type: linode
+    sku: g6-standard-1
+    image: linode/ubuntu24.04
+    region: us-east
+    bootstrap_user: root
+    agent_user: agent
+
+gateways:
+  - name: mesh-gw
+    reference: gateway-host
+    networking:
+      mode: headscale
+      public_hostname:
+        strategy: sslip
+      preauth_key_source: file
+      preauth_key_file: /var/lib/claws/headscale/preauth.key
+
+nodes:
+  - name: node-1
+    gateway: mesh-gw
+    reference: node-host-1
+  - name: node-2
+    gateway: mesh-gw
+    reference: node-host-2

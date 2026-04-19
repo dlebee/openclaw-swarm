@@ -1,0 +1,58 @@
+# Linode provisioning + security + gateway smoke-test manifest.
+#
+# Single machine. One gateway referencing it. No nodes, no channels,
+# no agents, no automations — TestGatewaySmoke runs provisioning +
+# security + gateway only, so everything past pair-gateway-device is
+# out of scope and doesn't need to appear here.
+#
+# About the missing networking: block:
+#
+#   Same rationale as the Multipass tier's manifest-gateway.yml:
+#   omitting `networking:` (GatewayNetworking stays nil in the parsed
+#   manifest) pins NeedsLANBind → false in
+#   internal/claws/plans/apply/gateway/service.go. The daemon binds
+#   loopback, no OPENCLAW_ALLOW_INSECURE_PRIVATE_WS=1 drop-in, and no
+#   mesh infrastructure (headscale / caddy / tailscale) is required.
+#   That's the *smallest* production shape a standalone gateway on a
+#   public-IP VM can have — a single box running the daemon, the CLI
+#   talking to it over localhost — and it's the minimum exercise for
+#   bootstrap-gateway + configure-gateway + pair-gateway-device to
+#   matter.
+#
+#   The mesh phase still gets added to the plan (apply.go always
+#   calls mesh.AddPhase) but with no headscale gateways to target it
+#   degenerates into a noop configure-mesh step. OnlyPhases in the
+#   test filters it out regardless.
+#
+# Why g6-standard-1 (1 vCPU / 2 GiB) not the cheaper g6-nanode-1:
+#
+#   `openclaw onboard --install-daemon` runs `npm install -g
+#   openclaw`, pulling a ~300MB node_modules tree and transpiling a
+#   bunch of TS on first daemon start. Nanodes (1 GiB) OOM during
+#   that sequence on cold caches. Standard-1 keeps the cost envelope
+#   in single pennies per run while giving npm room to breathe —
+#   same SKU as the other three Linode fixtures so the tier stays
+#   mechanically symmetrical.
+#
+# bootstrap_user = root matches Linode's stock ubuntu24.04 image
+# (keys land in /root/.ssh/authorized_keys, PermitRootLogin=
+# prohibit-password). agent_user = agent forces ensure-agent-user to
+# run useradd and enable linger, which is what
+# BootstrapGatewayStep's `systemctl --user` path depends on — root
+# would be missing XDG_RUNTIME_DIR and the unit wouldn't survive the
+# SSH session.
+
+prefix: claws-it-linode-gw
+
+machines:
+  - name: gateway-host
+    type: linode
+    sku: g6-standard-1
+    image: linode/ubuntu24.04
+    region: us-east
+    bootstrap_user: root
+    agent_user: agent
+
+gateways:
+  - name: gateway-gw
+    reference: gateway-host

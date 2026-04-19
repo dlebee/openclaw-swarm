@@ -86,7 +86,14 @@ require a one-time pairing code to activate the bot.`),
 			if port == 0 {
 				port = 22
 			}
-			user := strings.TrimSpace(mach.SSHUser)
+			// Channel pairing happens post-provisioning, so default to the
+			// agent user (the ops identity). Bootstrap_user is a last-ditch
+			// fallback for static ssh-type machines that don't declare an
+			// agent user.
+			user := strings.TrimSpace(mach.AgentUser)
+			if user == "" {
+				user = strings.TrimSpace(mach.BootstrapUser)
+			}
 			if user == "" {
 				user = "root"
 			}

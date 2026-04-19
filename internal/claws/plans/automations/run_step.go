@@ -174,14 +174,25 @@ func (d *DynamicStep) resolveScript(inline, file string) (string, error) {
 	return string(b), nil
 }
 
-func (d *DynamicStep) runAs() string {
+// runAs resolves the SSH user for a dynamic automation step. Automations
+// run after the apply plan is fully converged, so the default identity is
+// the agent user (never the bootstrap user, which may have been disabled
+// by hardening). Step- and automation-level overrides let power users
+// escape the default when they need to (e.g. a one-off root maintenance
+// script), but those overrides stay opt-in.
+//
+//  1. Step-level run_as override (most specific)
+//  2. Automation-level run_as override
+//  3. Machine-level agent_user (the normal case)
+//  4. "root" (only when the manifest opted out of an agent user)
+func (d *DynamicStep) runAs(m manifestdata.Machine) string {
 	if u := strings.TrimSpace(d.step.RunAs); u != "" {
 		return u
 	}
 	if u := strings.TrimSpace(d.defaultUser); u != "" {
 		return u
 	}
-	return "root"
+	return common.MachineAgentUser(m)
 }
 
 func (d *DynamicStep) kind() string {
@@ -202,7 +213,7 @@ func (d *DynamicStep) dial(ctx context.Context, t scaffold.Target) (*xssh.Client
 		return nil, "", fmt.Errorf("machine %q has no reachable host yet (not provisioned?)", m.Name)
 	}
 	port := common.MachineSSHPort(m)
-	user := d.runAs()
+	user := d.runAs(m)
 	return common.BorrowSSH(ctx, d.opts.SSHDial, host, port, user)
 }
 

@@ -31,14 +31,16 @@ func NewCreateMachineStep(opts Options) *CreateMachineStep {
 // Name implements scaffold.Step.
 func (*CreateMachineStep) Name() string { return "create-machine" }
 
-// Applicable implements scaffold.Step — only Linode machines are provisioned here.
+// Applicable implements scaffold.Step — runs for any machine backed by a
+// hosting.Provider (linode, multipass, …). SSH-typed machines are assumed
+// pre-provisioned and skip this step entirely.
 func (a *CreateMachineStep) Applicable(ctx context.Context, t scaffold.Target) (bool, error) {
 	_ = ctx
 	mt, ok := t.Payload.(*MachineTarget)
 	if !ok || mt == nil {
 		return false, nil
 	}
-	return mt.Spec.Type == manifestdata.MachineTypeLinode, nil
+	return manifestdata.IsHostedMachineType(mt.Spec.Type), nil
 }
 
 // Check implements scaffold.Step — list instances tagged claws/<prefix>, then match
@@ -71,6 +73,10 @@ func (a *CreateMachineStep) Check(ctx context.Context, t scaffold.Target) (satis
 		inst := matches[0]
 		mt.Instance = &inst
 		scaffold.RecordPlanMachineExists(ctx, t.ID, true)
+		// Cache the resolved IP so downstream phases (mesh, gateway, node,
+		// channels, agents, automations) can dial by public IPv4 without
+		// each target struct carrying a pointer back to this MachineTarget.
+		scaffold.RecordPlanMachineHost(ctx, mt.Spec.Name, inst.PublicIPv4)
 		return true, nil
 	default:
 		return false, fmt.Errorf("create-machine: %d instances with label %q under tag %q (want at most 1)",
@@ -95,14 +101,31 @@ func (a *CreateMachineStep) Execute(ctx context.Context, t scaffold.Target) erro
 		return err
 	}
 	spec := mt.Spec
+	// Opts carry BOTH the Linode and Multipass field sets; providers ignore
+	// the ones that don't apply to them. This keeps create-machine fully
+	// provider-agnostic at the cost of a few unused struct fields per call.
 	opts := hosting.CreateInstanceOpts{
 		Label:      machineLabel(a.prefix, spec.Name),
-		Region:     spec.Region,
-		SKU:        spec.SKU,
 		Image:      spec.Image,
 		Tags:       []string{clawsPrefixTag(a.prefix), machineTag(a.prefix, spec.Name)},
 		PublicKeys: []string{a.sshPubKey},
-		RootPass:   rootPass,
+		// BootstrapUser tells the provider where PublicKeys need to land
+		// in the fresh image (see docs on hosting.CreateInstanceOpts).
+		// Empty manifest value resolves to "root" inside the provider.
+		BootstrapUser: strings.TrimSpace(spec.BootstrapUser),
+		// Hostname is the manifest's short machine name. Multipass sets
+		// it via cloud-init so peers can dial `<name>.local` through
+		// Avahi without a dynamic IP lookup; Linode ignores the field.
+		Hostname: strings.TrimSpace(spec.Name),
+		// Linode-specific.
+		Region:   spec.Region,
+		SKU:      spec.SKU,
+		RootPass: rootPass,
+		// Multipass-specific. Zero values are passed through and the
+		// provider substitutes its own defaults if appropriate.
+		CPUs:   spec.CPUs,
+		Memory: spec.Memory,
+		Disk:   spec.Disk,
 	}
 	inst, err := a.provider.CreateInstance(ctx, opts)
 	if err != nil {
@@ -113,6 +136,10 @@ func (a *CreateMachineStep) Execute(ctx context.Context, t scaffold.Target) erro
 		return err
 	}
 	mt.Instance = inst
+	// Cache the resolved IP so downstream phases (mesh, gateway, node, etc.)
+	// can dial the freshly provisioned machine by PublicIPv4. See the matching
+	// RecordPlanMachineHost call in Check for the existing-instance path.
+	scaffold.RecordPlanMachineHost(ctx, mt.Spec.Name, inst.PublicIPv4)
 	return nil
 }
 

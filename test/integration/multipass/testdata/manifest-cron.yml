@@ -1,0 +1,169 @@
+# Multipass provisioning + security + mesh + gateway + node + agents
+# smoke-test manifest that exercises the full cron pipeline end-to-end:
+# scheduler → isolated agent turn → LLM call (fake-ollama stub on the
+# gateway VM) → tool-call dispatched over the node websocket to a
+# remote node → run persisted by the scheduler.
+#
+# Topology (mirror of test/integration/docker/testdata/manifest-cron.yml,
+# adapted to run on real VMs over a real tailnet instead of a Docker
+# bridge):
+#
+#   gateway-host   (2 CPU / 2 GiB / 5 GiB disk) — openclaw-gateway +
+#                  fake-ollama stub (test/infra/fake-ollama.py) co-
+#                  located. The stub is SFTP'd up post-apply by the
+#                  test; the test then points
+#                  models.providers.ollama.baseUrl at
+#                  http://localhost:11499 (loopback, same host, non-
+#                  11434 port so it can never be mistaken for a real
+#                  ollama install). Co-locating the stub on the
+#                  gateway saves a third VM that would have added
+#                  ~60s of apt/npm plus fresh tailscale install
+#                  without buying any coverage.
+#   scraper-host   (2 CPU / 2 GiB / 8 GiB disk) — openclaw-node
+#                  (scraper-node). The reporter agent's tools.exec is
+#                  pinned here so every exec tool-call the LLM emits
+#                  rides over the tailnet ws to this VM, proving the
+#                  node-exec dispatch pipeline.
+#
+# Why fake-ollama and not a real Ollama install: the scheduler /
+# agent-session / exec-over-node coverage this test targets is
+# independent of the LLM weights. A real ollama install on Apple
+# Silicon Multipass pulls a 1.3 GiB linux-arm64 tarball; on a slow
+# ISP that alone took ~50 min per run, plus ~30-90s of LLM generate
+# per cron tick with nondeterministic output that forced loose
+# assertions. The fake answers in <1 ms with a scripted exec tool-
+# call (turn 1) + scripted final text (turn 2), cutting the test
+# from ~60-90 min → ~5 min and giving deterministic run summaries.
+# The docker tier's TestCronAgentWithNodeExec still exercises real
+# ollama against a pre-baked oc-ollama-test image, so the "real
+# ollama plugin works" coverage is retained there.
+#
+# Why mode: headscale (not mode: docker shortcut):
+#
+#   Same reasoning as manifest-node.yml — the docker shortcut would
+#   skip install-headscale + install-tailscale, making the
+#   gateway ↔ node ws ride the Multipass bridge (192.168.x.y) instead
+#   of the tailnet (100.64.x.y). That's a topology no real deployment
+#   uses. Running mesh here also means the node's openclaw-node.service
+#   unit references the gateway's TAILNET IP via
+#   NodeTarget.GatewayInternalHost + the plan-cache mesh-IP fallback,
+#   which is the production code path. TestNodeSmoke already covers
+#   that in isolation; TestCronAgentWithNodeExec piggybacks on the
+#   same shape so a cron regression in the meshed-dispatch path
+#   surfaces here as well.
+#
+# About the control URL (strategy: custom, http://gateway-host.local:
+# 8080):
+#
+#   Identical to manifest-mesh.yml / manifest-node.yml. Multipass VMs
+#   advertise their machine name via avahi (set by provisioning's
+#   cloud-init hostname pin), so gateway-host.local resolves from the
+#   scraper without any runtime IP-discovery step. http:// (no Caddy,
+#   no Let's Encrypt) is the simplest control URL; TLS + ACME only
+#   makes sense with a public IP, which Multipass doesn't have. See
+#   TestNodeSmoke's header for the full rationale.
+#
+# Why exec_policy on the node (unlike manifest-node.yml which omits it):
+#
+#   TestNodeSmoke intentionally covers the ExecPolicyStep.Applicable
+#   =false skip path; that's the "no agents" shape. Here the reporter
+#   agent dispatches exec tool-calls to scraper-node via the
+#   isolated-session cron run, so the node-side policy gate
+#   (security: full + ask: off) MUST be set — otherwise the node's
+#   exec handler would block the dispatch. `security: full + ask: off`
+#   is the most permissive combo (matches the docker cron fixture),
+#   which is what a test agent needs. Production manifests with
+#   human operators set `security: read + ask: always` instead.
+#
+# Why tools.exec.host=node / node=scraper-node on the reporter agent:
+#
+#   host=node switches the agent's exec dispatch from "run locally on
+#   the gateway" to "forward to the named node's websocket client"
+#   (internal/claws/plans/apply/agents/configure_tools.go +
+#   openclaw/src/agent/tool-runner.ts). security=full matches the
+#   node-side exec_policy for this test fixture. If either side (agent
+#   tools.exec.security OR node exec_policy.security) drifts, the
+#   scheduler still fires the cron but every run lands with
+#   status=error + error="security policy mismatch", catching the
+#   regression on the first cron tick.
+#
+# Why a single agent + single node (no channels, no
+# tools.elevated.allow_from):
+#
+#   This is the SMALLEST complete exercise of the cron path. Channels
+#   are explicitly decoupled via cron add --no-deliver (see
+#   multipass_cron_test.go's createCronJob); adding a telegram
+#   channel + an allow_from map would only add surface area that
+#   TestChannelsSmoke / TestAgentsSmoke already cover in isolation. A
+#   cron failure here is unambiguously a scheduler / LLM / node-exec
+#   regression, not a channels-config regression.
+#
+# Resource envelope (identical to every other Multipass fixture now
+# that fake-ollama removed the LLM install footprint):
+#
+#   gateway-host: 2 CPU / 2 GiB / 5 GiB disk is sufficient — there's
+#   no ollama tarball or model weights to stage, so disk stays under
+#   ~1 GiB during the run; RSS is dominated by openclaw-gateway +
+#   the ts-node subprocess spawned per isolated cron session (well
+#   under 1 GiB total). The previous fixture allocated 4 CPU / 8 GiB
+#   / 20 GiB specifically to give qwen2.5:0.5b inference headroom
+#   and the ollama install tarball room to extract; with fake-ollama
+#   answering in <1 ms that headroom is pure waste.
+#
+#   scraper-host stays on 2 CPU / 2 GiB / 8 GiB — its only job is
+#   to accept exec dispatches from the gateway, which was always
+#   well within that envelope.
+
+prefix: claws-it-multipass-cron
+
+machines:
+  - name: gateway-host
+    type: multipass
+    cpus: 2
+    memory: 2G
+    disk: 5G
+    bootstrap_user: root
+    agent_user: agent
+  - name: scraper-host
+    type: multipass
+    cpus: 2
+    memory: 2G
+    disk: 8G
+    bootstrap_user: root
+    agent_user: agent
+
+gateways:
+  - name: gateway
+    reference: gateway-host
+    networking:
+      mode: headscale
+      public_hostname:
+        strategy: custom
+        host: "http://gateway-host.local:8080"
+      preauth_key_source: file
+      preauth_key_file: /var/lib/claws/headscale/preauth.key
+
+nodes:
+  - name: scraper-node
+    gateway: gateway
+    reference: scraper-host
+    exec_policy:
+      security: full
+      ask: "off"
+
+agents:
+  # Single agent whose exec tools are bound to the remote scraper-node
+  # (NOT the gateway host). When the cron fires, the gateway dispatches
+  # the generate call to Ollama on 127.0.0.1 and any exec tool-calls
+  # are forwarded over the node websocket to scraper-node.
+  - id: reporter
+    gateway: gateway
+    workspace: ~/.openclaw/workspace
+    model: { primary: "ollama/qwen2.5:0.5b" }
+    tools:
+      exec: { host: node, node: scraper-node, security: full }
+    soul: |
+      You are a terse reporter for integration testing.
+      When asked for a sentence, reply with exactly one short English sentence.
+    identity:
+      name: Reporter

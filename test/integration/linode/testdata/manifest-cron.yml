@@ -1,0 +1,123 @@
+# Linode provisioning + security + mesh + gateway + node + agents
+# smoke-test manifest that exercises the full cron pipeline end-to-end
+# on real cloud infrastructure: scheduler → isolated agent turn → LLM
+# call (fake-ollama stub on the gateway) → tool-call dispatched over
+# the node websocket to a remote node (scraper-node) → run persisted
+# with status=ok.
+#
+# Mirror of the Multipass tier's manifest-cron.yml, swapped for Linode
+# machine specs (sku / image / region) and the production public_
+# hostname strategy (sslip). The meaningful test parameters — one
+# gateway (headscale-meshed), one node with exec_policy security:full/
+# ask:off, one `reporter` agent with tools.exec pinned to scraper-node,
+# ollama-backed model — stay identical so a cron regression that
+# manifests on one tier will manifest on the other too.
+#
+# Why fake-ollama and not a real Ollama install: the scheduler /
+# agent-session / exec-over-node coverage this tier targets is
+# independent of LLM weights; a real ollama install would add
+# ~400 MiB tarball download + ~352 MiB model pull + ~15-30s cold-
+# start, all of which are uninteresting compared to the things this
+# tier *does* test (Caddy/ACME, real tailnet). The docker tier's
+# TestCronAgentWithNodeExec still covers "real ollama plugin works"
+# against a pre-baked oc-ollama-test image, so the switch here
+# doesn't lose any coverage. See test/infra/fake-ollama.py.
+#
+# What this Linode mirror buys over the Multipass cron test:
+#
+#   - install-caddy + Let's Encrypt ACME. Multipass has no public IP
+#     and runs the mesh control URL as plain http://; on Linode the
+#     sslip strategy resolves to a real public-routable hostname and
+#     Caddy issues a Let's Encrypt cert. A regression in Caddy / ACME
+#     / headscale-over-HTTPS interacting with the gateway's LLM
+#     discovery or with the cron scheduler's persistence loop would
+#     show up here.
+#   - headscale + openclaw-node ws over real WireGuard hops across
+#     the public internet between two Linode VMs. The node-exec
+#     dispatches from the cron-triggered agent ride the same tailnet
+#     the production operator's traffic does.
+#   - `npm install -g openclaw` over real egress. Same paths a
+#     customer deploy would use (the ollama-specific network paths
+#     are out of scope here; see docker tier).
+#
+# Why g6-standard-1 (1 vCPU / 2 GiB) for both hosts:
+#
+#   Without a real LLM the gateway's RSS stays well under 1 GiB
+#   (openclaw-gateway + the ts-node subprocess spawned per isolated
+#   cron run). g6-standard-1 (1 CPU / 2 GiB) is the smallest Linode
+#   SKU and perfectly sufficient here — no OOM risk, no per-run
+#   contention on the 5s cron interval. The previous fixture used
+#   g6-standard-4 (4 CPU / 8 GiB) specifically to give qwen2.5:0.5b
+#   inference headroom; with fake-ollama answering in <1 ms that
+#   headroom is pure waste. Cost drops from ~$0.09 to ~$0.005
+#   per run.
+#
+# Why mode: headscale + strategy: sslip (not custom / not docker):
+#
+#   sslip is the production default for public-IP deployments
+#   (david-army.yml uses it). strategy: custom would need a pre-
+#   registered DNS record or a mocked resolver; strategy: docker
+#   would skip install-caddy + ACME entirely, weakening the tier's
+#   coverage. Keeping sslip here means the cron test rides the
+#   same traffic shape a real customer deploy would.
+#
+# Why exec_policy on the node (unlike manifest-node.yml):
+#
+#   Identical reasoning to the Multipass tier's manifest-cron.yml —
+#   the reporter agent's isolated cron runs dispatch exec tool-
+#   calls to scraper-node over the mesh ws. A nil policy would
+#   trip ExecPolicyStep.Applicable=false and leave the node's exec
+#   handler rejecting the dispatches at runtime. `security: full +
+#   ask: off` is the most permissive combo; matches both the
+#   docker tier's manifest-cron.yml and the Multipass tier's
+#   manifest-cron.yml so the production code path is identical
+#   across tiers.
+
+prefix: claws-it-linode-cron
+
+machines:
+  - name: gateway-host
+    type: linode
+    sku: g6-standard-1
+    image: linode/ubuntu24.04
+    region: us-east
+    bootstrap_user: root
+    agent_user: agent
+  - name: scraper-host
+    type: linode
+    sku: g6-standard-1
+    image: linode/ubuntu24.04
+    region: us-east
+    bootstrap_user: root
+    agent_user: agent
+
+gateways:
+  - name: gateway
+    reference: gateway-host
+    networking:
+      mode: headscale
+      public_hostname:
+        strategy: sslip
+      preauth_key_source: file
+      preauth_key_file: /var/lib/claws/headscale/preauth.key
+
+nodes:
+  - name: scraper-node
+    gateway: gateway
+    reference: scraper-host
+    exec_policy:
+      security: full
+      ask: "off"
+
+agents:
+  - id: reporter
+    gateway: gateway
+    workspace: ~/.openclaw/workspace
+    model: { primary: "ollama/qwen2.5:0.5b" }
+    tools:
+      exec: { host: node, node: scraper-node, security: full }
+    soul: |
+      You are a terse reporter for integration testing.
+      When asked for a sentence, reply with exactly one short English sentence.
+    identity:
+      name: Reporter

@@ -1,0 +1,34 @@
+# Linode provisioning + security smoke-test manifest.
+#
+# Same two-machine shape as manifest-provisioning.yml but drives the
+# provisioning + security phases together. See the Multipass tier's
+# manifest-security.yml for the bootstrap-vs-agent user design
+# rationale — the short version: bootstrap_user=root owns apt / ufw /
+# systemctl work during provisioning + security, agent_user=agent
+# becomes the identity every subsequent phase dials the box as.
+#
+# Keeping agent_user distinct from the cloud-image default (root here,
+# ubuntu on Multipass) is the point of this fixture: it forces
+# ensure-agent-user off its "user already exists" short-circuit and
+# into the real useradd path. If someone edits the YAML to align
+# them, the test itself fails a fixture-sanity assert rather than
+# silently losing coverage.
+
+prefix: claws-it-linode-sec
+
+machines:
+  - name: gateway-host
+    type: linode
+    sku: g6-standard-1
+    image: linode/ubuntu24.04
+    region: us-east
+    bootstrap_user: root
+    agent_user: agent
+
+  - name: node-host
+    type: linode
+    sku: g6-standard-1
+    image: linode/ubuntu24.04
+    region: us-east
+    bootstrap_user: root
+    agent_user: agent

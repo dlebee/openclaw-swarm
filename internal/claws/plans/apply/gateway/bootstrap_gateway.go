@@ -33,7 +33,7 @@ func (s *BootstrapGatewayStep) Applicable(ctx context.Context, t scaffold.Target
 		return false, nil
 	}
 	m := gt.Machine
-	client, key, err := borrowSSH(ctx, s.dial, machineHost(m), machineSSHPort(m), machineSSHUser(m))
+	client, key, err := borrowSSH(ctx, s.dial, machineHost(ctx, m), machineSSHPort(m), machineAgentUser(m))
 	if err != nil {
 		return true, nil // host unreachable → assume not yet bootstrapped
 	}
@@ -56,7 +56,7 @@ func (s *BootstrapGatewayStep) Applicable(ctx context.Context, t scaffold.Target
 func (s *BootstrapGatewayStep) Check(ctx context.Context, t scaffold.Target) (bool, error) {
 	gt := t.Payload.(*GatewayTarget)
 	m := gt.Machine
-	client, key, err := borrowSSH(ctx, s.dial, machineHost(m), machineSSHPort(m), machineSSHUser(m))
+	client, key, err := borrowSSH(ctx, s.dial, machineHost(ctx, m), machineSSHPort(m), machineAgentUser(m))
 	if err != nil {
 		return false, nil
 	}
@@ -77,7 +77,7 @@ func (s *BootstrapGatewayStep) Check(ctx context.Context, t scaffold.Target) (bo
 func (s *BootstrapGatewayStep) Execute(ctx context.Context, t scaffold.Target) error {
 	gt := t.Payload.(*GatewayTarget)
 	m := gt.Machine
-	client, key, err := borrowSSHWithRetry(ctx, s.dial, machineHost(m), machineSSHPort(m), machineSSHUser(m))
+	client, key, err := borrowSSHWithRetry(ctx, s.dial, machineHost(ctx, m), machineSSHPort(m), machineAgentUser(m))
 	if err != nil {
 		return fmt.Errorf("bootstrap-gateway: %w", err)
 	}
@@ -95,7 +95,11 @@ func (s *BootstrapGatewayStep) Execute(ctx context.Context, t scaffold.Target) e
 		envPrefix = "OPENCLAW_ALLOW_INSECURE_PRIVATE_WS=1 "
 	}
 
+	// `--install-daemon` invokes `systemctl --user enable` internally, which
+	// needs XDG_RUNTIME_DIR on non-interactive SSH sessions. linger (enabled
+	// by ensure-agent-user) keeps /run/user/<uid> populated.
 	script := fmt.Sprintf(`set -euo pipefail
+export XDG_RUNTIME_DIR=/run/user/$(id -u)
 %sopenclaw onboard --non-interactive --mode local --auth-choice skip \
   --gateway-bind %s --gateway-token %q \
   --install-daemon --skip-health --accept-risk --json
@@ -113,7 +117,7 @@ func (s *BootstrapGatewayStep) Execute(ctx context.Context, t scaffold.Target) e
 func (s *BootstrapGatewayStep) Verify(ctx context.Context, t scaffold.Target) error {
 	gt := t.Payload.(*GatewayTarget)
 	m := gt.Machine
-	client, key, err := borrowSSH(ctx, s.dial, machineHost(m), machineSSHPort(m), machineSSHUser(m))
+	client, key, err := borrowSSH(ctx, s.dial, machineHost(ctx, m), machineSSHPort(m), machineAgentUser(m))
 	if err != nil {
 		return fmt.Errorf("bootstrap-gateway verify: dial: %w", err)
 	}

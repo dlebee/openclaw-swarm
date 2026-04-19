@@ -95,7 +95,7 @@ func resolveControlURL(ctx context.Context, dial SSHDialFunc, mt *MeshTarget, gw
 
 func gatewayPublicIP(ctx context.Context, dial SSHDialFunc, mt *MeshTarget) (string, error) {
 	m := mt.Machine
-	client, key, err := common.BorrowSSH(ctx, dial, common.MachineHost(m), common.MachineSSHPort(m), common.MachineSSHUser(m))
+	client, key, err := common.BorrowSSH(ctx, dial, common.ResolveMachineHost(ctx, m), common.MachineSSHPort(m), common.MachineAgentUser(m))
 	if err != nil {
 		return "", fmt.Errorf("dial gateway for public IP: %w", err)
 	}

@@ -159,15 +159,25 @@ func TestMachineSSHPort_custom(t *testing.T) {
 	}
 }
 
-func TestMachineSSHUser_default(t *testing.T) {
-	if got := machineSSHUser(manifestdata.Machine{}); got != "root" {
-		t.Fatalf("machineSSHUser = %q, want root", got)
+func TestMachineBootstrapUser_defaultsToRoot(t *testing.T) {
+	if got := machineBootstrapUser(manifestdata.Machine{}); got != "root" {
+		t.Fatalf("machineBootstrapUser = %q, want root", got)
 	}
 }
 
-func TestMachineSSHUser_custom(t *testing.T) {
-	if got := machineSSHUser(manifestdata.Machine{SSHUser: "deploy"}); got != "deploy" {
-		t.Fatalf("machineSSHUser = %q, want deploy", got)
+func TestMachineBootstrapUser_ignoresAgentUser(t *testing.T) {
+	// Security dials the bootstrap identity, not the agent — even if only
+	// agent_user is set, security phase must not smuggle that in as the
+	// bootstrap login.
+	if got := machineBootstrapUser(manifestdata.Machine{AgentUser: "agent"}); got != "root" {
+		t.Fatalf("machineBootstrapUser = %q, want root (agent_user must not leak into bootstrap)", got)
+	}
+}
+
+func TestMachineBootstrapUser_explicit(t *testing.T) {
+	m := manifestdata.Machine{BootstrapUser: "ubuntu", AgentUser: "agent"}
+	if got := machineBootstrapUser(m); got != "ubuntu" {
+		t.Fatalf("machineBootstrapUser = %q, want ubuntu", got)
 	}
 }
 

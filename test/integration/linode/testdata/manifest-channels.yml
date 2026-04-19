@@ -1,0 +1,60 @@
+# Linode provisioning + security + gateway + channels smoke-test manifest.
+#
+# Mirror of the Multipass tier's manifest-channels.yml with Linode
+# specifics (sku / image / region). The meaningful test parameters —
+# one machine, one gateway named `gateway`, two telegram channels
+# with default: true on the first — are identical. If either manifest
+# drifts from this structure, the tests stop being equivalent and the
+# "this works on real cloud too" value-add of the Linode tier erodes
+# into a nearly-identical-but-subtly-different scenario.
+#
+# Why mirror all the way down to two-telegram-channels:
+#
+#   The ensure-default-account coverage only works with ≥2 accounts
+#   of the same kind, because a one-account fixture collapses
+#   first-seen == explicitly-defaulted and a broken desiredDefaults()
+#   that ignores ch.Default would pass silently. Same reasoning as
+#   Multipass — see that fixture's header for the full argument.
+#
+# Why g6-standard-1 (1 vCPU / 2 GiB) not the cheaper g6-nanode-1:
+#
+#   `openclaw channels add` pulls the telegram extension through
+#   openclaw's plugin resolver on every invocation. On cold node-
+#   compile-cache that's a ~5–10s TypeScript compile per invocation;
+#   add two of them plus the daemon restart reload and a nanode's 1
+#   GiB is right on the edge of OOM. Standard-1 matches every other
+#   Linode fixture so the tier's mechanical shape stays uniform —
+#   same SKU, same image, same region — and cost is pennies either
+#   way.
+#
+# About the omitted networking: block:
+#
+#   Same rationale as manifest-gateway.yml (both tiers): nil
+#   networking → NeedsLANBind false → daemon binds 127.0.0.1:18789.
+#   On a public-IP Linode instance this is the critical security
+#   invariant — the channels phase running after gateway must NOT
+#   flip the bind to 0.0.0.0, and TestChannelsSmoke re-asserts the
+#   loopback check after channels apply specifically to catch that.
+
+prefix: claws-it-linode-ch
+
+machines:
+  - name: gateway-host
+    type: linode
+    sku: g6-standard-1
+    image: linode/ubuntu24.04
+    region: us-east
+    bootstrap_user: root
+    agent_user: agent
+
+gateways:
+  - name: gateway
+    reference: gateway-host
+    channels:
+      - kind: telegram
+        name: telegram-main
+        token_env: TELEGRAM_MAIN_BOT_TOKEN
+        default: true
+      - kind: telegram
+        name: telegram-secondary
+        token_env: TELEGRAM_SECONDARY_BOT_TOKEN

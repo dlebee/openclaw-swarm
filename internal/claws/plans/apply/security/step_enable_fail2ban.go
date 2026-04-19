@@ -31,12 +31,12 @@ func NewEnableFail2banStep(opts Options) *EnableFail2banStep {
 func (*EnableFail2banStep) Name() string { return "enable-fail2ban" }
 
 func (s *EnableFail2banStep) Applicable(_ context.Context, t scaffold.Target) (bool, error) {
-	_, ok := isLinodeMachine(t.Payload)
+	_, ok := isHostedMachine(t.Payload)
 	return ok, nil
 }
 
 func (s *EnableFail2banStep) Check(ctx context.Context, t scaffold.Target) (bool, error) {
-	mt, ok := isLinodeMachine(t.Payload)
+	mt, ok := isHostedMachine(t.Payload)
 	if !ok {
 		return false, nil
 	}
@@ -44,7 +44,7 @@ func (s *EnableFail2banStep) Check(ctx context.Context, t scaffold.Target) (bool
 	if host == "" {
 		return false, nil
 	}
-	client, key, err := borrowSSH(ctx, s.dial, host, machineSSHPort(mt.Spec), machineSSHUser(mt.Spec))
+	client, key, err := borrowSSH(ctx, s.dial, host, machineSSHPort(mt.Spec), machineBootstrapUser(mt.Spec))
 	if err != nil {
 		return false, nil
 	}
@@ -58,7 +58,7 @@ func (s *EnableFail2banStep) Check(ctx context.Context, t scaffold.Target) (bool
 }
 
 func (s *EnableFail2banStep) Execute(ctx context.Context, t scaffold.Target) error {
-	mt, ok := isLinodeMachine(t.Payload)
+	mt, ok := isHostedMachine(t.Payload)
 	if !ok {
 		return fmt.Errorf("enable-fail2ban: expected *MachineTarget for %q", t.ID)
 	}
@@ -66,7 +66,7 @@ func (s *EnableFail2banStep) Execute(ctx context.Context, t scaffold.Target) err
 	if host == "" {
 		return fmt.Errorf("enable-fail2ban: no reachable host for %q", t.ID)
 	}
-	client, key, err := borrowSSHWithRetry(ctx, s.dial, host, machineSSHPort(mt.Spec), machineSSHUser(mt.Spec))
+	client, key, err := borrowSSHWithRetry(ctx, s.dial, host, machineSSHPort(mt.Spec), machineBootstrapUser(mt.Spec))
 	if err != nil {
 		return fmt.Errorf("enable-fail2ban: %w", err)
 	}
@@ -108,7 +108,7 @@ fi
 }
 
 func (s *EnableFail2banStep) Verify(ctx context.Context, t scaffold.Target) error {
-	mt, ok := isLinodeMachine(t.Payload)
+	mt, ok := isHostedMachine(t.Payload)
 	if !ok {
 		return fmt.Errorf("enable-fail2ban verify: expected *MachineTarget for %q", t.ID)
 	}
@@ -116,7 +116,7 @@ func (s *EnableFail2banStep) Verify(ctx context.Context, t scaffold.Target) erro
 	if host == "" {
 		return fmt.Errorf("enable-fail2ban verify: no reachable host for %q", t.ID)
 	}
-	client, key, err := borrowSSH(ctx, s.dial, host, machineSSHPort(mt.Spec), machineSSHUser(mt.Spec))
+	client, key, err := borrowSSH(ctx, s.dial, host, machineSSHPort(mt.Spec), machineBootstrapUser(mt.Spec))
 	if err != nil {
 		return fmt.Errorf("enable-fail2ban verify: dial: %w", err)
 	}

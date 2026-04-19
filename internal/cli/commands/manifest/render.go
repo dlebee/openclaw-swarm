@@ -237,14 +237,14 @@ func machinesTable(rows []data.Machine, w int) string {
 	t := table.New().
 		Border(lipgloss.RoundedBorder()).
 		BorderStyle(lipgloss.NewStyle().Foreground(lipgloss.Color("99"))).
-		Headers("Name", "Type", "Region", "Host", "SSH user", "Agent").
+		Headers("Name", "Type", "Region", "Host", "Bootstrap user", "Agent user").
 		Width(w)
 	for _, r := range rows {
 		host := r.Host
 		if host == "" {
 			host = "—"
 		}
-		t.Row(r.Name, string(r.Type), r.Region, host, r.SSHUser, r.AgentUser)
+		t.Row(r.Name, string(r.Type), r.Region, host, r.BootstrapUser, r.AgentUser)
 	}
 	return t.String()
 }

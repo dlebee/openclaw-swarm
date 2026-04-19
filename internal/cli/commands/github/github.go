@@ -246,9 +246,11 @@ func loadManifest(manifestFile *string) (*manifestdata.Manifest, error) {
 	return manifestsvc.LoadFile(abs)
 }
 
-// sshEndpoint resolves a machine's SSH host/port/user tuple, applying the
-// same fallbacks used elsewhere in the codebase (agent_user → ssh_user → root,
-// default port 22). Returns an error when the machine has no host.
+// sshEndpoint resolves a machine's SSH host/port/user tuple. GitHub
+// integration is an ops-time operation so it runs as the agent user,
+// not the bootstrap user. Falls back to bootstrap_user / root only when
+// agent_user isn't set (typically static ssh-type machines that predate
+// the two-user split).
 func sshEndpoint(mach *manifestdata.Machine) (host string, port int, user string, err error) {
 	host = strings.TrimSpace(mach.Host)
 	if host == "" {
@@ -260,7 +262,7 @@ func sshEndpoint(mach *manifestdata.Machine) (host string, port int, user string
 	}
 	user = strings.TrimSpace(mach.AgentUser)
 	if user == "" {
-		user = strings.TrimSpace(mach.SSHUser)
+		user = strings.TrimSpace(mach.BootstrapUser)
 	}
 	if user == "" {
 		user = "root"

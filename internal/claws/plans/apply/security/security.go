@@ -17,13 +17,13 @@ const maxSecurityConcurrency = 5
 func AddPhase(p *scaffold.Plan, targets []scaffold.Target, opts Options) *scaffold.Phase {
 	ph := p.AddPhase("security")
 
-	linodeN := 0
+	hostedN := 0
 	for _, t := range targets {
-		if mt, ok := t.Payload.(*provisioning.MachineTarget); ok && mt.Spec.Type == manifestdata.MachineTypeLinode {
-			linodeN++
+		if mt, ok := t.Payload.(*provisioning.MachineTarget); ok && manifestdata.IsHostedMachineType(mt.Spec.Type) {
+			hostedN++
 		}
 	}
-	concurrency := linodeN
+	concurrency := hostedN
 	if concurrency < 1 {
 		concurrency = 1
 	}

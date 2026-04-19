@@ -1,0 +1,56 @@
+# Multipass provisioning + security + gateway smoke-test manifest.
+#
+# Single machine. One gateway referencing it. No nodes, no channels,
+# no agents, no automations — TestGatewaySmoke runs provisioning,
+# security and gateway only, so anything past pair-gateway-device is
+# out of scope and doesn't need to appear here.
+#
+# About the missing networking: block:
+#
+#   Omitting `networking:` entirely (pointer stays nil in the parsed
+#   manifest) pins NeedsLANBind → false in
+#   internal/claws/plans/apply/gateway/service.go. The gateway then
+#   binds to `loopback` instead of `lan`, the OPENCLAW_ALLOW_
+#   INSECURE_PRIVATE_WS=1 env drop-in is NOT written, and no mesh
+#   infrastructure (headscale / caddy / tailscale) is required for
+#   the daemon to answer health checks on :18789. That's exactly the
+#   simplest production shape a standalone gateway can have — a
+#   single box running the daemon, the CLI talking to it over
+#   localhost — and it's the minimum exercise for bootstrap-gateway +
+#   configure-gateway + pair-gateway-device to matter.
+#
+#   The mesh phase still gets added to the plan (apply.go always
+#   calls mesh.AddPhase) but with no headscale gateways to target it
+#   degenerates into a noop configure-mesh step. OnlyPhases in the
+#   test filters it out regardless.
+#
+# Why the machine is bumped to 2 CPU / 2 GiB / 8 GiB disk vs. the
+# other Multipass fixtures (1/1G/5G):
+#
+#   `openclaw onboard --install-daemon` runs `npm install -g
+#   openclaw`, which pulls a ~300MB node_modules tree and then
+#   transpiles a bunch of TS at first daemon start. Nanode-class
+#   (1 vCPU / 1 GiB) VMs OOM during the install on cold caches — the
+#   v8 heap + apt cache + npm combined push past the limit. 2 GiB is
+#   comfortable with room to spare.
+#
+# bootstrap_user=root + agent_user=agent: same two-user design as
+# the other fixtures. The gateway phase dials the box as agent
+# because openclaw's systemd --user units live under the agent
+# account; SSHing in as root would miss XDG_RUNTIME_DIR/linger and
+# the unit wouldn't enable.
+
+prefix: claws-it-multipass-gw
+
+machines:
+  - name: gateway-host
+    type: multipass
+    cpus: 2
+    memory: 2G
+    disk: 8G
+    bootstrap_user: root
+    agent_user: agent
+
+gateways:
+  - name: gateway
+    reference: gateway-host

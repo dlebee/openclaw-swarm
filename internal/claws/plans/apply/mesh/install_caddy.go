@@ -41,7 +41,7 @@ func (*InstallCaddyStep) Applicable(ctx context.Context, t scaffold.Target) (boo
 func (s *InstallCaddyStep) Check(ctx context.Context, t scaffold.Target) (bool, error) {
 	mt := t.Payload.(*MeshTarget)
 	m := mt.Machine
-	client, key, err := common.BorrowSSH(ctx, s.dial, common.MachineHost(m), common.MachineSSHPort(m), common.MachineSSHUser(m))
+	client, key, err := common.BorrowSSH(ctx, s.dial, common.ResolveMachineHost(ctx, m), common.MachineSSHPort(m), common.MachineAgentUser(m))
 	if err != nil {
 		return false, nil
 	}
@@ -57,7 +57,7 @@ func (s *InstallCaddyStep) Check(ctx context.Context, t scaffold.Target) (bool, 
 func (s *InstallCaddyStep) Execute(ctx context.Context, t scaffold.Target) error {
 	mt := t.Payload.(*MeshTarget)
 	m := mt.Machine
-	client, key, err := common.BorrowSSHWithRetry(ctx, s.dial, common.MachineHost(m), common.MachineSSHPort(m), common.MachineSSHUser(m))
+	client, key, err := common.BorrowSSHWithRetry(ctx, s.dial, common.ResolveMachineHost(ctx, m), common.MachineSSHPort(m), common.MachineAgentUser(m))
 	if err != nil {
 		return fmt.Errorf("install-caddy: %w", err)
 	}
@@ -102,7 +102,7 @@ sudo systemctl reload caddy 2>/dev/null || sudo systemctl restart caddy
 func (s *InstallCaddyStep) Verify(ctx context.Context, t scaffold.Target) error {
 	mt := t.Payload.(*MeshTarget)
 	m := mt.Machine
-	client, key, err := common.BorrowSSH(ctx, s.dial, common.MachineHost(m), common.MachineSSHPort(m), common.MachineSSHUser(m))
+	client, key, err := common.BorrowSSH(ctx, s.dial, common.ResolveMachineHost(ctx, m), common.MachineSSHPort(m), common.MachineAgentUser(m))
 	if err != nil {
 		return fmt.Errorf("install-caddy verify: dial: %w", err)
 	}

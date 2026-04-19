@@ -1,0 +1,36 @@
+# Multipass provisioning smoke-test manifest.
+#
+# Two `type: multipass` machines. No gateway, no node, no automations —
+# TestProvisioningSmoke runs ONLY the provisioning phase, so everything
+# past create-machine / authorize-ssh-key / ensure-agent-user is out of
+# scope and doesn't need to appear here.
+#
+# `prefix` is overridden at runtime by the harness to avoid label
+# collisions between parallel runs on the same host; the value here is
+# only used when the manifest is loaded outside the harness (manual lint,
+# manifest pretty-print).
+#
+# bootstrap_user is the privileged identity used exclusively during
+# provisioning + security to bring the box up and lock it down. It is
+# never used by later phases. agent_user is the ongoing-ops identity
+# that ensure-agent-user creates (and every post-security phase dials
+# the machine as).
+
+prefix: claws-it-multipass
+
+machines:
+  - name: gateway-host
+    type: multipass
+    cpus: 1
+    memory: 1G
+    disk: 5G
+    bootstrap_user: root
+    agent_user: agent
+
+  - name: node-host
+    type: multipass
+    cpus: 1
+    memory: 1G
+    disk: 5G
+    bootstrap_user: root
+    agent_user: agent

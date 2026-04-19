@@ -4,9 +4,27 @@ package data
 type MachineType string
 
 const (
-	MachineTypeLinode MachineType = "linode"
-	MachineTypeSSH    MachineType = "ssh"
+	MachineTypeLinode    MachineType = "linode"
+	MachineTypeSSH       MachineType = "ssh"
+	MachineTypeMultipass MachineType = "multipass"
 )
+
+// IsHostedMachineType reports whether the machine type is backed by a
+// cloud/VM provider (anything that isn't bare SSH). Hosted types go through
+// the `provisioning` phase's create-machine/authorize-ssh-key/ensure-agent-
+// user steps; SSH-typed machines are assumed pre-provisioned and skip them.
+//
+// Centralizing this keeps "what counts as hosted" in one place so adding a
+// third provider later is a one-line change here, not a grep-and-replace
+// across every Applicable() gate.
+func IsHostedMachineType(t MachineType) bool {
+	switch t {
+	case MachineTypeLinode, MachineTypeMultipass:
+		return true
+	default:
+		return false
+	}
+}
 
 // Arch is a published OpenClaw node architecture label.
 type Arch string
@@ -48,11 +66,11 @@ type Manifest struct {
 // Non-manual automations are included in `claws apply`; manual ones
 // run only via `claws automations apply`.
 type Automation struct {
-	Name        string           `yaml:"name"`
-	Machines    []string         `yaml:"machines"`
-	Manual      bool             `yaml:"manual,omitempty"`
-	Concurrency int              `yaml:"concurrency,omitempty"`
-	RunAs       string           `yaml:"run_as,omitempty"`
+	Name        string   `yaml:"name"`
+	Machines    []string `yaml:"machines"`
+	Manual      bool     `yaml:"manual,omitempty"`
+	Concurrency int      `yaml:"concurrency,omitempty"`
+	RunAs       string   `yaml:"run_as,omitempty"`
 	// Env is a phase-wide allowlist of environment-variable names that should
 	// be exported into every lifecycle script for every step. Values are
 	// resolved from the process env first, then the manifest's env_file (same
@@ -66,9 +84,9 @@ type Automation struct {
 // AutomationStep is one unit of work inside an automation phase.
 // Lifecycle scripts map directly to scaffold step methods.
 type AutomationStep struct {
-	Name           string `yaml:"name"`
-	Kind           string `yaml:"kind,omitempty"`
-	RunAs          string `yaml:"run_as,omitempty"`
+	Name  string `yaml:"name"`
+	Kind  string `yaml:"kind,omitempty"`
+	RunAs string `yaml:"run_as,omitempty"`
 	// Env is a per-step allowlist of env-var names, unioned with the parent
 	// Automation.Env. See Automation.Env for precedence rules.
 	Env            []string `yaml:"env,omitempty"`
@@ -83,6 +101,12 @@ type AutomationStep struct {
 }
 
 // Machine is a host entry (cloud or static SSH).
+//
+// The CPUs/Memory/Disk fields only apply to multipass-typed machines —
+// Linode uses SKU for the same concept, and SSH-typed entries ignore both.
+// Keeping all of them on one struct avoids a provider-typed union at the
+// YAML layer at the cost of a few fields being valid only for certain
+// types; callers gate on Type before reading.
 type Machine struct {
 	Name         string      `yaml:"name"`
 	Type         MachineType `yaml:"type"`
@@ -92,11 +116,23 @@ type Machine struct {
 	Host         string      `yaml:"host"`
 	InternalHost string      `yaml:"internal_host,omitempty"`
 	SSHPort      int         `yaml:"ssh_port,omitempty"`
-	SSHUser      string      `yaml:"ssh_user"`
-	AgentUser    string      `yaml:"agent_user"`
-	SSHKeyEnv    string      `yaml:"ssh_key_env"`
-	Arch         Arch        `yaml:"arch"`
-	Container    bool        `yaml:"container,omitempty"`
+	// BootstrapUser is the privileged identity used ONLY during the
+	// provisioning and security phases to bring the machine up and lock it
+	// down. It is never used post-bootstrap; every app-level phase (mesh,
+	// node, gateway, agents, channels, automations) dials the machine as
+	// AgentUser instead. See common.MachineBootstrapUser /
+	// common.MachineAgentUser for the resolved-value helpers.
+	BootstrapUser string `yaml:"bootstrap_user"`
+	AgentUser     string `yaml:"agent_user"`
+	SSHKeyEnv     string `yaml:"ssh_key_env"`
+	Arch          Arch   `yaml:"arch"`
+	Container     bool   `yaml:"container,omitempty"`
+	// Multipass-only sizing. Strings match the `multipass launch` CLI
+	// units ("1G", "512M", "5G", ...). CPUs=0 / empty Memory / empty Disk
+	// let the provider pick sensible defaults.
+	CPUs   int    `yaml:"cpus,omitempty"`
+	Memory string `yaml:"memory,omitempty"`
+	Disk   string `yaml:"disk,omitempty"`
 }
 
 // KubernetesCluster references a kubeconfig for optional K8s automation.

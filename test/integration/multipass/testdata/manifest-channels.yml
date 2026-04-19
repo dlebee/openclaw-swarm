@@ -1,0 +1,73 @@
+# Multipass provisioning + security + gateway + channels smoke-test manifest.
+#
+# Single machine. One gateway (named `gateway`, not `mesh-gw` — channels
+# don't need a mesh and `gateway` better reflects the production shape
+# of david-army.yml). Two telegram channels so the test can prove
+# ensure-default-account actually picks the one flagged `default: true`
+# and not just "the first one it saw" (the fallback behavior from
+# desiredDefaults() in ensure_default.go kicks in silently if there's
+# only one channel, which would mean a one-channel fixture would pass
+# even if ensure-default-account were completely broken).
+#
+# Why two channels, same kind:
+#
+#   The realistic failure mode for `ensure-default-account` is the
+#   config-write landing but picking the wrong account — e.g. a
+#   regression in desiredDefaults() that forgets to honor ch.Default.
+#   With a single channel, that bug is invisible: first-seen == only-
+#   seen == explicitly-defaulted, all three collapse. Two channels
+#   with `default: true` on the SECOND one would also work, but we
+#   mark the FIRST one default to match production (david-army.yml)
+#   where the `default: true` bot is always listed first.
+#
+# Why telegram and not slack/discord:
+#
+#   Validated in Ask-mode reconnaissance: telegram's setup adapter
+#   (extensions/telegram/src/setup-core.ts) has a trivial
+#   validateInput — "is the token string non-empty?" — and its
+#   onAccountConfigChanged lifecycle hook only clears local polling
+#   offsets, no network call. `openclaw channels add` therefore
+#   succeeds with any dummy string. Slack wants botToken + appToken;
+#   Discord opens a persistent WebSocket at gateway startup. Telegram
+#   is the cleanest "add succeeds offline" channel.
+#
+# About the fake tokens:
+#
+#   Both tokens come from `token_env: …` entries that the harness
+#   sets via t.Setenv. LookupEnvFromManifest checks os.Getenv first,
+#   so we don't need an env_file block on this manifest (see
+#   internal/manifests/service/envlookup.go:23). The token format is
+#   deliberately malformed enough that the Telegram API returns 401
+#   on the first getUpdates poll; the daemon backs off exponentially
+#   and the gateway health port stays up (TestChannelsSmoke asserts
+#   both facts).
+#
+# About the omitted networking: block:
+#
+#   Same rationale as manifest-gateway.yml — nil networking → loopback
+#   bind → no mesh infrastructure. Inherits all of TestGatewaySmoke's
+#   guarantees so a failure in TestChannelsSmoke is unambiguously a
+#   channels-phase bug, not a gateway regression.
+
+prefix: claws-it-multipass-ch
+
+machines:
+  - name: gateway-host
+    type: multipass
+    cpus: 2
+    memory: 2G
+    disk: 8G
+    bootstrap_user: root
+    agent_user: agent
+
+gateways:
+  - name: gateway
+    reference: gateway-host
+    channels:
+      - kind: telegram
+        name: telegram-main
+        token_env: TELEGRAM_MAIN_BOT_TOKEN
+        default: true
+      - kind: telegram
+        name: telegram-secondary
+        token_env: TELEGRAM_SECONDARY_BOT_TOKEN

@@ -81,10 +81,3 @@ func machineSSHPort(m manifestdata.Machine) int {
 	return m.SSHPort
 }
 
-func machineSSHUser(m manifestdata.Machine) string {
-	u := strings.TrimSpace(m.SSHUser)
-	if u == "" {
-		return "root"
-	}
-	return u
-}

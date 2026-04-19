@@ -70,11 +70,20 @@ func AgentConfigIndex(client *xssh.Client, id string) (int, error) {
 	return -1, nil
 }
 
-// BindingInfo is one entry from `openclaw agents bindings --json`.
+// BindingInfo is one entry from `openclaw agents bindings --json`. The CLI
+// emits nested {agentId, match:{channel, accountId}, description}; we flatten
+// match.* onto the struct in ListBindings so callers get simple Channel /
+// Account fields without caring about the wire shape.
 type BindingInfo struct {
-	AgentID string `json:"agentId"`
-	Channel string `json:"channel"`
-	Account string `json:"accountId"`
+	AgentID string       `json:"agentId"`
+	Match   bindingMatch `json:"match"`
+	Channel string       `json:"-"`
+	Account string       `json:"-"`
+}
+
+type bindingMatch struct {
+	Channel   string `json:"channel"`
+	AccountID string `json:"accountId"`
 }
 
 // ListBindings runs `openclaw agents bindings --agent <id> --json` and parses the result.
@@ -88,6 +97,10 @@ func ListBindings(client *xssh.Client, agentID string) ([]BindingInfo, error) {
 	var bindings []BindingInfo
 	if err := json.Unmarshal([]byte(raw), &bindings); err != nil {
 		return nil, nil
+	}
+	for i := range bindings {
+		bindings[i].Channel = bindings[i].Match.Channel
+		bindings[i].Account = bindings[i].Match.AccountID
 	}
 	return bindings, nil
 }

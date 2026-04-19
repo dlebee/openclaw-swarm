@@ -5,7 +5,6 @@ package gateway
 import (
 	"context"
 	"fmt"
-	"strings"
 	"time"
 
 	"github.com/gluwa/openclaw-swarm2/internal/claws/plans/apply/common"
@@ -84,8 +83,12 @@ const (
 	sshDialRetryDelay = 3 * time.Second
 )
 
-func machineHost(m manifestdata.Machine) string {
-	return strings.TrimSpace(m.Host)
+// machineHost returns the reachable SSH host for m, preferring the plan-cache
+// entry recorded by create-machine (for Linode instances with dynamic IPs)
+// over the manifest's static Spec.Host. Delegates to common.ResolveMachineHost
+// so gateway-phase steps see the same cache entries as every other phase.
+func machineHost(ctx context.Context, m manifestdata.Machine) string {
+	return common.ResolveMachineHost(ctx, m)
 }
 
 func machineSSHPort(m manifestdata.Machine) int {
@@ -95,12 +98,13 @@ func machineSSHPort(m manifestdata.Machine) int {
 	return m.SSHPort
 }
 
-func machineSSHUser(m manifestdata.Machine) string {
-	u := strings.TrimSpace(m.SSHUser)
-	if u == "" {
-		return "root"
-	}
-	return u
+// machineAgentUser delegates to common.MachineAgentUser. Gateway is a
+// post-security phase and runs as the agent user — never as the
+// bootstrap identity (which may have been disabled by hardening).
+// Install/configure scripts in this package are sudo-prefixed to pick
+// up the passwordless-sudo grant from provisioning.EnsureAgentUser.
+func machineAgentUser(m manifestdata.Machine) string {
+	return common.MachineAgentUser(m)
 }
 
 func borrowSSH(ctx context.Context, dial SSHDialFunc, host string, port int, user string) (*xssh.Client, string, error) {

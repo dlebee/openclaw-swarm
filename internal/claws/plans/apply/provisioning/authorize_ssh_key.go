@@ -32,7 +32,9 @@ func NewAuthorizeSSHKeyStep(opts Options) *AuthorizeSSHKeyStep {
 // Name implements scaffold.Step.
 func (*AuthorizeSSHKeyStep) Name() string { return "authorize-ssh-key" }
 
-// Applicable implements scaffold.Step — Linode machines when SSH dialer and key are configured.
+// Applicable implements scaffold.Step — hosted machines (linode, multipass,
+// …) when an SSH dialer and a public key are configured. SSH-typed machines
+// already have authorized_keys managed out-of-band and are skipped.
 func (a *AuthorizeSSHKeyStep) Applicable(ctx context.Context, t scaffold.Target) (bool, error) {
 	_ = ctx
 	if a.dial == nil || a.sshPubKey == "" {
@@ -42,7 +44,7 @@ func (a *AuthorizeSSHKeyStep) Applicable(ctx context.Context, t scaffold.Target)
 	if !ok || mt == nil {
 		return false, nil
 	}
-	if mt.Spec.Type != manifestdata.MachineTypeLinode {
+	if !manifestdata.IsHostedMachineType(mt.Spec.Type) {
 		return false, nil
 	}
 	return true, nil
@@ -65,7 +67,7 @@ func (a *AuthorizeSSHKeyStep) Check(ctx context.Context, t scaffold.Target) (sat
 		return false, nil
 	}
 	port := sshPort(mt.Spec)
-	user := sshLoginUser(mt.Spec)
+	user := bootstrapLoginUser(mt.Spec)
 	client, key, err := a.borrowSSH(ctx, host, port, user)
 	if err != nil {
 		return false, nil
@@ -89,7 +91,7 @@ func (a *AuthorizeSSHKeyStep) Execute(ctx context.Context, t scaffold.Target) er
 	}
 	host := strings.TrimSpace(mt.Instance.PublicIPv4)
 	port := sshPort(mt.Spec)
-	user := sshLoginUser(mt.Spec)
+	user := bootstrapLoginUser(mt.Spec)
 
 	var lastErr error
 	for attempt := 0; attempt < 15; attempt++ {
@@ -129,7 +131,7 @@ func (a *AuthorizeSSHKeyStep) Verify(ctx context.Context, t scaffold.Target) err
 	}
 	host := strings.TrimSpace(mt.Instance.PublicIPv4)
 	port := sshPort(mt.Spec)
-	user := sshLoginUser(mt.Spec)
+	user := bootstrapLoginUser(mt.Spec)
 	client, key, err := a.borrowSSH(ctx, host, port, user)
 	if err != nil {
 		return fmt.Errorf("authorize-ssh-key verify: dial: %w", err)
@@ -176,8 +178,12 @@ func sshPort(m manifestdata.Machine) int {
 	return m.SSHPort
 }
 
-func sshLoginUser(m manifestdata.Machine) string {
-	u := strings.TrimSpace(m.SSHUser)
+// bootstrapLoginUser mirrors common.MachineBootstrapUser. Provisioning
+// deliberately avoids the common helper to keep its dependencies tight
+// (provisioning is imported by common, not the other way around), but
+// the semantics must stay in lockstep: BootstrapUser or "root".
+func bootstrapLoginUser(m manifestdata.Machine) string {
+	u := strings.TrimSpace(m.BootstrapUser)
 	if u == "" {
 		return "root"
 	}

@@ -1,0 +1,83 @@
+# Multipass provisioning + security + mesh smoke-test manifest.
+#
+# Three bare machines + one headscale gateway spec. Needs the gateway
+# and nodes blocks so mesh.BuildMeshTargets can figure out which
+# machines participate in the mesh and which one hosts the control
+# plane (install-headscale only runs on gateway.reference).
+#
+# Phases exercised: provisioning, security, mesh-gateway, mesh-join.
+# Downstream gateway/channels/node/agents are deliberately not run —
+# this fixture is about the mesh wire working, nothing past it.
+#
+# About the control URL:
+#
+#   strategy: custom + plain http:// means two things matter here.
+#
+#   (1) No ACME / no Caddy. The sslip.io strategy only exists to give
+#       Let's Encrypt a verifiable hostname when a public IP owns no
+#       domain; on a LAN with no cert, there's nothing to verify
+#       against, so we skip the whole dance. install-caddy's
+#       IsHTTPControlURL check short-circuits on http:// schemes and
+#       the step becomes inapplicable.
+#
+#   (2) gateway-host.local is the Multipass VM's mDNS name. The
+#       provisioning phase pins each VM's hostname to its machine
+#       name via cloud-init (see hosting/multipass/cloudinit.go),
+#       installs avahi-daemon + libnss-mdns, and pre-allows UDP 5353
+#       so the security phase's UFW enable doesn't black-hole
+#       multicast. Every peer VM on the same Multipass bridge
+#       resolves `gateway-host.local` → gateway's LAN IP through
+#       mDNS — no DNS server, no runtime IP discovery, no manifest
+#       templating.
+#
+# preauth_key_source: file + a path that doesn't exist yet tells
+# resolve-preauth-key to auto-create a key via the headscale CLI
+# on the gateway (see createPreauthKeyOnGateway in
+# internal/claws/plans/apply/mesh/preauth_key.go). No secrets in
+# the fixture, no env vars to wire up in CI.
+
+prefix: claws-it-multipass-mesh
+
+machines:
+  - name: gateway-host
+    type: multipass
+    cpus: 1
+    memory: 1G
+    disk: 5G
+    bootstrap_user: root
+    agent_user: agent
+
+  - name: node-host-1
+    type: multipass
+    cpus: 1
+    memory: 1G
+    disk: 5G
+    bootstrap_user: root
+    agent_user: agent
+
+  - name: node-host-2
+    type: multipass
+    cpus: 1
+    memory: 1G
+    disk: 5G
+    bootstrap_user: root
+    agent_user: agent
+
+gateways:
+  - name: mesh-gw
+    reference: gateway-host
+    networking:
+      mode: headscale
+      public_hostname:
+        strategy: custom
+        host: "http://gateway-host.local:8080"
+      preauth_key_source: file
+      preauth_key_file: /var/lib/claws/headscale/preauth.key
+
+nodes:
+  - name: node-1
+    gateway: mesh-gw
+    reference: node-host-1
+  - name: node-2
+    gateway: mesh-gw
+    reference: node-host-2

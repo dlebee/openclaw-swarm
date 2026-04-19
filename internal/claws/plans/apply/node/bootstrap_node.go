@@ -33,7 +33,7 @@ func (s *BootstrapNodeStep) Applicable(ctx context.Context, t scaffold.Target) (
 		return false, nil
 	}
 	m := nt.Machine
-	client, key, err := common.BorrowSSH(ctx, s.dial, common.MachineHost(m), common.MachineSSHPort(m), common.MachineSSHUser(m))
+	client, key, err := common.BorrowSSH(ctx, s.dial, common.ResolveMachineHost(ctx, m), common.MachineSSHPort(m), common.MachineAgentUser(m))
 	if err != nil {
 		return true, nil // host unreachable → assume not yet bootstrapped
 	}
@@ -50,7 +50,7 @@ func (s *BootstrapNodeStep) Applicable(ctx context.Context, t scaffold.Target) (
 func (s *BootstrapNodeStep) Check(ctx context.Context, t scaffold.Target) (bool, error) {
 	nt := t.Payload.(*NodeTarget)
 	m := nt.Machine
-	client, key, err := common.BorrowSSH(ctx, s.dial, common.MachineHost(m), common.MachineSSHPort(m), common.MachineSSHUser(m))
+	client, key, err := common.BorrowSSH(ctx, s.dial, common.ResolveMachineHost(ctx, m), common.MachineSSHPort(m), common.MachineAgentUser(m))
 	if err != nil {
 		return false, nil
 	}
@@ -66,7 +66,7 @@ func (s *BootstrapNodeStep) Check(ctx context.Context, t scaffold.Target) (bool,
 func (s *BootstrapNodeStep) Execute(ctx context.Context, t scaffold.Target) error {
 	nt := t.Payload.(*NodeTarget)
 	m := nt.Machine
-	client, key, err := common.BorrowSSHWithRetry(ctx, s.dial, common.MachineHost(m), common.MachineSSHPort(m), common.MachineSSHUser(m))
+	client, key, err := common.BorrowSSHWithRetry(ctx, s.dial, common.ResolveMachineHost(ctx, m), common.MachineSSHPort(m), common.MachineAgentUser(m))
 	if err != nil {
 		return fmt.Errorf("bootstrap-node: %w", err)
 	}
@@ -74,7 +74,7 @@ func (s *BootstrapNodeStep) Execute(ctx context.Context, t scaffold.Target) erro
 
 	// Read the gateway token from the gateway's config.
 	gwMach := nt.GWMach
-	gwClient, gwKey, err := common.BorrowSSH(ctx, s.dial, common.MachineHost(gwMach), common.MachineSSHPort(gwMach), common.MachineSSHUser(gwMach))
+	gwClient, gwKey, err := common.BorrowSSH(ctx, s.dial, common.ResolveMachineHost(ctx, gwMach), common.MachineSSHPort(gwMach), common.MachineAgentUser(gwMach))
 	if err != nil {
 		return fmt.Errorf("bootstrap-node: dial gateway for token: %w", err)
 	}
@@ -92,14 +92,21 @@ func (s *BootstrapNodeStep) Execute(ctx context.Context, t scaffold.Target) erro
 		return fmt.Errorf("bootstrap-node: gateway token is empty (gateway not bootstrapped?)")
 	}
 
-	gwHost := nt.GatewayInternalHost()
+	gwHost := nt.GatewayInternalHost(ctx)
+	if strings.TrimSpace(gwHost) == "" {
+		return fmt.Errorf("bootstrap-node: gateway host not resolved for %q (provisioning phase must run first)", nt.GWMach.Name)
+	}
 
 	var envPrefix string
 	if gwService.NeedsInsecureWS(nt.Gateway) {
 		envPrefix = "OPENCLAW_ALLOW_INSECURE_PRIVATE_WS=1 "
 	}
 
+	// `openclaw node install` invokes `systemctl --user enable` internally,
+	// which requires XDG_RUNTIME_DIR on non-interactive SSH sessions.
+	// linger (enabled by ensure-agent-user) keeps /run/user/<uid> alive.
 	script := fmt.Sprintf(`set -euo pipefail
+export XDG_RUNTIME_DIR=/run/user/$(id -u)
 export OPENCLAW_GATEWAY_TOKEN=%q
 %sopenclaw node install --host %q --port 18789 --display-name %q --runtime node --force
 `, token, envPrefix, gwHost, nt.Spec.Name)
@@ -137,7 +144,7 @@ export OPENCLAW_GATEWAY_TOKEN=%q
 func (s *BootstrapNodeStep) Verify(ctx context.Context, t scaffold.Target) error {
 	nt := t.Payload.(*NodeTarget)
 	m := nt.Machine
-	client, key, err := common.BorrowSSH(ctx, s.dial, common.MachineHost(m), common.MachineSSHPort(m), common.MachineSSHUser(m))
+	client, key, err := common.BorrowSSH(ctx, s.dial, common.ResolveMachineHost(ctx, m), common.MachineSSHPort(m), common.MachineAgentUser(m))
 	if err != nil {
 		return fmt.Errorf("bootstrap-node verify: dial: %w", err)
 	}
@@ -148,8 +155,9 @@ func (s *BootstrapNodeStep) Verify(ctx context.Context, t scaffold.Target) error
 	if err != nil || strings.Contains(out, "(not found)") {
 		return fmt.Errorf("bootstrap-node verify: openclaw-node.service not found")
 	}
-	if !strings.Contains(out, nt.GatewayInternalHost()) {
-		return fmt.Errorf("bootstrap-node verify: unit does not reference gateway host %q", nt.GatewayInternalHost())
+	gwHost := nt.GatewayInternalHost(ctx)
+	if !strings.Contains(out, gwHost) {
+		return fmt.Errorf("bootstrap-node verify: unit does not reference gateway host %q", gwHost)
 	}
 	return nil
 }
