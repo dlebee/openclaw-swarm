@@ -48,6 +48,12 @@ func AddPhase(p *scaffold.Plan, targets []scaffold.Target, opts Options) *scaffo
 
 	ph.AddStep(NewCreateMachineStep(opts))
 	ph.AddStep(NewAuthorizeSSHKeyStep(opts))
+	// wait-cloud-init sits between authorize-ssh-key (needs SSH) and
+	// ensure-agent-user (runs useradd, which can race cloud-init's own
+	// users: module). Placing it here also means every post-provisioning
+	// phase inherits the "boot-time apt-daily has released the lock"
+	// guarantee — see wait_cloud_init.go for the apt-lock rationale.
+	ph.AddStep(NewWaitCloudInitStep(opts))
 	ph.AddStep(NewEnsureAgentUserStep(opts))
 
 	return ph
