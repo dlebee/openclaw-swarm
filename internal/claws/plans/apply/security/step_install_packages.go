@@ -63,10 +63,10 @@ func (s *InstallPackagesStep) Execute(ctx context.Context, t scaffold.Target) er
 	}
 	defer returnSSH(ctx, key, client)
 
-	if err := apt.Update(client); err != nil {
+	if err := apt.Update(ctx, client); err != nil {
 		return fmt.Errorf("install-security-packages: apt update: %w", err)
 	}
-	if err := apt.Install(client, securityPackages...); err != nil {
+	if err := apt.Install(ctx, client, securityPackages...); err != nil {
 		return fmt.Errorf("install-security-packages: apt install: %w", err)
 	}
 	return nil

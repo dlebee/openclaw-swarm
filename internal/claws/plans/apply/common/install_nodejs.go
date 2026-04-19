@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/gluwa/openclaw-swarm2/internal/platformutil/apt"
 	"github.com/gluwa/openclaw-swarm2/internal/platformutil/bash"
 	"github.com/gluwa/openclaw-swarm2/internal/scaffold"
 )
@@ -65,7 +66,13 @@ fi
 export DEBIAN_FRONTEND=noninteractive
 sudo apt-get install -y -qq nodejs
 `
-	if err := RunBashWithRetry(ctx, s.dial, host, port, user, script); err != nil {
+	// apt.WithLockRetry retries the whole script on apt/dpkg lock
+	// contention (apt-daily, unattended-upgrades). RunBashWithRetry
+	// already handles transient SSH session drops; the two layers
+	// target different failure classes.
+	if err := apt.WithLockRetry(ctx, apt.RetryOpts{}, func() error {
+		return RunBashWithRetry(ctx, s.dial, host, port, user, script)
+	}); err != nil {
 		return fmt.Errorf("install-nodejs: %w", err)
 	}
 	return nil

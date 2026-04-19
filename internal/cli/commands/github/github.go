@@ -19,6 +19,7 @@ import (
 	"github.com/charmbracelet/huh"
 	manifestdata "github.com/gluwa/openclaw-swarm2/internal/manifests/data"
 	manifestsvc "github.com/gluwa/openclaw-swarm2/internal/manifests/service"
+	"github.com/gluwa/openclaw-swarm2/internal/platformutil/apt"
 	"github.com/gluwa/openclaw-swarm2/internal/platformutil/bash"
 	clawssh "github.com/gluwa/openclaw-swarm2/internal/ssh"
 	"github.com/gluwa/openclaw-swarm2/internal/state"
@@ -137,7 +138,10 @@ distributed to the remaining selected machines via 'gh auth login --with-token'.
 				}
 
 				fmt.Fprintf(out, "  ⟳ %s: installing gh ...\n", t.machine.Name)
-				installOut, err := bash.RunOutput(client, installGHScript)
+				// Route through apt.RunScriptOutput so an apt-daily
+				// race during `apt-get update`/`install gh` retries
+				// instead of immediately failing the machine.
+				installOut, err := apt.RunScriptOutput(cmd.Context(), client, installGHScript)
 				_ = client.Close()
 				if err != nil {
 					fmt.Fprintf(out, "  ✗ %s: install failed: %s\n%s\n",

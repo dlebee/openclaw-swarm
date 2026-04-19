@@ -8,6 +8,7 @@ import (
 
 	"github.com/gluwa/openclaw-swarm2/internal/claws/plans/apply/common"
 	manifestdata "github.com/gluwa/openclaw-swarm2/internal/manifests/data"
+	"github.com/gluwa/openclaw-swarm2/internal/platformutil/apt"
 	"github.com/gluwa/openclaw-swarm2/internal/platformutil/bash"
 	"github.com/gluwa/openclaw-swarm2/internal/scaffold"
 )
@@ -73,7 +74,16 @@ if ! command -v tailscale >/dev/null 2>&1; then
 fi
 echo "container-skip-join"
 `
-		if _, err := common.RunBashOutputWithRetry(ctx, s.dial, host, port, user, script); err != nil {
+		// Wrap in apt.WithLockRetry: the script's `apt-get update` /
+		// `apt-get install tailscale` can race apt-daily on fresh
+		// images. common.RunBashOutputWithRetry already handles
+		// transient SSH session drops; this outer loop specifically
+		// retries when the apt lock is held, which is a different
+		// failure class with a much longer backoff budget.
+		if err := apt.WithLockRetry(ctx, apt.RetryOpts{}, func() error {
+			_, err := common.RunBashOutputWithRetry(ctx, s.dial, host, port, user, script)
+			return err
+		}); err != nil {
 			return fmt.Errorf("install-tailscale (container) on %s: %w", m.Name, err)
 		}
 		return nil
@@ -166,8 +176,12 @@ sudo ufw allow in on tailscale0 >/dev/null 2>&1 || true
 tailscale ip -4
 `, ufwExtra, pinHostsSnippet, controlURL, authKey)
 
-	out, err := common.RunBashOutputWithRetry(ctx, s.dial, host, port, user, script)
-	if err != nil {
+	var out string
+	if err := apt.WithLockRetry(ctx, apt.RetryOpts{}, func() error {
+		o, rerr := common.RunBashOutputWithRetry(ctx, s.dial, host, port, user, script)
+		out = o
+		return rerr
+	}); err != nil {
 		return fmt.Errorf("install-tailscale on %s: %w", m.Name, err)
 	}
 

@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"github.com/gluwa/openclaw-swarm2/internal/claws/plans/apply/common"
+	"github.com/gluwa/openclaw-swarm2/internal/platformutil/apt"
 	"github.com/gluwa/openclaw-swarm2/internal/platformutil/bash"
 	"github.com/gluwa/openclaw-swarm2/internal/scaffold"
 )
@@ -94,7 +95,12 @@ sudo systemctl enable caddy 2>/dev/null || true
 sudo systemctl reload caddy 2>/dev/null || sudo systemctl restart caddy
 `, caddyfile)
 
-	out, err := bash.RunOutput(client, script)
+	// apt.RunScriptOutput retries on apt/dpkg lock contention. The
+	// `if ! command -v caddy` guard keeps the script idempotent across
+	// retries (keyring writes and the apt source list are writes
+	// outside the guard, but they're idempotent — same bytes every
+	// run).
+	out, err := apt.RunScriptOutput(ctx, client, script)
 	if err != nil {
 		return fmt.Errorf("install-caddy: %w\n%s", err, out)
 	}
