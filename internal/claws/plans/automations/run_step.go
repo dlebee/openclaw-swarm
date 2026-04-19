@@ -210,6 +210,12 @@ func (d *DynamicStep) dial(ctx context.Context, t scaffold.Target) (*xssh.Client
 	m := at.Machine()
 	host := at.Host()
 	if host == "" {
+		// Cold `claws apply --only <automation>`: MachineTarget.Instance is
+		// often nil even though VMs exist — the same case as mesh/gateway
+		// steps that call common.ResolveMachineHost (see apply.BuildPlan PreRun).
+		host = common.ResolveMachineHost(ctx, m)
+	}
+	if host == "" {
 		return nil, "", fmt.Errorf("machine %q has no reachable host yet (not provisioned?)", m.Name)
 	}
 	port := common.MachineSSHPort(m)

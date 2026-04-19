@@ -161,6 +161,152 @@ func TestProvisioningSecurityAutomationSmoke(t *testing.T) {
 	}
 }
 
+// TestProvisioningSecurityAutomationIncludeManual mirrors `claws apply
+// --include-manual-automations`: the first apply run uses the default plan
+// (manual automations omitted); a second plan build with
+// BuildOptions.IncludeManualAutomations=true adds phase "it-manual-never",
+// which we execute alone to prove the flag wires through and the manual
+// step runs on the already-provisioned VMs.
+func TestProvisioningSecurityAutomationIncludeManual(t *testing.T) {
+	if !multipass.IsBinaryAvailable() {
+		t.Skip("multipass not on PATH (install from https://multipass.run)")
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 18*time.Minute)
+	defer cancel()
+	ctx = scaffold.EnsurePlanCache(ctx)
+
+	privPath, pubKey := generateEphemeralKey(t)
+	signer := loadSigner(t, privPath)
+
+	m := loadTestManifest(t, automationSmokeManifest)
+	m.Prefix = "it-automan-" + randSuffix(t)
+	prefix := m.Prefix
+
+	manifestPath, err := filepath.Abs(filepath.Join("testdata", automationSmokeManifest))
+	if err != nil {
+		t.Fatalf("abs manifest path: %v", err)
+	}
+
+	prov, err := multipass.NewProvider(multipass.Options{})
+	if err != nil {
+		t.Fatalf("new multipass provider: %v", err)
+	}
+
+	dial := sshDialFunc(signer)
+
+	t.Cleanup(func() {
+		if os.Getenv("CLAWS_IT_KEEP_VMS") != "" {
+			t.Logf("CLAWS_IT_KEEP_VMS set → leaving VMs up for debug (prefix=%s)", prefix)
+			return
+		}
+		cleanupCtx, ccancel := context.WithTimeout(context.Background(), 90*time.Second)
+		defer ccancel()
+		insts, err := prov.ListByTag(cleanupCtx, "claws/"+prefix)
+		if err != nil {
+			t.Logf("cleanup: list instances: %v", err)
+			return
+		}
+		for _, inst := range insts {
+			t.Logf("cleanup: deleting %s", inst.Label)
+			if err := prov.DeleteInstance(cleanupCtx, inst.ResourceID); err != nil {
+				t.Logf("cleanup: delete %s: %v", inst.Label, err)
+			}
+		}
+	})
+
+	buildOpts := func(includeManual bool) planapply.BuildOptions {
+		return planapply.BuildOptions{
+			Manifest:                 m,
+			ManifestPath:             manifestPath,
+			Provider:                 prov,
+			SSHPubKey:                pubKey,
+			SSHDial:                  dial,
+			IncludeManualAutomations: includeManual,
+		}
+	}
+
+	// --- pass 1: default apply (same as TestProvisioningSecurityAutomationSmoke) ---
+
+	plan1, err := planapply.BuildPlan(buildOpts(false))
+	if err != nil {
+		t.Fatalf("build plan (includeManual=false): %v", err)
+	}
+	if containsStr(plan1.PhaseNames(), "it-manual-never") {
+		t.Fatalf("plan should omit manual automation without IncludeManualAutomations; got %v",
+			plan1.PhaseNames())
+	}
+
+	ex1, err := plan1.Build()
+	if err != nil {
+		t.Fatalf("plan.Build: %v", err)
+	}
+	if err := ex1.Execute(ctx, scaffold.ExecuteOptions{
+		Progress: progress.Noop{},
+		OnlyPhases: []string{
+			"provisioning",
+			"security",
+			"it-nonmanual-auto",
+		},
+	}); err != nil {
+		t.Fatalf("execute pass 1: %v", err)
+	}
+
+	hostByName := make(map[string]manifestdata.Machine, len(m.Machines))
+	for _, mc := range m.Machines {
+		mt := findMachineTarget(t, plan1, mc.Name)
+		if mt.Instance == nil {
+			t.Fatalf("machine %q has no Instance after pass 1", mc.Name)
+		}
+		inst := mt.Instance
+		if strings.TrimSpace(inst.PublicIPv4) == "" {
+			t.Fatalf("machine %q has empty PublicIPv4", mc.Name)
+		}
+		hostByName[mc.Name] = mc
+		t.Logf("machine %q → ip=%s", mc.Name, inst.PublicIPv4)
+
+		assertAutomationMarkerOK(t, dial, inst.PublicIPv4, mc)
+		assertManualAutomationMarkerAbsent(t, dial, inst.PublicIPv4, mc)
+	}
+
+	// --- pass 2: include manual (equivalent to --include-manual-automations) ---
+
+	plan2, err := planapply.BuildPlan(buildOpts(true))
+	if err != nil {
+		t.Fatalf("build plan (includeManual=true): %v", err)
+	}
+	ph2 := plan2.PhaseNames()
+	if !containsStr(ph2, "it-manual-never") {
+		t.Fatalf("plan with IncludeManualAutomations should include phase %q; got %v",
+			"it-manual-never", ph2)
+	}
+
+	ex2, err := plan2.Build()
+	if err != nil {
+		t.Fatalf("plan2.Build: %v", err)
+	}
+	if err := ex2.Execute(ctx, scaffold.ExecuteOptions{
+		Progress:   progress.Noop{},
+		OnlyPhases: []string{"it-manual-never"},
+	}); err != nil {
+		t.Fatalf("execute manual automation phase: %v", err)
+	}
+
+	gw, ok := hostByName["gateway-host"]
+	if !ok {
+		t.Fatalf("fixture missing gateway-host")
+	}
+	node, ok := hostByName["node-host"]
+	if !ok {
+		t.Fatalf("fixture missing node-host")
+	}
+	gwIP := findMachineTarget(t, plan1, "gateway-host").Instance.PublicIPv4
+	nodeIP := findMachineTarget(t, plan1, "node-host").Instance.PublicIPv4
+
+	assertManualAutomationMarkerPresent(t, dial, gwIP, gw)
+	assertManualAutomationMarkerAbsent(t, dial, nodeIP, node)
+}
+
 func assertAutomationMarkerOK(t *testing.T, dial provisioning.SSHDialFunc, host string, mc manifestdata.Machine) {
 	t.Helper()
 	out, err := sshRunAsUser(t, dial, host, mc.AgentUser,
@@ -176,6 +322,15 @@ func assertManualAutomationMarkerAbsent(t *testing.T, dial provisioning.SSHDialF
 	out, err := sshRunAsUser(t, dial, host, mc.AgentUser, `test ! -f /tmp/claws-it-manual-marker`)
 	if err != nil {
 		t.Errorf("[%s] manual automation marker must not exist: %v\n%s", mc.Name, err, out)
+	}
+}
+
+func assertManualAutomationMarkerPresent(t *testing.T, dial provisioning.SSHDialFunc, host string, mc manifestdata.Machine) {
+	t.Helper()
+	out, err := sshRunAsUser(t, dial, host, mc.AgentUser,
+		`test -f /tmp/claws-it-manual-marker && grep -q bad /tmp/claws-it-manual-marker`)
+	if err != nil {
+		t.Errorf("[%s] manual automation marker after include-manual pass: %v\n%s", mc.Name, err, out)
 	}
 }
 
