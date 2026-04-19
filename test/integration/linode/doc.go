@@ -29,6 +29,7 @@
 //   - gateway:      1 VM  × ~10 min = ~$0.003
 //   - channels:     1 VM  × ~10 min = ~$0.003
 //   - node:         2 VMs × ~15 min = ~$0.008
+//   - agents:       1 VM  × ~12 min = ~$0.003
 //   - mesh:         3 VMs × ~12 min = ~$0.010
 //
 // Leaked VMs are the real cost risk — every test registers a cleanup
@@ -77,6 +78,21 @@
 //     Exercises the install-caddy + Let's Encrypt path which the
 //     Multipass tier can't. Fixture omits exec_policy to cover the
 //     ExecPolicyStep.Applicable=false skip path.
+//   - TestAgentsSmoke (linode_agents_test.go): provisioning +
+//     security + gateway + channels + agents on one instance with
+//     one telegram channel and one agent (tools.elevated + identity
+//     + bindings, no tools.exec). Exercises every sub-step of the
+//     agents phase: add-agent, ensure-model, configure-workspace
+//     (SOUL.md / AGENTS.md / IDENTITY.md with managed-section
+//     markers + `agents set-identity`), configure-tools
+//     (tools.elevated.enabled + allowFrom), configure-bindings
+//     (`agents bind telegram:telegram-main`). Re-asserts loopback
+//     bind after agents apply on a public-IP VM — the unique
+//     value-add over the Multipass tier is catching any agents-
+//     phase regression that inadvertently flips gateway.bind on
+//     real cloud infrastructure before it reaches production.
+//     Fake bot token injected via t.Setenv; daemon 401s in the
+//     background without affecting gateway health.
 //   - TestMeshSmoke (linode_mesh_test.go): provisioning + security +
 //     mesh-gateway + mesh-join on three instances. Uses the default
 //     sslip.io public_hostname strategy — so this test also covers

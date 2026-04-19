@@ -1,0 +1,109 @@
+# Multipass provisioning + security + gateway + channels + agents
+# smoke-test manifest.
+#
+# One machine. One gateway (loopback bind, no networking block, same
+# rationale as manifest-gateway.yml and manifest-channels.yml — keep
+# the surface minimum so a failure in TestAgentsSmoke is unambiguously
+# an agents-phase bug, not a gateway or channels regression). One
+# telegram channel (the agent needs a channel to bind to; one is
+# enough here because the ensure-default-account coverage already
+# lives in TestChannelsSmoke). One agent, exercising every
+# sub-step of the agents phase:
+#
+#   add-agent            → openclaw agents add (writes agents.list entry)
+#   ensure-model         → agents.list[i].model / fallbacks via config set
+#   configure-workspace  → SOUL.md + AGENTS.md + IDENTITY.md managed
+#                          markers in the workspace dir + `agents
+#                          set-identity`
+#   configure-tools      → tools.elevated.enabled +
+#                          tools.elevated.allowFrom.telegram via
+#                          config set (no tools.exec — that needs a
+#                          node, covered in a follow-up test)
+#   configure-bindings   → openclaw agents bind --bind telegram:
+#                          telegram-main
+#
+# Why no tools.exec on the agent:
+#
+#   tools.exec.node points at a node hostname. With no `nodes:`
+#   block on this manifest there's nothing to point at, and the
+#   configure-tools code path that cares about Host/Node would write
+#   a dangling reference into openclaw.json. The whole point of
+#   omitting exec here is that the first-tier agents smoke test
+#   shouldn't depend on the (more expensive) node pipeline just to
+#   prove add-agent → ensure-model → configure-workspace →
+#   configure-tools(elevated) → configure-bindings work. A second
+#   test will layer on node + exec.node once this one is green.
+#
+# Why tools.elevated is set (not omitted):
+#
+#   ConfigureToolsStep.Applicable returns Spec.Tools != nil — an
+#   agent with Tools==nil silently skips the whole step. Populating
+#   ONLY tools.elevated (Tools.Exec stays nil) exercises the
+#   elevated config-write branch while keeping the exec branch out
+#   of scope. buildExecBatch short-circuits on nil Exec, so the
+#   config-set batch lands only the elevated keys — exactly the
+#   code path we want to cover.
+#
+# Why bindings with channel: "telegram" / account: "telegram-main":
+#
+#   Matches the production shape in manifests/army.yml (every
+#   bound agent uses {channel: telegram, account: telegram-<name>}).
+#   AgentBinding.Channel = KIND, AgentBinding.Account = account
+#   name from the gateway.channels list. formatBinding stringifies
+#   this as "telegram:telegram-main" for `openclaw agents bind
+#   --bind ...`. Mirroring the production shape means a regression
+#   in how the CLI parses "kind:account" pairs would fail here
+#   first, not in a human's first deploy.
+#
+# Why a single telegram channel + fake token:
+#
+#   Same "daemon 401s silently against api.telegram.org, gateway
+#   stays healthy" argument as TestChannelsSmoke — the agent
+#   binding only writes config, never hits the network. Two
+#   channels aren't needed here because this test doesn't claim to
+#   cover ensure-default-account (TestChannelsSmoke already does).
+
+prefix: claws-it-multipass-agents
+
+machines:
+  - name: gateway-host
+    type: multipass
+    cpus: 2
+    memory: 2G
+    disk: 8G
+    bootstrap_user: root
+    agent_user: agent
+
+gateways:
+  - name: gateway
+    reference: gateway-host
+    channels:
+      - kind: telegram
+        name: telegram-main
+        token_env: TELEGRAM_MAIN_BOT_TOKEN
+        default: true
+
+agents:
+  - id: main
+    gateway: gateway
+    workspace: ~/.openclaw/workspace
+    model: { primary: "anthropic/claude-sonnet-4-6" }
+    tools:
+      elevated:
+        enabled: true
+        allow_from:
+          telegram: ["6609699762"]
+    soul: |
+      You are the smoke-test agent. You exist to prove the agents
+      phase of claws apply lands config correctly.
+      Be direct. Be concise. Have opinions.
+    agents_md: |
+      You are the main agent in a smoke-test deployment.
+      Handle day-to-day tasks, questions, and coordination.
+      Prefer short answers over long ones.
+    identity:
+      name: Main
+      emoji: "🧠"
+    bindings:
+      - channel: telegram
+        account: telegram-main
