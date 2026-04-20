@@ -18,5 +18,8 @@ func LoadFile(path string) (*data.Manifest, error) {
 	if err := yaml.Unmarshal(b, &m); err != nil {
 		return nil, fmt.Errorf("parse yaml: %w", err)
 	}
+	if err := data.ValidateManifest(&m); err != nil {
+		return nil, fmt.Errorf("validate manifest: %w", err)
+	}
 	return &m, nil
 }

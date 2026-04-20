@@ -52,6 +52,18 @@ func (at *AutomationTarget) Host() string {
 // GetMachine implements common.MachineProvider.
 func (at *AutomationTarget) GetMachine() manifestdata.Machine { return at.Machine() }
 
+// IsSelf reports whether this target is the reserved "self" target —
+// i.e. the automation step should run on the operator host rather than
+// being dialed over SSH. Detection is by MachineType so manifests can't
+// accidentally create a non-self target that happens to be named "self"
+// (validation rejects that anyway, but this is the source of truth).
+func (at *AutomationTarget) IsSelf() bool {
+	if at == nil || at.MachineTarget == nil {
+		return false
+	}
+	return at.MachineTarget.Spec.Type == manifestdata.MachineTypeSelf
+}
+
 // Options configures AddPhases / BuildPlan.
 type Options struct {
 	SSHDial        SSHDialFunc
@@ -122,6 +134,22 @@ func addAutomationPhase(p *scaffold.Plan, auto manifestdata.Automation, mtByName
 func buildTargets(auto manifestdata.Automation, mtByName map[string]*provisioning.MachineTarget) []scaffold.Target {
 	targets := make([]scaffold.Target, 0, len(auto.Machines))
 	for _, name := range auto.Machines {
+		if manifestdata.IsSelfMachineName(name) {
+			// "self" is a synthetic target — no manifest machine entry,
+			// no SSH dial. We still synthesize a MachineTarget so the
+			// rest of the plumbing (AutomationTarget, IsSelf probes) can
+			// stay untouched; consumers check MachineTypeSelf to branch.
+			targets = append(targets, scaffold.Target{
+				ID: manifestdata.SelfMachineName,
+				Payload: &AutomationTarget{MachineTarget: &provisioning.MachineTarget{
+					Spec: manifestdata.Machine{
+						Name: manifestdata.SelfMachineName,
+						Type: manifestdata.MachineTypeSelf,
+					},
+				}},
+			})
+			continue
+		}
 		mt, ok := mtByName[name]
 		if !ok {
 			continue

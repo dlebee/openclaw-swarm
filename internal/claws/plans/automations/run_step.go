@@ -11,13 +11,17 @@ import (
 	manifestdata "github.com/gluwa/openclaw-swarm2/internal/manifests/data"
 	"github.com/gluwa/openclaw-swarm2/internal/platformutil/bash"
 	"github.com/gluwa/openclaw-swarm2/internal/platformutil/python"
+	"github.com/gluwa/openclaw-swarm2/internal/platformutil/sshfile"
 	"github.com/gluwa/openclaw-swarm2/internal/scaffold"
 	xssh "golang.org/x/crypto/ssh"
 )
 
 // DynamicStep wraps an AutomationStep definition and implements scaffold.Step.
 // The lifecycle scripts (applicable, check, execute, verify) are dispatched
-// over SSH using bash or python depending on the step's Kind.
+// via bash or python — over SSH for remote targets, via os/exec for the
+// reserved "self" target. scp.upload / scp.download kinds do not run an
+// Execute script: Execute performs a streaming SFTP transfer between the
+// operator host and the remote target instead.
 type DynamicStep struct {
 	step        manifestdata.AutomationStep
 	defaultUser string   // automation-level run_as
@@ -49,9 +53,12 @@ func (d *DynamicStep) Name() string { return d.step.Name }
 //   - AssumeWillProvision=false (standalone `claws automations apply`): the
 //     machine simply doesn't exist — return false to skip.
 //
+// Self targets bypass the host-empty short-circuit entirely: there's
+// nothing to provision, so an empty "host" is the normal state.
+//
 // Otherwise runs the applicable script if set; not set = always true.
 func (d *DynamicStep) Applicable(ctx context.Context, t scaffold.Target) (bool, error) {
-	if at, ok := t.Payload.(*AutomationTarget); ok && at.Host() == "" {
+	if at, ok := t.Payload.(*AutomationTarget); ok && !at.IsSelf() && at.Host() == "" {
 		return d.opts.AssumeWillProvision, nil
 	}
 	script, err := d.resolveScript(d.step.Applicable, d.step.ApplicableFile)
@@ -61,14 +68,11 @@ func (d *DynamicStep) Applicable(ctx context.Context, t scaffold.Target) (bool, 
 	if script == "" {
 		return true, nil
 	}
-	client, key, err := d.dial(ctx, t)
-	if err != nil {
-		return false, fmt.Errorf("%s: applicable dial: %w", d.step.Name, err)
+	runErr, dialErr := d.probeScript(ctx, t, script)
+	if dialErr != nil {
+		return false, fmt.Errorf("%s: applicable dial: %w", d.step.Name, dialErr)
 	}
-	defer common.ReturnSSH(ctx, key, client)
-
-	err = d.run(client, script)
-	if err != nil {
+	if runErr != nil {
 		return false, nil
 	}
 	return true, nil
@@ -76,11 +80,12 @@ func (d *DynamicStep) Applicable(ctx context.Context, t scaffold.Target) (bool, 
 
 // Check runs the check script if set; not set = always false (always execute).
 //
-// When the target has no reachable host and AssumeWillProvision=true (plan
-// probe inside `claws apply`), return false so the step is shown as "will
-// execute" — the real check runs once provisioning populates the Instance.
+// When a remote target has no reachable host and AssumeWillProvision=true
+// (plan probe inside `claws apply`), return false so the step is shown as
+// "will execute" — the real check runs once provisioning populates the
+// Instance. Self targets skip this short-circuit (no provisioning needed).
 func (d *DynamicStep) Check(ctx context.Context, t scaffold.Target) (bool, error) {
-	if at, ok := t.Payload.(*AutomationTarget); ok && at.Host() == "" {
+	if at, ok := t.Payload.(*AutomationTarget); ok && !at.IsSelf() && at.Host() == "" {
 		return false, nil
 	}
 	script, err := d.resolveScript(d.step.Check, d.step.CheckFile)
@@ -90,21 +95,31 @@ func (d *DynamicStep) Check(ctx context.Context, t scaffold.Target) (bool, error
 	if script == "" {
 		return false, nil
 	}
-	client, key, err := d.dial(ctx, t)
-	if err != nil {
-		return false, fmt.Errorf("%s: check dial: %w", d.step.Name, err)
+	runErr, dialErr := d.probeScript(ctx, t, script)
+	if dialErr != nil {
+		return false, fmt.Errorf("%s: check dial: %w", d.step.Name, dialErr)
 	}
-	defer common.ReturnSSH(ctx, key, client)
-
-	err = d.run(client, script)
-	if err != nil {
+	if runErr != nil {
 		return false, nil
 	}
 	return true, nil
 }
 
-// Execute runs the execute script. Required.
+// Execute runs the step's main work:
+//   - bash / python: execute the `execute` (or execute_file) script on the
+//     target (remotely over SSH, or locally when the target is self).
+//   - scp.upload: stream step.Source (operator host) -> step.Destination
+//     (remote target) via SFTP.
+//   - scp.download: stream step.Source (remote target) -> step.Destination
+//     (operator host) via SFTP.
 func (d *DynamicStep) Execute(ctx context.Context, t scaffold.Target) error {
+	switch d.kind() {
+	case manifestdata.StepKindSCPUpload:
+		return d.executeUpload(ctx, t)
+	case manifestdata.StepKindSCPDownload:
+		return d.executeDownload(ctx, t)
+	}
+
 	script, err := d.resolveScript(d.step.Execute, d.step.ExecuteFile)
 	if err != nil {
 		return fmt.Errorf("%s: resolve execute: %w", d.step.Name, err)
@@ -112,13 +127,7 @@ func (d *DynamicStep) Execute(ctx context.Context, t scaffold.Target) error {
 	if script == "" {
 		return fmt.Errorf("%s: execute script is required", d.step.Name)
 	}
-	client, key, err := d.dial(ctx, t)
-	if err != nil {
-		return fmt.Errorf("%s: execute dial: %w", d.step.Name, err)
-	}
-	defer common.ReturnSSH(ctx, key, client)
-
-	if err := d.run(client, script); err != nil {
+	if err := d.runScript(ctx, t, script); err != nil {
 		return fmt.Errorf("%s: %w", d.step.Name, err)
 	}
 	return nil
@@ -126,6 +135,11 @@ func (d *DynamicStep) Execute(ctx context.Context, t scaffold.Target) error {
 
 // Verify runs the verify script if set; falls back to the check script
 // when no explicit verify is provided; noop when neither is set.
+//
+// For scp.* kinds the verify/check scripts run on the *remote* side
+// (the side we pushed to / pulled from) — not on self. That matches what
+// you usually want to assert ("the file landed and has the right size /
+// mode / checksum").
 func (d *DynamicStep) Verify(ctx context.Context, t scaffold.Target) error {
 	script, err := d.resolveScript(d.step.Verify, d.step.VerifyFile)
 	if err != nil {
@@ -140,16 +154,68 @@ func (d *DynamicStep) Verify(ctx context.Context, t scaffold.Target) error {
 	if script == "" {
 		return nil
 	}
-	client, key, err := d.dial(ctx, t)
-	if err != nil {
-		return fmt.Errorf("%s: verify dial: %w", d.step.Name, err)
-	}
-	defer common.ReturnSSH(ctx, key, client)
-
-	if err := d.run(client, script); err != nil {
+	if err := d.runScript(ctx, t, script); err != nil {
 		return fmt.Errorf("%s: verify: %w", d.step.Name, err)
 	}
 	return nil
+}
+
+// ---------------------------------------------------------------------------
+// SCP dispatch
+// ---------------------------------------------------------------------------
+
+// executeUpload implements kind=scp.upload. Source is on the operator
+// host (self), destination is on the remote machine. The manifest
+// validator guarantees step.Source/Destination are non-empty and the
+// target is NOT self — so we can go straight to dial + Upload without
+// re-checking invariants that were already enforced at load time.
+func (d *DynamicStep) executeUpload(ctx context.Context, t scaffold.Target) error {
+	if isSelfTarget(t) {
+		return fmt.Errorf("%s: scp.upload cannot target self (self is always the source side)", d.step.Name)
+	}
+	client, key, err := d.dial(ctx, t)
+	if err != nil {
+		return fmt.Errorf("%s: upload dial: %w", d.step.Name, err)
+	}
+	defer common.ReturnSSH(ctx, key, client)
+
+	mode := d.parsedMode()
+	if err := sshfile.Upload(client, d.step.Source, d.step.Destination, mode); err != nil {
+		return fmt.Errorf("%s: upload %s -> %s: %w", d.step.Name, d.step.Source, d.step.Destination, err)
+	}
+	return nil
+}
+
+// executeDownload implements kind=scp.download. Source is on the remote
+// machine, destination is on the operator host (self).
+func (d *DynamicStep) executeDownload(ctx context.Context, t scaffold.Target) error {
+	if isSelfTarget(t) {
+		return fmt.Errorf("%s: scp.download cannot target self (self is always the destination side)", d.step.Name)
+	}
+	client, key, err := d.dial(ctx, t)
+	if err != nil {
+		return fmt.Errorf("%s: download dial: %w", d.step.Name, err)
+	}
+	defer common.ReturnSSH(ctx, key, client)
+
+	mode := d.parsedMode()
+	if err := sshfile.Download(client, d.step.Source, d.step.Destination, mode); err != nil {
+		return fmt.Errorf("%s: download %s -> %s: %w", d.step.Name, d.step.Source, d.step.Destination, err)
+	}
+	return nil
+}
+
+// parsedMode converts the manifest's optional string mode into the
+// *os.FileMode that sshfile.Upload/Download expect. Returns nil when the
+// operator didn't specify one, which lets sshfile fall back to source
+// permissions.
+func (d *DynamicStep) parsedMode() *os.FileMode {
+	v, ok := manifestdata.ParseMode(d.step.Mode)
+	if !ok {
+		return nil
+	}
+	m := os.FileMode(v)
+	return &m
 }
 
 // ---------------------------------------------------------------------------
@@ -199,7 +265,21 @@ func (d *DynamicStep) kind() string {
 	if k := strings.TrimSpace(d.step.Kind); k != "" {
 		return strings.ToLower(k)
 	}
-	return "bash"
+	return manifestdata.StepKindBash
+}
+
+// scriptKind returns the interpreter kind (bash / python) to use for
+// lifecycle scripts. scp.* steps still run their applicable/check/verify
+// as bash because that's the overwhelmingly common shape for idempotency
+// probes ("does the file exist with the right checksum?"). Operators who
+// want a python probe on an scp.* step can set RunAs at the step level —
+// but that's not a door we open today to keep the mental model small.
+func (d *DynamicStep) scriptKind() string {
+	k := d.kind()
+	if k == manifestdata.StepKindPython {
+		return manifestdata.StepKindPython
+	}
+	return manifestdata.StepKindBash
 }
 
 func (d *DynamicStep) dial(ctx context.Context, t scaffold.Target) (*xssh.Client, string, error) {
@@ -223,16 +303,53 @@ func (d *DynamicStep) dial(ctx context.Context, t scaffold.Target) (*xssh.Client
 	return common.BorrowSSH(ctx, d.opts.SSHDial, host, port, user)
 }
 
-func (d *DynamicStep) run(client *xssh.Client, script string) error {
-	kind := d.kind()
-	envNames := d.effectiveEnvAllowlist()
-	envValues := resolveEnvValues(envNames, d.opts.ResolvedEnv)
-	switch kind {
-	case "python":
-		return python.Run(client, pythonEnvPreamble(envValues)+script)
-	default:
-		return bash.Run(client, bashEnvPreamble(envValues)+script)
+// runScript executes script against t, choosing the transport based on
+// whether t is the reserved self target. Used by Execute/Verify where
+// any failure (transport or script) is a step failure.
+func (d *DynamicStep) runScript(ctx context.Context, t scaffold.Target, script string) error {
+	runErr, dialErr := d.probeScript(ctx, t, script)
+	if dialErr != nil {
+		return dialErr
 	}
+	return runErr
+}
+
+// probeScript is the shared core for Applicable/Check/Execute/Verify. It
+// returns the script error (separate from transport errors) so Applicable
+// and Check can treat a non-zero script exit as "skip this step" while
+// still propagating genuine dial failures as plan errors — matching the
+// pre-self behavior of this package. For self targets there's no
+// transport to fail independently, so dialErr is always nil and any
+// runLocal failure lands in runErr.
+func (d *DynamicStep) probeScript(ctx context.Context, t scaffold.Target, script string) (runErr, dialErr error) {
+	envValues := resolveEnvValues(d.effectiveEnvAllowlist(), d.opts.ResolvedEnv)
+
+	kind := d.scriptKind()
+	var prefixed string
+	if kind == manifestdata.StepKindPython {
+		prefixed = pythonEnvPreamble(envValues) + script
+	} else {
+		prefixed = bashEnvPreamble(envValues) + script
+	}
+
+	if isSelfTarget(t) {
+		// Pin cwd to the manifest dir so scripts using relative paths
+		// (e.g. `cd model-orchestrator`) resolve deterministically
+		// regardless of where the operator invoked claws from.
+		return runLocal(ctx, kind, prefixed, runLocalOptions{
+			workingDir: d.opts.ManifestDir,
+		}), nil
+	}
+	client, key, err := d.dial(ctx, t)
+	if err != nil {
+		return nil, err
+	}
+	defer common.ReturnSSH(ctx, key, client)
+
+	if kind == manifestdata.StepKindPython {
+		return python.Run(client, prefixed), nil
+	}
+	return bash.Run(client, prefixed), nil
 }
 
 // effectiveEnvAllowlist returns the union of the automation-level and
@@ -263,4 +380,14 @@ func (d *DynamicStep) effectiveEnvAllowlist() []string {
 		add(n)
 	}
 	return out
+}
+
+// isSelfTarget returns true when the target is the reserved self target.
+// Accepts anything — non-AutomationTarget payloads are never self.
+func isSelfTarget(t scaffold.Target) bool {
+	at, ok := t.Payload.(*AutomationTarget)
+	if !ok {
+		return false
+	}
+	return at.IsSelf()
 }

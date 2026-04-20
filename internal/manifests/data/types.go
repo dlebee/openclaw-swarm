@@ -7,7 +7,23 @@ const (
 	MachineTypeLinode    MachineType = "linode"
 	MachineTypeSSH       MachineType = "ssh"
 	MachineTypeMultipass MachineType = "multipass"
+	// MachineTypeSelf is the synthetic machine type for the "self" reserved
+	// target. Automation steps that list `machines: [self]` (or a step that
+	// transfers files with self as one side) resolve to this type. The
+	// automation runner short-circuits the SSH path for self targets and
+	// dispatches locally via os/exec instead — there is no Host / SSHPort /
+	// user associated with self. Gated by Manifest.AllowSelf to avoid
+	// surprising operators who don't want remote manifests running on their
+	// workstation.
+	MachineTypeSelf MachineType = "self"
 )
+
+// SelfMachineName is the reserved target name that resolves to the machine
+// running `claws`. It is intentionally not configurable: manifests referring
+// to "self" always mean "this host, right now, in this process". Any real
+// machine that happens to be named "self" in the `machines:` block is
+// rejected by Validate.
+const SelfMachineName = "self"
 
 // IsHostedMachineType reports whether the machine type is backed by a
 // cloud/VM provider (anything that isn't bare SSH). Hosted types go through
@@ -59,6 +75,14 @@ type Manifest struct {
 	Agents             []Agent             `yaml:"agents"`
 	Nodes              []Node              `yaml:"nodes"`
 	Automations        []Automation        `yaml:"automations,omitempty"`
+
+	// AllowSelf opts this manifest into running automation steps on the
+	// operator's workstation (the machine running `claws`) via the reserved
+	// "self" target. Without this flag, any automation referencing `self`
+	// or any `scp.upload` / `scp.download` step is rejected at load/plan
+	// time — we don't want a manifest pulled from a repo to suddenly exec
+	// bash on a contributor's laptop just because they ran `claws apply`.
+	AllowSelf bool `yaml:"allow_self,omitempty"`
 }
 
 // Automation is a user-defined phase with custom steps. Each automation
@@ -81,8 +105,25 @@ type Automation struct {
 	Steps []AutomationStep `yaml:"steps"`
 }
 
+// Supported AutomationStep.Kind values. Empty string == StepKindBash.
+const (
+	StepKindBash         = "bash"
+	StepKindPython       = "python"
+	StepKindSCPUpload    = "scp.upload"
+	StepKindSCPDownload  = "scp.download"
+)
+
 // AutomationStep is one unit of work inside an automation phase.
 // Lifecycle scripts map directly to scaffold step methods.
+//
+// `kind` selects the dispatcher:
+//   - "" / "bash" / "python" — lifecycle scripts run on each target machine
+//     (or locally when the target is "self"). Source/Destination/Mode are
+//     ignored.
+//   - "scp.upload" / "scp.download" — Execute transfers files between the
+//     operator (self) and the target machine via SFTP. Applicable / Check /
+//     Verify still run as bash scripts on the remote side (for idempotency
+//     probes). Execute / ExecuteFile are not used and should be left empty.
 type AutomationStep struct {
 	Name  string `yaml:"name"`
 	Kind  string `yaml:"kind,omitempty"`
@@ -98,6 +139,28 @@ type AutomationStep struct {
 	ExecuteFile    string   `yaml:"execute_file,omitempty"`
 	Verify         string   `yaml:"verify,omitempty"`
 	VerifyFile     string   `yaml:"verify_file,omitempty"`
+
+	// Source / Destination / Mode are only consumed by scp.upload /
+	// scp.download steps.
+	//
+	// For scp.upload:
+	//   - Source      is a path on the operator host (self).
+	//   - Destination is a path on the remote target machine.
+	// For scp.download:
+	//   - Source      is a path on the remote target machine.
+	//   - Destination is a path on the operator host (self).
+	//
+	// Mode is an optional octal permission string ("0755", "0600") applied
+	// to the destination side after the transfer completes. When empty,
+	// the destination inherits the source's permissions for files and 0755
+	// for newly-created directories.
+	//
+	// Whether the transfer is a single file or a recursive directory copy
+	// is auto-detected from the source side: directories recurse, regular
+	// files stream. Symlinks are followed (resolved to their target).
+	Source      string `yaml:"source,omitempty"`
+	Destination string `yaml:"destination,omitempty"`
+	Mode        string `yaml:"mode,omitempty"`
 }
 
 // Machine is a host entry (cloud or static SSH).
