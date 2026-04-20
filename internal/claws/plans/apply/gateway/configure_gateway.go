@@ -39,9 +39,13 @@ func (s *ConfigureGatewayStep) Applicable(_ context.Context, t scaffold.Target) 
 func (s *ConfigureGatewayStep) Check(ctx context.Context, t scaffold.Target) (bool, error) {
 	gt := t.Payload.(*GatewayTarget)
 	m := gt.Machine
-	client, key, err := borrowSSH(ctx, s.dial, machineHost(ctx, m), machineSSHPort(m), machineAgentUser(m))
+	host, ok := hostKnown(ctx, m)
+	if !ok {
+		return false, nil
+	}
+	client, key, err := borrowSSH(ctx, s.dial, host, machineSSHPort(m), machineAgentUser(m))
 	if err != nil {
-		return false, fmt.Errorf("dial %s: %w", m.Name, err)
+		return false, nil // connection failure — unsatisfied, Execute retries
 	}
 	defer returnSSH(ctx, key, client)
 

@@ -81,21 +81,10 @@ const linodePhasesPerPhaseTimeout = 10 * time.Minute
 // Let's Encrypt rate-limit backoff on the first cert issuance.
 func TestPhasesIsolatedNoCache(t *testing.T) {
 	tok := loadLinodeToken(t)
+	t.Parallel()
 
 	outerCtx, outerCancel := context.WithTimeout(context.Background(), 35*time.Minute)
 	defer outerCancel()
-
-	// Channel token — consumed by the `channels` phase via the
-	// telegram plugin's LookupEnvFromManifest → os.Getenv path
-	// (internal/manifests/service/envlookup.go:23 checks os.Getenv
-	// before consulting the manifest's env_file, so no env_file
-	// entry is needed on the fixture). Fake value is fine: the
-	// `openclaw channels add` step is fully offline (the telegram
-	// plugin's onAccountConfigChanged only clears local polling
-	// offsets). The daemon's first getUpdates poll against
-	// api.telegram.org would 401, but this test never waits for a
-	// poll — it only cares that the apply phase converges.
-	t.Setenv("TELEGRAM_MAIN_BOT_TOKEN", "fake-phases-token")
 
 	// --- identity -----------------------------------------------------------
 
@@ -116,6 +105,12 @@ func TestPhasesIsolatedNoCache(t *testing.T) {
 	m := loadTestManifest(t, "manifest-phases.yml")
 	m.Prefix = "it-lin-phases-" + randSuffix(t)
 	prefix := m.Prefix
+	// Channel token — consumed by the `channels` phase via the
+	// telegram plugin's LookupEnvFromManifest → env_file path.
+	// See injectFakeTelegramTokens for why we route through an
+	// env_file instead of t.Setenv (required to keep the test
+	// parallel-safe with its siblings).
+	injectFakeTelegramTokens(t, m, nil)
 
 	// --- provider + SSH dialer ---------------------------------------------
 

@@ -162,19 +162,10 @@ func TestAgentsSmoke(t *testing.T) {
 	if !multipass.IsBinaryAvailable() {
 		t.Skip("multipass not on PATH (install from https://multipass.run)")
 	}
+	t.Parallel()
 
 	ctx, cancel := context.WithTimeout(context.Background(), 25*time.Minute)
 	defer cancel()
-
-	// --- fake token plumbing ------------------------------------------------
-	//
-	// t.Setenv plants the fake into the process env and auto-
-	// unsets on test teardown. LookupEnvFromManifest checks
-	// os.Getenv first (envlookup.go:23), so the fixture doesn't
-	// need an env_file block. Keeping the fake in memory (not on
-	// disk in testdata/.env) means a grep for this token outside
-	// this file flags a real leak.
-	t.Setenv("TELEGRAM_MAIN_BOT_TOKEN", fakeTelegramAgentsMainToken)
 
 	// --- identity -----------------------------------------------------------
 
@@ -186,6 +177,15 @@ func TestAgentsSmoke(t *testing.T) {
 	m := loadTestManifest(t, "manifest-agents.yml")
 	m.Prefix = "it-ag-" + randSuffix(t)
 	prefix := m.Prefix
+	// --- fake token plumbing ------------------------------------------------
+	//
+	// Parallel-safe env-var injection via env_file. See
+	// injectFakeTelegramTokens for the rationale (t.Setenv
+	// is incompatible with t.Parallel and would race on
+	// TELEGRAM_MAIN_BOT_TOKEN across sibling tests).
+	injectFakeTelegramTokens(t, m, map[string]string{
+		"telegram-main": fakeTelegramAgentsMainToken,
+	})
 
 	if len(m.Machines) != 1 {
 		t.Fatalf("fixture sanity: expected 1 machine, got %d", len(m.Machines))

@@ -61,6 +61,7 @@ import (
 // cold apt mirrors and npm registry latency from us-east.
 func TestGatewaySmoke(t *testing.T) {
 	tok := loadLinodeToken(t)
+	t.Parallel()
 
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Minute)
 	defer cancel()

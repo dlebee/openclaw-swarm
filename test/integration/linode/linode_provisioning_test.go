@@ -49,8 +49,9 @@ import (
 // cap for the whole flight.
 func TestProvisioningSmoke(t *testing.T) {
 	tok := loadLinodeToken(t)
+	t.Parallel()
 
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Minute)
 	defer cancel()
 	ctx = scaffold.EnsurePlanCache(ctx)
 
@@ -58,6 +59,15 @@ func TestProvisioningSmoke(t *testing.T) {
 
 	privPath, pubKey := generateEphemeralKey(t)
 	signer := loadSigner(t, privPath)
+
+	if os.Getenv("CLAWS_IT_KEEP_VMS") != "" {
+		data, err := os.ReadFile(privPath)
+		if err == nil {
+			saved := "/tmp/linode-provisioning-it-key"
+			_ = os.WriteFile(saved, data, 0o600)
+			t.Logf("CLAWS_IT_KEEP_VMS: private key saved to %s (use: ssh -i %s root@<ip>)", saved, saved)
+		}
+	}
 
 	// --- manifest -----------------------------------------------------------
 
@@ -93,6 +103,10 @@ func TestProvisioningSmoke(t *testing.T) {
 	// crashed run that happened to pick the same prefix (unlikely given
 	// the random suffix, but cheap insurance).
 	t.Cleanup(func() {
+		if os.Getenv("CLAWS_IT_KEEP_VMS") != "" {
+			t.Logf("CLAWS_IT_KEEP_VMS set → leaving VMs up for debug (prefix=%s)", prefix)
+			return
+		}
 		cleanupCtx, ccancel := context.WithTimeout(context.Background(), 2*time.Minute)
 		defer ccancel()
 		insts, err := prov.ListByTag(cleanupCtx, "claws/"+prefix)
@@ -173,18 +187,22 @@ func TestProvisioningSmoke(t *testing.T) {
 		}
 	}
 
-	for _, inst := range insts {
-		if err := prov.DeleteInstance(ctx, inst.ResourceID); err != nil {
-			t.Fatalf("DeleteInstance %s: %v", inst.Label, err)
+	if os.Getenv("CLAWS_IT_KEEP_VMS") == "" {
+		for _, inst := range insts {
+			if err := prov.DeleteInstance(ctx, inst.ResourceID); err != nil {
+				t.Fatalf("DeleteInstance %s: %v", inst.Label, err)
+			}
 		}
-	}
-	// Linode deletes are async — give the API a few seconds to reflect
-	// the deletion before we re-list. In practice 5s is enough; 30s
-	// total retry budget is paranoid insurance against a slow account.
-	after := waitForEmptyListByTag(ctx, t, prov, "claws/"+prefix, 30*time.Second)
-	if len(after) != 0 {
-		t.Errorf("ListByTag after destroy still returned %d instances: %+v",
-			len(after), after)
+		// Linode deletes are async — give the API a few seconds to reflect
+		// the deletion before we re-list. In practice 5s is enough; 30s
+		// total retry budget is paranoid insurance against a slow account.
+		after := waitForEmptyListByTag(ctx, t, prov, "claws/"+prefix, 30*time.Second)
+		if len(after) != 0 {
+			t.Errorf("ListByTag after destroy still returned %d instances: %+v",
+				len(after), after)
+		}
+	} else {
+		t.Logf("CLAWS_IT_KEEP_VMS: skipping active destroy after green run (prefix=%s); t.Cleanup also skipped", prefix)
 	}
 }
 

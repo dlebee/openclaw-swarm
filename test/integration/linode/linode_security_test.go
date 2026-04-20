@@ -45,6 +45,7 @@ import (
 // 15-minute cap absorbs cold apt mirrors and Linode region slowness.
 func TestSecuritySmoke(t *testing.T) {
 	tok := loadLinodeToken(t)
+	t.Parallel()
 
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Minute)
 	defer cancel()

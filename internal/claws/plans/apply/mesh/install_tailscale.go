@@ -43,9 +43,16 @@ func (*InstallTailscaleStep) Applicable(_ context.Context, t scaffold.Target) (b
 func (s *InstallTailscaleStep) Check(ctx context.Context, t scaffold.Target) (bool, error) {
 	mt := t.Payload.(*MeshTarget)
 	m := mt.Machine
-	client, key, err := common.BorrowSSH(ctx, s.dial, common.ResolveMachineHost(ctx, m), common.MachineSSHPort(m), common.MachineAgentUser(m))
+	host, ok := common.HostKnown(ctx, m)
+	if !ok {
+		return false, nil
+	}
+	client, key, err := common.BorrowSSH(ctx, s.dial, host, common.MachineSSHPort(m), common.MachineAgentUser(m))
 	if err != nil {
-		return false, fmt.Errorf("dial %s: %w", m.Name, err)
+		// Connection failure (including auth errors on freshly provisioned
+		// machines where agent user SSH keys may not be ready yet) — treat
+		// as unsatisfied so Execute gets a chance to retry with backoff.
+		return false, nil
 	}
 	defer common.ReturnSSH(ctx, key, client)
 

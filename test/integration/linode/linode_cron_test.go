@@ -116,6 +116,7 @@ type linodeCronRunsPage struct {
 // is no LLM cold-start contribution any more.
 func TestCronAgentWithNodeExec(t *testing.T) {
 	tok := loadLinodeToken(t)
+	t.Parallel()
 
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Minute)
 	defer cancel()

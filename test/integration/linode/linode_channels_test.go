@@ -97,22 +97,11 @@ type openclawTelegramAccount struct {
 // 20min cap absorbs cold apt mirrors and npm registry latency.
 func TestChannelsSmoke(t *testing.T) {
 	tok := loadLinodeToken(t)
+	t.Parallel()
 
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Minute)
 	defer cancel()
 	ctx = scaffold.EnsurePlanCache(ctx)
-
-	// --- fake token plumbing ------------------------------------------------
-	//
-	// t.Setenv handles process-env injection AND auto-unset on test
-	// teardown. LookupEnvFromManifest (envlookup.go:23) checks
-	// os.Getenv before consulting the manifest's env_file, so no
-	// env_file entry is needed — and keeping the fake tokens in
-	// process memory (not on disk in testdata/.env) means a git grep
-	// for our fake format outside this file is a genuine leak
-	// signal.
-	t.Setenv("TELEGRAM_MAIN_BOT_TOKEN", fakeTelegramMainToken)
-	t.Setenv("TELEGRAM_SECONDARY_BOT_TOKEN", fakeTelegramSecondaryToken)
 
 	// --- identity -----------------------------------------------------------
 
@@ -124,6 +113,17 @@ func TestChannelsSmoke(t *testing.T) {
 	m := loadTestManifest(t, "manifest-channels.yml")
 	m.Prefix = "it-lin-ch-" + randSuffix(t)
 	prefix := m.Prefix
+	// --- fake token plumbing ------------------------------------------------
+	//
+	// Parallel-safe env-var injection via env_file. t.Setenv is
+	// incompatible with t.Parallel and would race sibling tests
+	// on the same TELEGRAM_*_BOT_TOKEN name; the helper rewrites
+	// each TokenEnv to a per-test-unique name and drops the fakes
+	// into a tempdir env_file. See injectFakeTelegramTokens.
+	injectFakeTelegramTokens(t, m, map[string]string{
+		"telegram-main":      fakeTelegramMainToken,
+		"telegram-secondary": fakeTelegramSecondaryToken,
+	})
 
 	if len(m.Machines) != 1 {
 		t.Fatalf("fixture sanity: expected 1 machine, got %d", len(m.Machines))

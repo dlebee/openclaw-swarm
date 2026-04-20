@@ -25,10 +25,13 @@ func TestAuthorizeSSHKeyCheck_nilDialNotSatisfied(t *testing.T) {
 	}
 }
 
-func TestAuthorizeSSHKeyCheck_dialErrorPropagates(t *testing.T) {
-	// Dial failures must propagate as errors so the probe UI can render
-	// "check: dial refused" instead of lying as "will execute". See
-	// .cursor/rules/plan-checks-are-pure.mdc: errors are not "unsatisfied".
+func TestAuthorizeSSHKeyCheck_dialErrorYieldsUnsatisfied(t *testing.T) {
+	// Dial/auth failures must NOT propagate as errors from Check — they mean
+	// "can't verify yet, Execute will retry with backoff". Returning (false, err)
+	// would abort the execution-phase cell before Execute's retry loop runs,
+	// which is exactly what caused the Linode SSH-timeout regressions.
+	// The probe UI shows "will execute" for (false, nil), which is the correct
+	// semantics: we don't know whether the key is present, so Execute must run.
 	a := NewAuthorizeSSHKeyStep(Options{
 		SSHDial: func(ctx context.Context, host string, port int, user string) (*xssh.Client, error) {
 			_ = ctx
@@ -46,8 +49,8 @@ func TestAuthorizeSSHKeyCheck_dialErrorPropagates(t *testing.T) {
 		},
 	}
 	satisfied, err := a.Check(context.Background(), scaffold.Target{ID: "t1", Payload: mt})
-	if err == nil || satisfied {
-		t.Fatalf("want not satisfied + err; satisfied=%v err=%v", satisfied, err)
+	if err != nil || satisfied {
+		t.Fatalf("want (false, nil) on dial error; satisfied=%v err=%v", satisfied, err)
 	}
 }
 

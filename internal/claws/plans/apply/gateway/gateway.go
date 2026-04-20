@@ -91,6 +91,20 @@ func machineHost(ctx context.Context, m manifestdata.Machine) string {
 	return common.ResolveMachineHost(ctx, m)
 }
 
+// hostKnown is the package-local alias of common.HostKnown — see that
+// function's doc for the probe-UI rationale. Check methods in this
+// package MUST short-circuit on !ok (returning (false, nil)) before
+// calling borrowSSH, otherwise a probe against an un-provisioned
+// machine produces the misleading
+//
+//	dial tcp :22: connect: connection refused
+//
+// error because ResolveMachineHost correctly returned "" for a machine
+// that provisioning.create-machine hasn't executed yet in this run.
+func hostKnown(ctx context.Context, m manifestdata.Machine) (string, bool) {
+	return common.HostKnown(ctx, m)
+}
+
 func machineSSHPort(m manifestdata.Machine) int {
 	if m.SSHPort == 0 {
 		return 22

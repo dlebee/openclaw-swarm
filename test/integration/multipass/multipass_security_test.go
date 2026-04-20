@@ -48,6 +48,7 @@ func TestSecuritySmoke(t *testing.T) {
 	if !multipass.IsBinaryAvailable() {
 		t.Skip("multipass not on PATH (install from https://multipass.run)")
 	}
+	t.Parallel()
 
 	ctx, cancel := context.WithTimeout(context.Background(), 12*time.Minute)
 	defer cancel()

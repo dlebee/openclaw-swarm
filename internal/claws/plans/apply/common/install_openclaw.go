@@ -34,9 +34,13 @@ func (s *InstallOpenclawStep) Check(ctx context.Context, t scaffold.Target) (boo
 		return false, nil
 	}
 	m := mp.GetMachine()
-	client, key, err := BorrowSSH(ctx, s.dial, ResolveMachineHost(ctx, m), MachineSSHPort(m), MachineAgentUser(m))
+	host, known := HostKnown(ctx, m)
+	if !known {
+		return false, nil
+	}
+	client, key, err := BorrowSSH(ctx, s.dial, host, MachineSSHPort(m), MachineAgentUser(m))
 	if err != nil {
-		return false, fmt.Errorf("dial %s: %w", m.Name, err)
+		return false, nil // connection failure — unsatisfied, Execute retries
 	}
 	defer ReturnSSH(ctx, key, client)
 

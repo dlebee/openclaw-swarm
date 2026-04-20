@@ -33,12 +33,18 @@ func (s *BootstrapNodeStep) Applicable(ctx context.Context, t scaffold.Target) (
 		return false, nil
 	}
 	m := nt.Machine
-	client, key, err := common.BorrowSSH(ctx, s.dial, common.ResolveMachineHost(ctx, m), common.MachineSSHPort(m), common.MachineAgentUser(m))
+	host, ok := common.HostKnown(ctx, m)
+	if !ok {
+		// Machine not yet provisioned: we don't know whether the
+		// systemd unit exists, but the bootstrap WILL apply once
+		// provisioning creates the VM. Returning true here surfaces
+		// "will execute" in the probe UI instead of "applicable:
+		// dial :22: connection refused".
+		return true, nil
+	}
+	client, key, err := common.BorrowSSH(ctx, s.dial, host, common.MachineSSHPort(m), common.MachineAgentUser(m))
 	if err != nil {
-		// Host unreachable is an error, not a silent "applicable" verdict.
-		// The probe UI should render "applicable: dial %s" rather than
-		// lie about the install status.
-		return false, fmt.Errorf("dial %s: %w", m.Name, err)
+		return false, nil // connection failure — unsatisfied, Execute retries
 	}
 	defer common.ReturnSSH(ctx, key, client)
 
@@ -55,9 +61,13 @@ func (s *BootstrapNodeStep) Applicable(ctx context.Context, t scaffold.Target) (
 func (s *BootstrapNodeStep) Check(ctx context.Context, t scaffold.Target) (bool, error) {
 	nt := t.Payload.(*NodeTarget)
 	m := nt.Machine
-	client, key, err := common.BorrowSSH(ctx, s.dial, common.ResolveMachineHost(ctx, m), common.MachineSSHPort(m), common.MachineAgentUser(m))
+	host, ok := common.HostKnown(ctx, m)
+	if !ok {
+		return false, nil
+	}
+	client, key, err := common.BorrowSSH(ctx, s.dial, host, common.MachineSSHPort(m), common.MachineAgentUser(m))
 	if err != nil {
-		return false, fmt.Errorf("dial %s: %w", m.Name, err)
+		return false, nil // connection failure — unsatisfied, Execute retries
 	}
 	defer common.ReturnSSH(ctx, key, client)
 

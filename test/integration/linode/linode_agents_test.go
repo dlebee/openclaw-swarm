@@ -140,19 +140,11 @@ type cliAgent struct {
 // the first-boot uptime before sshd opens port 22).
 func TestAgentsSmoke(t *testing.T) {
 	tok := loadLinodeToken(t)
+	t.Parallel()
 
 	ctx, cancel := context.WithTimeout(context.Background(), 25*time.Minute)
 	defer cancel()
 	ctx = scaffold.EnsurePlanCache(ctx)
-
-	// --- fake token plumbing ------------------------------------------------
-	//
-	// Same mechanism as TestChannelsSmoke — t.Setenv for process
-	// env injection + auto-unset on teardown; LookupEnvFromManifest
-	// (envlookup.go:23) consults os.Getenv first so the fixture
-	// doesn't need an env_file entry. Fake token stays in process
-	// memory, never hits testdata/.env on disk.
-	t.Setenv("TELEGRAM_MAIN_BOT_TOKEN", fakeTelegramAgentsMainToken)
 
 	// --- identity -----------------------------------------------------------
 
@@ -164,6 +156,14 @@ func TestAgentsSmoke(t *testing.T) {
 	m := loadTestManifest(t, "manifest-agents.yml")
 	m.Prefix = "it-lin-agents-" + randSuffix(t)
 	prefix := m.Prefix
+	// --- fake token plumbing ------------------------------------------------
+	//
+	// Parallel-safe env-var injection via env_file. See
+	// injectFakeTelegramTokens for why we can't use t.Setenv
+	// inside a t.Parallel test.
+	injectFakeTelegramTokens(t, m, map[string]string{
+		"telegram-main": fakeTelegramAgentsMainToken,
+	})
 
 	if len(m.Machines) != 1 {
 		t.Fatalf("fixture sanity: expected 1 machine, got %d", len(m.Machines))

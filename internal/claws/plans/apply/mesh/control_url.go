@@ -2,6 +2,7 @@ package mesh
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net"
 	"strings"
@@ -11,6 +12,15 @@ import (
 	"github.com/gluwa/openclaw-swarm2/internal/platformutil/bash"
 	"github.com/gluwa/openclaw-swarm2/internal/scaffold"
 )
+
+// errGatewayNotProvisioned signals that the headscale gateway VM does
+// not yet have a reachable host (cache + manifest + resolver all empty),
+// i.e. provisioning.create-machine hasn't Execute'd yet in this plan
+// run. Check-side callers treat this as a "will execute" signal rather
+// than a failed probe; the sslip control-URL derivation fundamentally
+// needs the gateway's public IP, and there's no way to obtain that
+// without dialing the VM.
+var errGatewayNotProvisioned = errors.New("gateway machine not provisioned yet")
 
 // ResolveControlURLStep derives the Headscale control URL from the manifest's
 // public_hostname strategy and stores it in the plan cache.
@@ -30,24 +40,37 @@ func (*ResolveControlURLStep) Applicable(_ context.Context, t scaffold.Target) (
 	return ok && mt.IsGatewayHost && mt.Gateway != nil, nil
 }
 
-// Check implements scaffold.Step — asks the read-through resolver whether
-// a control URL is computable right now. This is intentionally NOT a
-// memo-only lookup: if it were, a cold process with an already-converged
-// gateway would always report "will execute", because the plan cache only
-// lives for the duration of a single run.
+// Check implements scaffold.Step as a pure cache-read: the step's job
+// is to derive the control URL and populate the plan cache, so Check
+// asks exactly that question — "is CacheKeyControlURL already set?".
 //
-// getOrResolveControlURL is a Resolve*() helper per
-// .cursor/rules/plan-checks-are-pure.mdc: caching is a pure optimization
-// (cold == hot), not a side channel to communicate with other steps.
-func (s *ResolveControlURLStep) Check(ctx context.Context, t scaffold.Target) (bool, error) {
-	mt, ok := t.Payload.(*MeshTarget)
-	if !ok || mt == nil || mt.Gateway == nil {
+// We intentionally do NOT re-derive the URL from the manifest inside
+// Check (even though strategy=custom could answer "yes" without any
+// SSH). Doing that made the probe UI render "satisfied" on a brand-new
+// cold-start apply where the gateway VM doesn't even exist yet, which
+// is confusing: the user sees
+//
+//	Target gateway-host
+//	  create machine       will execute
+//	  ...
+//	  resolve control url  satisfied        <-- wrong
+//
+// The downside of the pure-read approach is that on an idempotent
+// re-run (gateway already converged, cache empty because it's a new
+// process) resolve-control-url shows "will execute" instead of
+// "satisfied". Execute is cheap and idempotent — it just recomputes
+// the URL and writes it back to the cache — so that UX cost is small.
+//
+// Every caller that consumes the URL (install-headscale,
+// install-tailscale, install-caddy) still uses getOrResolveControlURL
+// from Execute, which read-throughs the cache on miss. So cold-start
+// `--only mesh-join` runs keep working.
+func (s *ResolveControlURLStep) Check(ctx context.Context, _ scaffold.Target) (bool, error) {
+	v, ok := scaffold.PlanCacheGet(ctx, CacheKeyControlURL)
+	if !ok {
 		return false, nil
 	}
-	url, err := getOrResolveControlURL(ctx, s.dial, mt)
-	if err != nil {
-		return false, err
-	}
+	url, _ := v.(string)
 	return url != "", nil
 }
 
@@ -135,7 +158,16 @@ func resolveControlURL(ctx context.Context, dial SSHDialFunc, mt *MeshTarget, gw
 
 func gatewayPublicIP(ctx context.Context, dial SSHDialFunc, mt *MeshTarget) (string, error) {
 	m := mt.Machine
-	client, key, err := common.BorrowSSH(ctx, dial, common.ResolveMachineHost(ctx, m), common.MachineSSHPort(m), common.MachineAgentUser(m))
+	host, ok := common.HostKnown(ctx, m)
+	if !ok {
+		// Gateway machine not provisioned yet. Return a typed "not
+		// ready" signal that resolveControlURL callers can treat as
+		// "defer until Execute". Used by the probe to avoid rendering
+		// a confusing dial-error for a machine that provisioning
+		// will create later in this plan.
+		return "", errGatewayNotProvisioned
+	}
+	client, key, err := common.BorrowSSH(ctx, dial, host, common.MachineSSHPort(m), common.MachineAgentUser(m))
 	if err != nil {
 		return "", fmt.Errorf("dial gateway for public IP: %w", err)
 	}

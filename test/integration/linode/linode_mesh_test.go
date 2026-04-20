@@ -68,6 +68,7 @@ import (
 // Cost envelope (g6-standard-1 @ $0.015/hr × 3 × 0.5h) ≈ $0.025.
 func TestMeshSmoke(t *testing.T) {
 	tok := loadLinodeToken(t)
+	t.Parallel()
 
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Minute)
 	defer cancel()

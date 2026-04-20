@@ -112,6 +112,36 @@ func ResolveMachineHost(ctx context.Context, m manifestdata.Machine) string {
 	return ""
 }
 
+// HostKnown returns the reachable host for m and whether it is non-empty.
+//
+// A step's Check / Applicable must short-circuit when !ok — otherwise a
+// Borrow/Dial against an empty host produces the confusing
+//
+//	dial tcp :22: connect: connection refused
+//
+// which the probe UI then surfaces as "check: dial ..." for every phase
+// that runs AFTER the provisioning phase in a cold-start `claws apply`:
+// provisioning hasn't Execute'd yet at probe time, so the machine does
+// not exist in the hosting provider and ResolveMachineHost correctly
+// returns "". The honest answer in that case is "will execute once the
+// machine is provisioned", not "check failed".
+//
+// Convention for the probe UI:
+//
+//	Check:      host, ok := common.HostKnown(ctx, m); if !ok { return false, nil }
+//	Applicable: host, ok := common.HostKnown(ctx, m); if !ok { return true,  nil }
+//
+// Check returns (false, nil) — "not yet satisfied, please execute";
+// Applicable returns (true,  nil) — "this step WILL run once the machine
+// exists, don't mark it not-applicable". Execute paths should never see
+// an empty host (provisioning always runs before the caller in a real
+// plan); if they do, it's a programmer error and the caller should
+// surface the ResolveMachineHost="" explicitly.
+func HostKnown(ctx context.Context, m manifestdata.Machine) (string, bool) {
+	host := ResolveMachineHost(ctx, m)
+	return host, host != ""
+}
+
 func MachineSSHPort(m manifestdata.Machine) int {
 	if m.SSHPort == 0 {
 		return 22

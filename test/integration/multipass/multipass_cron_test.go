@@ -162,6 +162,7 @@ func TestCronAgentWithNodeExec(t *testing.T) {
 	if !multipass.IsBinaryAvailable() {
 		t.Skip("multipass not on PATH (install from https://multipass.run)")
 	}
+	t.Parallel()
 
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Minute)
 	defer cancel()

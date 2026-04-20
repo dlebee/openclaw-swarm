@@ -82,6 +82,7 @@ import (
 // registry / Let's Encrypt rate-limit backoff.
 func TestNodeSmoke(t *testing.T) {
 	tok := loadLinodeToken(t)
+	t.Parallel()
 
 	ctx, cancel := context.WithTimeout(context.Background(), 35*time.Minute)
 	defer cancel()

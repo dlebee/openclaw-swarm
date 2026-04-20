@@ -35,6 +35,44 @@ func TestResolveMachineHost_noCacheCtx(t *testing.T) {
 	}
 }
 
+func TestHostKnown_emptyHostReportsNotKnown(t *testing.T) {
+	// Provisioning hasn't executed yet: no cache entry, no manifest
+	// Host, no host resolver installed. HostKnown must report !ok so
+	// downstream Check/Applicable short-circuit before dialing
+	// ":22" — otherwise the probe UI renders the confusing
+	// "check: dial :22: connection refused" for every phase that
+	// touches this machine.
+	ctx := scaffold.EnsurePlanCache(context.Background())
+	m := manifestdata.Machine{Name: "gateway-host"}
+	host, ok := HostKnown(ctx, m)
+	if ok || host != "" {
+		t.Fatalf("HostKnown on un-provisioned machine: got (%q, %v), want (%q, %v)", host, ok, "", false)
+	}
+}
+
+func TestHostKnown_cacheEntryReportsKnown(t *testing.T) {
+	ctx := scaffold.EnsurePlanCache(context.Background())
+	m := manifestdata.Machine{Name: "gateway-host"}
+	scaffold.RecordPlanMachineHost(ctx, m.Name, "203.0.113.10")
+	host, ok := HostKnown(ctx, m)
+	if !ok || host != "203.0.113.10" {
+		t.Fatalf("HostKnown with cache hit: got (%q, %v), want (%q, %v)", host, ok, "203.0.113.10", true)
+	}
+}
+
+func TestHostKnown_specHostReportsKnown(t *testing.T) {
+	// Static `type: ssh` machine with a manifest-provided Host: the
+	// machine never goes through provisioning, but Check/Applicable
+	// still need to see it as reachable so they dial and return a
+	// real verdict instead of pretending "will execute".
+	ctx := scaffold.EnsurePlanCache(context.Background())
+	m := manifestdata.Machine{Name: "static-1", Host: "static.example.com"}
+	host, ok := HostKnown(ctx, m)
+	if !ok || host != "static.example.com" {
+		t.Fatalf("HostKnown from Spec.Host: got (%q, %v), want (%q, %v)", host, ok, "static.example.com", true)
+	}
+}
+
 func TestResolveMachineHost_linodeMissingCache(t *testing.T) {
 	// Linode machine with no manifest Host and no cache entry — returns
 	// empty, which is the old behavior for the probe phase before

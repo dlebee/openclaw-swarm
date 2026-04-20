@@ -87,21 +87,10 @@ func TestPhasesIsolatedNoCache(t *testing.T) {
 	if !multipass.IsBinaryAvailable() {
 		t.Skip("multipass not on PATH (install from https://multipass.run)")
 	}
+	t.Parallel()
 
 	outerCtx, outerCancel := context.WithTimeout(context.Background(), 30*time.Minute)
 	defer outerCancel()
-
-	// Channel token — consumed by the `channels` phase via the
-	// telegram plugin's LookupEnvFromManifest → os.Getenv path
-	// (internal/manifests/service/envlookup.go:23 checks os.Getenv
-	// before consulting the manifest's env_file, so no env_file
-	// entry is needed on the fixture). Fake value is fine: the
-	// `openclaw channels add` step is fully offline (the telegram
-	// plugin's onAccountConfigChanged only clears local polling
-	// offsets). The daemon's first getUpdates poll against
-	// api.telegram.org would 401, but this test never waits for a
-	// poll — it only cares that the apply phase converges.
-	t.Setenv("TELEGRAM_MAIN_BOT_TOKEN", "fake-phases-token")
 
 	// --- identity -----------------------------------------------------------
 
@@ -116,6 +105,16 @@ func TestPhasesIsolatedNoCache(t *testing.T) {
 	// See rewriteMeshHost — realign the fixture's custom control URL
 	// with the `<prefix>-gateway-host` hostname cloud-init will pin.
 	rewriteMeshHost(m)
+	// Channel token — consumed by the `channels` phase via the
+	// telegram plugin's LookupEnvFromManifest → env_file path.
+	// See injectFakeTelegramTokens for why we route through an
+	// env_file instead of t.Setenv (required to keep the test
+	// parallel-safe with its siblings). The `openclaw channels
+	// add` step is fully offline (onAccountConfigChanged only
+	// clears local polling offsets); the daemon's first
+	// getUpdates poll would 401 but this test never waits for a
+	// poll — it only cares that the apply phase converges.
+	injectFakeTelegramTokens(t, m, nil)
 
 	// --- provider + SSH dialer ---------------------------------------------
 

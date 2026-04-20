@@ -117,21 +117,10 @@ func TestChannelsSmoke(t *testing.T) {
 	if !multipass.IsBinaryAvailable() {
 		t.Skip("multipass not on PATH (install from https://multipass.run)")
 	}
+	t.Parallel()
 
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Minute)
 	defer cancel()
-
-	// --- fake token plumbing ----------------------------------------------------
-	//
-	// t.Setenv writes to the process environment for the duration of
-	// this test and auto-unsets on teardown. LookupEnvFromManifest
-	// (internal/manifests/service/envlookup.go:23) checks os.Getenv
-	// before consulting the manifest's env_file, so no env_file
-	// entry is needed on the fixture. Using t.Setenv instead of a
-	// testdata/.env file also keeps the fake tokens out of the git-
-	// indexed testdata tree — they only exist in process memory.
-	t.Setenv("TELEGRAM_MAIN_BOT_TOKEN", fakeTelegramMainToken)
-	t.Setenv("TELEGRAM_SECONDARY_BOT_TOKEN", fakeTelegramSecondaryToken)
 
 	// --- identity -----------------------------------------------------------
 
@@ -143,6 +132,19 @@ func TestChannelsSmoke(t *testing.T) {
 	m := loadTestManifest(t, "manifest-channels.yml")
 	m.Prefix = "it-ch-" + randSuffix(t)
 	prefix := m.Prefix
+	// --- fake token plumbing ------------------------------------------------
+	//
+	// Route the fake channel tokens through an env_file with
+	// per-test-unique var names (see injectFakeTelegramTokens).
+	// t.Setenv isn't usable here — it refuses to run under
+	// t.Parallel and would clobber sibling tests' token values
+	// anyway because it mutates the single process environment.
+	// The env_file lives in t.TempDir so the fake tokens never
+	// touch the git-indexed testdata tree.
+	injectFakeTelegramTokens(t, m, map[string]string{
+		"telegram-main":      fakeTelegramMainToken,
+		"telegram-secondary": fakeTelegramSecondaryToken,
+	})
 
 	if len(m.Machines) != 1 {
 		t.Fatalf("fixture sanity: expected 1 machine, got %d", len(m.Machines))

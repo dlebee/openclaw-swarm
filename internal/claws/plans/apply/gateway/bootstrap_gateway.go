@@ -33,9 +33,19 @@ func (s *BootstrapGatewayStep) Applicable(ctx context.Context, t scaffold.Target
 		return false, nil
 	}
 	m := gt.Machine
-	client, key, err := borrowSSH(ctx, s.dial, machineHost(ctx, m), machineSSHPort(m), machineAgentUser(m))
+	host, ok := hostKnown(ctx, m)
+	if !ok {
+		// Machine not provisioned yet — we can't know whether the
+		// gateway is already onboarded, but the honest answer for
+		// the probe UI is "yes, this step will apply": Applicable
+		// returning true here produces "will execute" in the plan
+		// preview, matching the eventual behaviour once the gateway
+		// VM is created by provisioning.
+		return true, nil
+	}
+	client, key, err := borrowSSH(ctx, s.dial, host, machineSSHPort(m), machineAgentUser(m))
 	if err != nil {
-		return false, fmt.Errorf("dial %s: %w", m.Name, err)
+		return false, nil // connection failure — unsatisfied, Execute retries
 	}
 	defer returnSSH(ctx, key, client)
 
@@ -56,9 +66,13 @@ func (s *BootstrapGatewayStep) Applicable(ctx context.Context, t scaffold.Target
 func (s *BootstrapGatewayStep) Check(ctx context.Context, t scaffold.Target) (bool, error) {
 	gt := t.Payload.(*GatewayTarget)
 	m := gt.Machine
-	client, key, err := borrowSSH(ctx, s.dial, machineHost(ctx, m), machineSSHPort(m), machineAgentUser(m))
+	host, ok := hostKnown(ctx, m)
+	if !ok {
+		return false, nil
+	}
+	client, key, err := borrowSSH(ctx, s.dial, host, machineSSHPort(m), machineAgentUser(m))
 	if err != nil {
-		return false, fmt.Errorf("dial %s: %w", m.Name, err)
+		return false, nil // connection failure — unsatisfied, Execute retries
 	}
 	defer returnSSH(ctx, key, client)
 

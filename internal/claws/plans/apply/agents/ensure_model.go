@@ -30,9 +30,13 @@ func (s *EnsureModelStep) Applicable(_ context.Context, t scaffold.Target) (bool
 func (s *EnsureModelStep) Check(ctx context.Context, t scaffold.Target) (bool, error) {
 	at := t.Payload.(*AgentTarget)
 	m := at.Machine
-	client, key, err := common.BorrowSSH(ctx, s.dial, common.ResolveMachineHost(ctx, m), common.MachineSSHPort(m), common.MachineAgentUser(m))
+	host, ok := common.HostKnown(ctx, m)
+	if !ok {
+		return false, nil
+	}
+	client, key, err := common.BorrowSSH(ctx, s.dial, host, common.MachineSSHPort(m), common.MachineAgentUser(m))
 	if err != nil {
-		return false, fmt.Errorf("dial %s: %w", m.Name, err)
+		return false, nil // connection failure — unsatisfied, Execute retries
 	}
 	defer common.ReturnSSH(ctx, key, client)
 

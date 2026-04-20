@@ -2,7 +2,6 @@ package mesh
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"os"
 	"strings"
@@ -33,22 +32,31 @@ func (*ResolvePreauthKeyStep) Applicable(_ context.Context, t scaffold.Target) (
 	return ok && mt.IsGatewayHost && mt.Gateway != nil, nil
 }
 
-// Check implements scaffold.Step — asks the read-only resolver whether a
-// preauth key is already available (env var set, or on-disk on the gateway).
-// Pure read: does NOT invoke the headscale CLI to mint a fresh key — that
-// is a real side effect on the remote system and belongs in Execute.
+// Check implements scaffold.Step as a pure cache-read: the step's job
+// is to resolve the preauth key and populate the plan cache, so Check
+// asks exactly that question — "is CacheKeyPreauthKey already set?".
 //
-// A cold cache with a pre-existing key file converges to the same verdict
-// as a hot cache, per .cursor/rules/plan-checks-are-pure.mdc (cold == hot).
-func (s *ResolvePreauthKeyStep) Check(ctx context.Context, t scaffold.Target) (bool, error) {
-	mt, ok := t.Payload.(*MeshTarget)
-	if !ok || mt == nil || mt.Gateway == nil {
+// We intentionally do NOT consult env vars or SFTP the gateway disk
+// inside Check. Doing that made the probe UI render "satisfied" on a
+// brand-new cold-start apply where OPENCLAW_HEADSCALE_PREAUTH_KEY
+// happened to be exported, even though the gateway VM didn't exist
+// yet and no other step had run. The user's mental model is "every
+// step with work to do shows 'will execute' on first run"; a
+// cache-read Check preserves that.
+//
+// On idempotent re-runs where the cache is empty (new process) the
+// step shows "will execute"; Execute is cheap — it reads env or
+// SFTPs the key file, or mints a new one via the headscale CLI —
+// and writes the value back to the cache. Downstream consumers
+// (install-tailscale.Execute via getOrResolvePreauthKey) still
+// read-through the cache on miss, so cold-start `--only mesh-join`
+// against an already-converged gateway keeps working.
+func (s *ResolvePreauthKeyStep) Check(ctx context.Context, _ scaffold.Target) (bool, error) {
+	v, ok := scaffold.PlanCacheGet(ctx, CacheKeyPreauthKey)
+	if !ok {
 		return false, nil
 	}
-	key, err := getOrResolvePreauthKeyReadOnly(ctx, s.dial, mt)
-	if err != nil {
-		return false, err
-	}
+	key, _ := v.(string)
 	return key != "", nil
 }
 
@@ -135,66 +143,6 @@ func (*ResolvePreauthKeyStep) Verify(ctx context.Context, _ scaffold.Target) err
 		return fmt.Errorf("resolve-preauth-key verify: key is empty")
 	}
 	return nil
-}
-
-// getOrResolvePreauthKeyReadOnly is the Check-safe variant of
-// getOrResolvePreauthKey: it consults the plan cache, then the environment,
-// then the file on disk, but NEVER invokes the headscale CLI to mint a
-// fresh key. Minting is a real side effect on the remote gateway and is
-// reserved for Execute.
-//
-// Returns ("", nil) when no pre-existing key is reachable (cold file,
-// unset env) — that's the legitimate "not yet provisioned" verdict, not
-// an error. Dial / SFTP failures are propagated as errors so the probe
-// UI can render "unknown" instead of lying as "will execute".
-func getOrResolvePreauthKeyReadOnly(ctx context.Context, dial SSHDialFunc, mt *MeshTarget) (string, error) {
-	if v, ok := scaffold.PlanCacheGet(ctx, CacheKeyPreauthKey); ok {
-		if s, _ := v.(string); s != "" {
-			return s, nil
-		}
-	}
-	gw := mt.Gateway
-	if gw == nil || gw.Networking == nil {
-		return "", nil
-	}
-	src := strings.ToLower(strings.TrimSpace(gw.Networking.PreauthKeySource))
-	if src == "" {
-		src = "auto"
-	}
-	envName := strings.TrimSpace(gw.Networking.PreauthKeyEnv)
-	filePath := strings.TrimSpace(gw.Networking.PreauthKeyFile)
-
-	if envName != "" {
-		if v := strings.TrimSpace(os.Getenv(envName)); v != "" {
-			scaffold.PlanCacheSet(ctx, CacheKeyPreauthKey, v)
-			return v, nil
-		}
-	}
-	if src == "env" {
-		return "", nil
-	}
-	if filePath == "" {
-		return "", nil
-	}
-	m := mt.Machine
-	client, key, err := common.BorrowSSH(ctx, dial, common.ResolveMachineHost(ctx, m), common.MachineSSHPort(m), common.MachineAgentUser(m))
-	if err != nil {
-		return "", fmt.Errorf("dial gateway for preauth key: %w", err)
-	}
-	defer common.ReturnSSH(ctx, key, client)
-
-	data, err := sshfile.ReadFile(client, filePath)
-	if err != nil {
-		if errors.Is(err, os.ErrNotExist) {
-			return "", nil
-		}
-		return "", fmt.Errorf("read preauth key file: %w", err)
-	}
-	k := strings.TrimSpace(string(data))
-	if k != "" {
-		scaffold.PlanCacheSet(ctx, CacheKeyPreauthKey, k)
-	}
-	return k, nil
 }
 
 // getOrResolvePreauthKey returns the tailscale preauth key for this plan run,

@@ -31,7 +31,11 @@ func (s *PairNodeStep) Applicable(_ context.Context, t scaffold.Target) (bool, e
 func (s *PairNodeStep) Check(ctx context.Context, t scaffold.Target) (bool, error) {
 	nt := t.Payload.(*NodeTarget)
 	gwMach := nt.GWMach
-	client, key, err := common.BorrowSSH(ctx, s.dial, common.ResolveMachineHost(ctx, gwMach), common.MachineSSHPort(gwMach), common.MachineAgentUser(gwMach))
+	host, ok := common.HostKnown(ctx, gwMach)
+	if !ok {
+		return false, nil
+	}
+	client, key, err := common.BorrowSSH(ctx, s.dial, host, common.MachineSSHPort(gwMach), common.MachineAgentUser(gwMach))
 	if err != nil {
 		return false, fmt.Errorf("dial gateway %s: %w", gwMach.Name, err)
 	}
