@@ -65,7 +65,7 @@ func annotatePlanCellsWithProbe(ctx context.Context, compiled []compiledPhase, h
 //     cache writes, read-through via Resolve* helpers. That means cells
 //     within a single target no longer have a strict ordering dependency
 //     — CreateMachine.Check no longer populates MachineTarget.Instance
-//     (ResolveHostedInstances does, in PreRun), so wait-cloud-init and
+//     (ResolveHostedInstances does, in PreRun), so steps like
 //     authorize-ssh-key can probe concurrently with it.
 //
 // Output ordering: cells are pre-allocated at their deterministic (phase,

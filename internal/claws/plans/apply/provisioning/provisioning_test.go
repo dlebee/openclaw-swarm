@@ -281,16 +281,30 @@ func TestResolveMachineStatus_cacheShared(t *testing.T) {
 	}
 }
 
-func TestCreateMachine_Check_doesNotMutatePayloadOrCache(t *testing.T) {
+func TestCreateMachine_Check_hydratesPayloadAndHost(t *testing.T) {
+	// Check on an already-existing machine must:
+	//   1. return satisfied=true
+	//   2. set mt.Instance so downstream probe steps can dial the IP
+	//   3. call RecordPlanMachineHost so HostKnown / ResolveMachineHost work
+	//
+	// Without this hydration every step after provisioning shows
+	// "would execute" in the dry-run tree even on a fully converged machine,
+	// because they all gate on the instance IP being reachable.
+	//
+	// RecordPlanMachineExists is intentionally NOT written by Check — that is
+	// set by Execute (on fresh create) and by ResolveHostedInstances (on
+	// bulk hydration paths). Keeping it out of Check means the caches stay
+	// consistent with their intended write owners.
 	wantLabel := machineLabel("pfx", "web")
 	prefixTag := clawsPrefixTag("pfx")
+	wantIP := "203.0.113.9"
 	provider := &mockProvider{
 		listByTag: map[string][]hosting.Instance{
 			prefixTag: {{
 				Provider:   "mock",
 				ResourceID: "42",
 				Label:      wantLabel,
-				PublicIPv4: "203.0.113.9",
+				PublicIPv4: wantIP,
 			}},
 		},
 	}
@@ -305,13 +319,13 @@ func TestCreateMachine_Check_doesNotMutatePayloadOrCache(t *testing.T) {
 	if !satisfied {
 		t.Fatalf("expected satisfied=true for an existing instance")
 	}
-	if mt.Instance != nil {
-		t.Fatalf("Check must NOT mutate payload; got mt.Instance=%+v", mt.Instance)
+	if mt.Instance == nil || mt.Instance.PublicIPv4 != wantIP {
+		t.Fatalf("Check must hydrate mt.Instance; got %+v", mt.Instance)
 	}
-	if h, ok := scaffold.LookupPlanMachineHost(ctx, "web"); ok {
-		t.Fatalf("Check must NOT write RecordPlanMachineHost; got %q", h)
+	if h, ok := scaffold.LookupPlanMachineHost(ctx, "web"); !ok || h != wantIP {
+		t.Fatalf("Check must call RecordPlanMachineHost; got (%q, %v)", h, ok)
 	}
 	if _, known := scaffold.DoesMachineExist(ctx, "web"); known {
-		t.Fatal("Check must NOT write RecordPlanMachineExists")
+		t.Fatal("Check must NOT write RecordPlanMachineExists (that is Execute's job)")
 	}
 }

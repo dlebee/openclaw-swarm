@@ -53,7 +53,9 @@ func AddPhase(p *scaffold.Plan, targets []scaffold.Target, opts Options) *scaffo
 	// users: module). Placing it here also means every post-provisioning
 	// phase inherits the "boot-time apt-daily has released the lock"
 	// guarantee — see wait_cloud_init.go for the apt-lock rationale.
-	ph.AddStep(NewWaitCloudInitStep(opts))
+	// Disabled: dry-run noise / operator preference; re-enable if apt or
+	// useradd races on fresh images become a problem.
+	// ph.AddStep(NewWaitCloudInitStep(opts))
 	ph.AddStep(NewEnsureAgentUserStep(opts))
 
 	return ph

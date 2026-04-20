@@ -98,7 +98,7 @@ func TestAddPhase_includesEnsureAgentUser(t *testing.T) {
 	})
 	ph := AddPhase(p, targets, Options{Provider: &mockProvider{}})
 
-	want := []string{"create-machine", "authorize-ssh-key", "wait-cloud-init", "ensure-agent-user"}
+	want := []string{"create-machine", "authorize-ssh-key", "ensure-agent-user"}
 	if len(ph.Steps) != len(want) {
 		t.Fatalf("expected %d steps, got %d", len(want), len(ph.Steps))
 	}
