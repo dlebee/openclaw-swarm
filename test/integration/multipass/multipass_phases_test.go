@@ -113,6 +113,9 @@ func TestPhasesIsolatedNoCache(t *testing.T) {
 	m := loadTestManifest(t, "manifest-phases.yml")
 	m.Prefix = "it-phases-" + randSuffix(t)
 	prefix := m.Prefix
+	// See rewriteMeshHost — realign the fixture's custom control URL
+	// with the `<prefix>-gateway-host` hostname cloud-init will pin.
+	rewriteMeshHost(m)
 
 	// --- provider + SSH dialer ---------------------------------------------
 

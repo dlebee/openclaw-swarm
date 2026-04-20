@@ -175,6 +175,9 @@ func TestCronAgentWithNodeExec(t *testing.T) {
 
 	m := loadTestManifest(t, "manifest-cron.yml")
 	m.Prefix = "it-cron-" + randSuffix(t)
+	// See rewriteMeshHost — realign the fixture's custom control URL
+	// with the `<prefix>-gateway-host` hostname cloud-init will pin.
+	rewriteMeshHost(m)
 	prefix := m.Prefix
 
 	if len(m.Machines) != 2 {

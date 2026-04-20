@@ -47,7 +47,6 @@ func ExecWithConfirm(ctx context.Context, p *Plan, o PipelineOptions) error {
 	if err != nil {
 		return err
 	}
-	_, _ = fmt.Fprintln(o.Out)
 	hints := PlanDisplayHints{
 		DryRun:     o.DryRun,
 		OnlyPhases: o.OnlyPhases,
@@ -55,21 +54,25 @@ func ExecWithConfirm(ctx context.Context, p *Plan, o PipelineOptions) error {
 	}
 	if o.PrettyPlan {
 		if f, ok := o.Out.(*os.File); ok && term.IsTerminal(int(f.Fd())) {
+			// PlanPreview owns the probe internally (it needs the full
+			// cell list for the viewport). We just hand it the plan.
 			if err := RunPlanPreview(ctx, exec, hints); err != nil {
 				return err
 			}
 		} else {
-			treeOut, err := exec.DescribeStyledWithHints(ctx, o.Width, hints)
+			treeOut, err := runPlanProbeWithSpinner(ctx, exec, o.Width, hints)
 			if err != nil {
 				return err
 			}
+			_, _ = fmt.Fprintln(o.Out)
 			_, _ = fmt.Fprintln(o.Out, treeOut)
 		}
 	} else {
-		treeOut, err := exec.DescribeStyledWithHints(ctx, o.Width, hints)
+		treeOut, err := runPlanProbeWithSpinner(ctx, exec, o.Width, hints)
 		if err != nil {
 			return err
 		}
+		_, _ = fmt.Fprintln(o.Out)
 		_, _ = fmt.Fprintln(o.Out, treeOut)
 	}
 	_, _ = fmt.Fprintln(o.Out)

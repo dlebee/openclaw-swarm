@@ -20,15 +20,19 @@
 #       IsHTTPControlURL check short-circuits on http:// schemes and
 #       the step becomes inapplicable.
 #
-#   (2) gateway-host.local is the Multipass VM's mDNS name. The
-#       provisioning phase pins each VM's hostname to its machine
-#       name via cloud-init (see hosting/multipass/cloudinit.go),
-#       installs avahi-daemon + libnss-mdns, and pre-allows UDP 5353
-#       so the security phase's UFW enable doesn't black-hole
-#       multicast. Every peer VM on the same Multipass bridge
-#       resolves `gateway-host.local` → gateway's LAN IP through
-#       mDNS — no DNS server, no runtime IP discovery, no manifest
-#       templating.
+#   (2) <prefix>-gateway-host.local is the Multipass VM's mDNS name.
+#       The provisioning phase pins each VM's hostname to its fully
+#       prefixed multipass instance label (<prefix>-<name>) via
+#       cloud-init (see hosting/multipass/cloudinit.go +
+#       provisioning.hostedHostname), installs avahi-daemon +
+#       libnss-mdns, and pre-allows UDP 5353 so the security phase's
+#       UFW enable doesn't black-hole multicast. Every peer VM on
+#       the same Multipass bridge resolves the prefixed name →
+#       gateway's LAN IP through mDNS — no DNS server, no runtime
+#       IP discovery, no manifest templating. Parallel re-applies
+#       with a different prefix never collide on the same `.local`
+#       name. Tests that randomize m.Prefix at load time rewrite the
+#       URL below in lockstep via rewriteMeshHost.
 #
 # preauth_key_source: file + a path that doesn't exist yet tells
 # resolve-preauth-key to auto-create a key via the headscale CLI
@@ -70,7 +74,7 @@ gateways:
       mode: headscale
       public_hostname:
         strategy: custom
-        host: "http://gateway-host.local:8080"
+        host: "http://claws-it-multipass-mesh-gateway-host.local:8080"
       preauth_key_source: file
       preauth_key_file: /var/lib/claws/headscale/preauth.key
 

@@ -6,6 +6,7 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/hex"
+	"fmt"
 	"net"
 	"os"
 	"path/filepath"
@@ -309,5 +310,36 @@ func randSuffix(t *testing.T) string {
 		t.Fatalf("rand: %v", err)
 	}
 	return hex.EncodeToString(b[:])
+}
+
+// rewriteMeshHost rebuilds each gateway's custom public_hostname.host
+// so it matches the hostname cloud-init actually pins inside the
+// multipass VM — `<prefix>-<reference>.local` — after the test has
+// randomized m.Prefix. Fixtures can't hardcode the final hostname
+// because the prefix changes per run; this keeps the resolver side
+// (manifest URL) and the provisioning side (cloud-init + multipass
+// label) in lockstep without introducing template syntax into the
+// manifest loader. Only custom-strategy .local hosts on port 8080 are
+// rewritten — everything else (explicit FQDNs, sslip, non-mesh) is
+// left untouched so the helper is safe to call unconditionally after
+// loading any test manifest.
+func rewriteMeshHost(m *manifestdata.Manifest) {
+	for i := range m.Gateways {
+		gw := &m.Gateways[i]
+		if gw.Networking == nil || gw.Networking.PublicHostname == nil {
+			continue
+		}
+		if !strings.EqualFold(strings.TrimSpace(gw.Networking.PublicHostname.Strategy), "custom") {
+			continue
+		}
+		if !strings.Contains(gw.Networking.PublicHostname.Host, ".local") {
+			continue
+		}
+		ref := strings.TrimSpace(gw.Reference)
+		if ref == "" {
+			continue
+		}
+		gw.Networking.PublicHostname.Host = fmt.Sprintf("http://%s-%s.local:8080", m.Prefix, ref)
+	}
 }
 

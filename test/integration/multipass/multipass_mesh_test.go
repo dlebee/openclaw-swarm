@@ -81,6 +81,10 @@ func TestMeshSmoke(t *testing.T) {
 	m := loadTestManifest(t, "manifest-mesh.yml")
 	m.Prefix = "it-mesh-" + randSuffix(t)
 	prefix := m.Prefix
+	// See rewriteMeshHost — the fixture's control URL references
+	// `gateway-host.local` but cloud-init pins the VM hostname to
+	// `<prefix>-gateway-host`, so we realign them before plan build.
+	rewriteMeshHost(m)
 
 	// Fixture sanity — if the YAML drifts in a way that breaks the
 	// topology this test depends on, fail loud at load rather than at

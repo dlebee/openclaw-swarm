@@ -35,12 +35,27 @@ func (e *ExecutablePlan) DescribeStyled(ctx context.Context, width int) (string,
 // DescribeStyledWithHints renders the probed plan tree. SkipPhases skips probing
 // for those phases; DryRun only changes "would execute" vs "will execute" labels.
 func (e *ExecutablePlan) DescribeStyledWithHints(ctx context.Context, width int, h PlanDisplayHints) (string, error) {
+	return e.DescribeStyledWithHintsObs(ctx, width, h, ProbeNoop{})
+}
+
+// DescribeStyledWithHintsObs is the observer-aware variant. Each cell's
+// Applicable+Check probe fires obs.OnProbeStart before it runs, so a caller
+// can render "N/total · phase > target > step" while a slow probe is in
+// flight. Pass ProbeNoop{} to opt out.
+func (e *ExecutablePlan) DescribeStyledWithHintsObs(ctx context.Context, width int, h PlanDisplayHints, obs ProbeObserver) (string, error) {
 	ctx = EnsurePlanCache(ctx)
-	cells, err := annotatePlanCellsWithProbe(ctx, e.compiled, h)
+	cells, err := annotatePlanCellsWithProbeObs(ctx, e.compiled, h, obs)
 	if err != nil {
 		return "", err
 	}
 	return renderPreparedPlanTree(cells, width, h), nil
+}
+
+// ProbeCellCount reports how many (target, step) probes DescribeStyledWithHints
+// will perform under the given hints. Exposed so UI drivers can size progress
+// counters before the probe starts.
+func (e *ExecutablePlan) ProbeCellCount(h PlanDisplayHints) int {
+	return countProbeCells(e.compiled, h)
 }
 
 // Execute runs the plan. If a PreRun hook was attached via Plan.PreRun it is

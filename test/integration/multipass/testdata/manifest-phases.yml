@@ -72,7 +72,7 @@ gateways:
       mode: headscale
       public_hostname:
         strategy: custom
-        host: "http://gateway-host.local:8080"
+        host: "http://claws-it-multipass-phases-gateway-host.local:8080"
       preauth_key_source: file
       preauth_key_file: /var/lib/claws/headscale/preauth.key
     channels:

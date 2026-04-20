@@ -113,10 +113,22 @@ func (a *CreateMachineStep) Execute(ctx context.Context, t scaffold.Target) erro
 		// in the fresh image (see docs on hosting.CreateInstanceOpts).
 		// Empty manifest value resolves to "root" inside the provider.
 		BootstrapUser: strings.TrimSpace(spec.BootstrapUser),
-		// Hostname is the manifest's short machine name. Multipass sets
-		// it via cloud-init so peers can dial `<name>.local` through
-		// Avahi without a dynamic IP lookup; Linode ignores the field.
-		Hostname: strings.TrimSpace(spec.Name),
+		// Hostname pins the multipass VM's uname -n and avahi broadcast
+		// to the fully-prefixed instance label (<prefix>-<name>) — same
+		// value we feed to the multipass CLI as --name. Using the
+		// prefixed form (rather than the short manifest name) means:
+		//   - parallel/re-apply runs with different prefixes never
+		//     collide on `<name>.local` mDNS,
+		//   - the manifest author can hardcode the host URL
+		//     (`http://<prefix>-<name>.local:...`) with no templating
+		//     or runtime IP discovery, and
+		//   - `getent hosts` inside the VM converges on the same name
+		//     multipass already uses, so install-tailscale's host pin
+		//     (see mesh/install_tailscale.go) resolves on first try.
+		// When prefix is empty (unit tests, bare manifests) we fall
+		// back to the short name so we don't broadcast a leading dash.
+		// Linode ignores this field regardless.
+		Hostname: hostedHostname(a.prefix, spec.Name),
 		// Linode-specific.
 		Region:   spec.Region,
 		SKU:      spec.SKU,
@@ -181,6 +193,20 @@ func machineLabel(prefix, machineName string) string {
 		return l
 	}
 	return l[:64]
+}
+
+// hostedHostname picks the hostname pinned into the VM's cloud-init. We
+// mirror machineLabel (prefix + "-" + name) for hosted providers so the
+// VM's mDNS broadcast, multipass instance label, and manifest-authored
+// control URL all agree on a single string. An empty prefix (unit tests
+// with raw manifests that never went through the CLI's auto-prefix
+// injection) collapses to the bare machine name to avoid a leading dash.
+func hostedHostname(prefix, machineName string) string {
+	name := strings.TrimSpace(machineName)
+	if strings.TrimSpace(prefix) == "" {
+		return name
+	}
+	return machineLabel(prefix, name)
 }
 
 func randomRootPassword() (string, error) {

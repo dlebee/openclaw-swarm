@@ -110,6 +110,12 @@ func TestNodeSmoke(t *testing.T) {
 	m := loadTestManifest(t, "manifest-node.yml")
 	m.Prefix = "it-node-" + randSuffix(t)
 	prefix := m.Prefix
+	// Rewrite the fixture's control URL now that we know the final
+	// prefix — cloud-init will pin the VM's hostname to
+	// `<prefix>-gateway-host` (see provisioning.hostedHostname), so
+	// the manifest must advertise the same name or install-tailscale's
+	// mDNS resolve would miss.
+	rewriteMeshHost(m)
 
 	if len(m.Machines) != 2 {
 		t.Fatalf("fixture sanity: expected 2 machines, got %d", len(m.Machines))

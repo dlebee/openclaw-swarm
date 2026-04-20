@@ -62,15 +62,24 @@ func (s *EnsureModelStep) Execute(ctx context.Context, t scaffold.Target) error 
 		Value interface{} `json:"value"`
 	}
 
-	batch := []batchEntry{
-		{Path: fmt.Sprintf("agents.list[%d].model", idx), Value: at.Spec.Model.Primary},
-	}
+	// openclaw's schema (src/config/types.agents.ts) accepts
+	// `agents.list[].model` as either a bare string OR the object form
+	// `{primary, fallbacks}` — fallbacks lives INSIDE model, never as a
+	// sibling on the agent entry. Writing `agents.list[].fallbacks`
+	// would be rejected with "Unrecognized key: fallbacks". We therefore
+	// collapse to a single batch entry: object form when fallbacks are
+	// set, string form otherwise. One atomic write also sidesteps the
+	// intermediate state where a scalar `model` would need promoting to
+	// an object before a sibling `model.fallbacks` write could land.
+	modelPath := fmt.Sprintf("agents.list[%d].model", idx)
+	var modelValue interface{} = at.Spec.Model.Primary
 	if len(at.Spec.Model.Fallbacks) > 0 {
-		batch = append(batch, batchEntry{
-			Path:  fmt.Sprintf("agents.list[%d].fallbacks", idx),
-			Value: at.Spec.Model.Fallbacks,
-		})
+		modelValue = map[string]interface{}{
+			"primary":   at.Spec.Model.Primary,
+			"fallbacks": at.Spec.Model.Fallbacks,
+		}
 	}
+	batch := []batchEntry{{Path: modelPath, Value: modelValue}}
 
 	batchJSON, err := json.Marshal(batch)
 	if err != nil {

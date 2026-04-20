@@ -28,14 +28,18 @@
 #
 # About the control URL:
 #
-#   strategy: custom + http://gateway-host.local:8080 mirrors
+#   strategy: custom + http://<prefix>-gateway-host.local:8080 mirrors
 #   manifest-mesh.yml. See that fixture's header for the full
 #   rationale; short version: the provisioning phase pins each VM's
-#   mDNS hostname via cloud-init so peer VMs can resolve
-#   `gateway-host.local` → gateway's bridge IP without any runtime
-#   IP discovery or manifest templating. http:// (no Caddy / no
-#   ACME) is the simplest possible control URL; TLS + Let's Encrypt
-#   only makes sense with a public IP, which Multipass doesn't have.
+#   mDNS hostname to the multipass instance label (<prefix>-<name>,
+#   here claws-it-multipass-node-gateway-host) via cloud-init so peer
+#   VMs can resolve it through avahi with zero runtime IP discovery
+#   or manifest templating. Tests that randomize m.Prefix at load
+#   time (see rewriteMeshHost in multipass_provisioning_test.go)
+#   rewrite this URL in lockstep so the fixture and the runtime
+#   configuration always agree. http:// (no Caddy / no ACME) is the
+#   simplest possible control URL; TLS + Let's Encrypt only makes
+#   sense with a public IP, which Multipass doesn't have.
 #
 # preauth_key_source: file with a path that doesn't exist yet tells
 # resolve-preauth-key to auto-generate a key via the headscale CLI on
@@ -88,7 +92,7 @@ gateways:
       mode: headscale
       public_hostname:
         strategy: custom
-        host: "http://gateway-host.local:8080"
+        host: "http://claws-it-multipass-node-gateway-host.local:8080"
       preauth_key_source: file
       preauth_key_file: /var/lib/claws/headscale/preauth.key
 

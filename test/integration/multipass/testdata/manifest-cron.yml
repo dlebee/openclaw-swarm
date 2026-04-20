@@ -52,15 +52,18 @@
 #   same shape so a cron regression in the meshed-dispatch path
 #   surfaces here as well.
 #
-# About the control URL (strategy: custom, http://gateway-host.local:
-# 8080):
+# About the control URL (strategy: custom, http://<prefix>-gateway-
+# host.local:8080):
 #
 #   Identical to manifest-mesh.yml / manifest-node.yml. Multipass VMs
-#   advertise their machine name via avahi (set by provisioning's
-#   cloud-init hostname pin), so gateway-host.local resolves from the
-#   scraper without any runtime IP-discovery step. http:// (no Caddy,
-#   no Let's Encrypt) is the simplest control URL; TLS + ACME only
-#   makes sense with a public IP, which Multipass doesn't have. See
+#   advertise their fully prefixed instance label via avahi (set by
+#   provisioning's cloud-init hostname pin →
+#   provisioning.hostedHostname), so the scraper resolves the
+#   gateway's mDNS name without any runtime IP-discovery step.
+#   Tests that randomize m.Prefix realign this URL via
+#   rewriteMeshHost before plan build. http:// (no Caddy, no Let's
+#   Encrypt) is the simplest control URL; TLS + ACME only makes
+#   sense with a public IP, which Multipass doesn't have. See
 #   TestNodeSmoke's header for the full rationale.
 #
 # Why exec_policy on the node (unlike manifest-node.yml which omits it):
@@ -139,7 +142,7 @@ gateways:
       mode: headscale
       public_hostname:
         strategy: custom
-        host: "http://gateway-host.local:8080"
+        host: "http://claws-it-multipass-cron-gateway-host.local:8080"
       preauth_key_source: file
       preauth_key_file: /var/lib/claws/headscale/preauth.key
 

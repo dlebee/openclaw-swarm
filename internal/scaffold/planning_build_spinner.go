@@ -1,10 +1,10 @@
 package scaffold
 
 import (
+	"context"
 	"fmt"
 	"os"
 
-	bubblesprogress "github.com/charmbracelet/bubbles/progress"
 	"github.com/charmbracelet/bubbles/spinner"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
@@ -12,95 +12,99 @@ import (
 	"golang.org/x/term"
 )
 
-type planningLineMsg struct {
-	phase, step string
+// buildPlanWithProgress compiles the plan. Compilation is in-memory and takes
+// milliseconds, so there's no Tea UI here — the interesting progress surface
+// is the probe pass (see runPlanProbeWithSpinner), which hits SSH / multipass /
+// provider APIs and can stall for minutes. We keep the BuildObserver hook for
+// non-TTY callers (logs, tests) that still want compile-time callbacks.
+func buildPlanWithProgress(p *Plan, obs scaffoldprogress.BuildObserver) (*ExecutablePlan, error) {
+	if obs == nil {
+		obs = scaffoldprogress.NoopBuild{}
+	}
+	return p.Build(obs)
 }
 
-type buildFinishedMsg struct {
-	exec *ExecutablePlan
+// ------------------------------------------------------------------
+// Probe spinner
+// ------------------------------------------------------------------
+//
+// probeCellMsg is routed into the Tea program from annotatePlanCellsWithProbeObs
+// (running in a goroutine). Each arrival means the probe goroutine is ABOUT TO
+// call Applicable/Check for that cell — so when the UI displays phase+step, it
+// accurately reflects what's currently blocking the probe, not what already
+// completed.
+type probeCellMsg struct {
+	index, total          int
+	phase, targetID, step string
+}
+
+// probeFinishedMsg delivers the probe's final result back to the Tea event
+// loop so we can exit cleanly and hand the rendered tree (or error) back to
+// the caller.
+type probeFinishedMsg struct {
+	tree string
 	err  error
 }
 
-type spinnerBuildObserver struct {
+type spinnerProbeObserver struct {
 	send func(tea.Msg)
 }
 
-func (s *spinnerBuildObserver) OnPlanning(phase, step string) {
-	s.send(planningLineMsg{phase: phase, step: step})
+// OnProbeStart implements ProbeObserver by forwarding to the Tea program. We
+// deliberately send BEFORE the probe's Applicable/Check call so a hang is
+// attributable to the displayed cell.
+func (s *spinnerProbeObserver) OnProbeStart(index, total int, phase, targetID, step string) {
+	s.send(probeCellMsg{index: index, total: total, phase: phase, targetID: targetID, step: step})
 }
 
-type planningBuildModel struct {
-	spinner      spinner.Model
-	progress     bubblesprogress.Model
-	barFraction  float64 // 0..1; rendered via ViewAs so it matches phase without spring frames
-	totalPhases  int
-	phaseIndex   map[string]int
-	currentPhase string
-	exec         *ExecutablePlan
-	buildErr     error
+type planProbeModel struct {
+	spinner    spinner.Model
+	total      int
+	current    int
+	phaseName  string
+	targetID   string
+	stepName   string
+	treeOutput string
+	probeErr   error
+	done       bool
 }
 
-func phaseCompileFraction(phaseIndex0, totalPhases int) float64 {
-	if totalPhases < 1 {
-		return 1
-	}
-	return float64(phaseIndex0+1) / float64(totalPhases)
-}
-
-func newPlanningBuildModel(p *Plan) *planningBuildModel {
-	n := len(p.Phases)
-	idx := make(map[string]int, n)
-	for i, ph := range p.Phases {
-		idx[ph.Name] = i
-	}
-
-	bar := bubblesprogress.New(
-		bubblesprogress.WithDefaultGradient(),
-		bubblesprogress.WithWidth(44),
-	)
-	return &planningBuildModel{
+func newPlanProbeModel(total int) *planProbeModel {
+	return &planProbeModel{
 		spinner: spinner.New(
 			spinner.WithSpinner(spinner.MiniDot),
 			spinner.WithStyle(lipgloss.NewStyle().Foreground(lipgloss.Color("205"))),
 		),
-		progress:    bar,
-		totalPhases: n,
-		phaseIndex:  idx,
+		total: total,
 	}
 }
 
-func (m *planningBuildModel) Init() tea.Cmd {
-	return func() tea.Msg {
-		return m.spinner.Tick()
-	}
+func (m *planProbeModel) Init() tea.Cmd {
+	return func() tea.Msg { return m.spinner.Tick() }
 }
 
-func (m *planningBuildModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+func (m *planProbeModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
-	case buildFinishedMsg:
-		m.exec = msg.exec
-		m.buildErr = msg.err
-		m.barFraction = 1
+	case probeFinishedMsg:
+		m.done = true
+		m.treeOutput = msg.tree
+		m.probeErr = msg.err
+		if m.total > 0 {
+			m.current = m.total
+		}
 		return m, tea.Quit
 
-	case planningLineMsg:
-		if idx, ok := m.phaseIndex[msg.phase]; ok {
-			m.currentPhase = msg.phase
-			m.barFraction = phaseCompileFraction(idx, m.totalPhases)
-			sm, sc := m.spinner.Update(msg)
-			m.spinner = sm
-			return m, sc
+	case probeCellMsg:
+		if msg.total > 0 {
+			m.total = msg.total
 		}
-
-	case tea.WindowSizeMsg:
-		w := msg.Width - 4
-		if w < 20 {
-			w = 20
-		}
-		if w > 120 {
-			w = 120
-		}
-		m.progress.Width = w
+		m.current = msg.index
+		m.phaseName = msg.phase
+		m.targetID = msg.targetID
+		m.stepName = msg.step
+		sm, sc := m.spinner.Update(msg)
+		m.spinner = sm
+		return m, sc
 	}
 
 	sm, sc := m.spinner.Update(msg)
@@ -108,51 +112,75 @@ func (m *planningBuildModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	return m, sc
 }
 
-func (m *planningBuildModel) View() string {
-	title := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("214")).Render("Planning....")
-	row1 := lipgloss.JoinHorizontal(lipgloss.Left, m.spinner.View(), " ", title)
+var (
+	styleProbeTitle   = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("214"))
+	styleProbeCounter = lipgloss.NewStyle().Foreground(lipgloss.Color("244"))
+	styleProbePhase   = lipgloss.NewStyle().Foreground(lipgloss.Color("111")).Bold(true)
+	styleProbeTarget  = lipgloss.NewStyle().Foreground(lipgloss.Color("39"))
+	styleProbeStep    = lipgloss.NewStyle().Foreground(lipgloss.Color("244"))
+)
 
-	// ViewAs: spring animation never gets FrameMsg ticks if we quit in the same
-	// batch as SetPercent, so the label would stick at 0%. Snap to barFraction instead.
-	bar := m.progress.ViewAs(m.barFraction)
-	var rows []string
-	rows = append(rows, row1, bar)
-	if m.currentPhase != "" {
-		sub := lipgloss.NewStyle().Foreground(lipgloss.Color("244")).Render(m.currentPhase)
-		rows = append(rows, sub)
+func (m *planProbeModel) View() string {
+	title := styleProbeTitle.Render("Probing plan....")
+	counter := ""
+	if m.total > 0 {
+		counter = styleProbeCounter.Render(fmt.Sprintf("  %d/%d", m.current, m.total))
+	}
+	row1 := lipgloss.JoinHorizontal(lipgloss.Left, m.spinner.View(), " ", title, counter)
+
+	rows := []string{row1}
+	if m.phaseName != "" || m.stepName != "" {
+		parts := []string{}
+		if m.phaseName != "" {
+			parts = append(parts, styleProbePhase.Render(m.phaseName))
+		}
+		if m.targetID != "" {
+			parts = append(parts, styleProbeTarget.Render(m.targetID))
+		}
+		if m.stepName != "" {
+			parts = append(parts, styleProbeStep.Render(m.stepName))
+		}
+		sub := ""
+		for i, p := range parts {
+			if i > 0 {
+				sub += styleProbeStep.Render(" · ")
+			}
+			sub += p
+		}
+		rows = append(rows, "  "+sub)
 	}
 	return lipgloss.JoinVertical(lipgloss.Left, rows...)
 }
 
-// runPlanningBuildWithSpinner runs Plan.Build with Bubble Tea on stderr: a
-// spinner + "Planning....", a phase-based progress bar, then the program exits
-// so the caller can print the plan on stdout.
-func runPlanningBuildWithSpinner(p *Plan) (*ExecutablePlan, error) {
-	m := newPlanningBuildModel(p)
+// runPlanProbeWithSpinner runs exec.DescribeStyledWithHintsObs inside a Tea
+// program, rendering "Probing plan.... N/total · phase · target · step" on
+// stderr while each cell's Applicable+Check runs. Returns the rendered plan
+// tree (or the probe error). When stderr isn't a TTY we fall back to a plain
+// synchronous probe with no UI.
+func runPlanProbeWithSpinner(ctx context.Context, exec *ExecutablePlan, width int, h PlanDisplayHints) (string, error) {
+	if !term.IsTerminal(int(os.Stderr.Fd())) {
+		return exec.DescribeStyledWithHints(ctx, width, h)
+	}
+
+	m := newPlanProbeModel(exec.ProbeCellCount(h))
 	prog := tea.NewProgram(m, tea.WithOutput(os.Stderr))
 
 	go func() {
-		ob := &spinnerBuildObserver{send: prog.Send}
-		ex, err := p.Build(ob)
-		prog.Send(buildFinishedMsg{exec: ex, err: err})
+		obs := &spinnerProbeObserver{send: prog.Send}
+		tree, err := exec.DescribeStyledWithHintsObs(ctx, width, h, obs)
+		prog.Send(probeFinishedMsg{tree: tree, err: err})
 	}()
 
 	final, err := prog.Run()
 	if err != nil {
-		return nil, err
+		return "", err
 	}
-	fm, ok := final.(*planningBuildModel)
+	fm, ok := final.(*planProbeModel)
 	if !ok {
-		return nil, fmt.Errorf("scaffold: unexpected planning spinner model type %T", final)
+		return "", fmt.Errorf("scaffold: unexpected probe spinner model type %T", final)
 	}
-	return fm.exec, fm.buildErr
-}
-
-func buildPlanWithProgress(p *Plan, obs scaffoldprogress.BuildObserver) (*ExecutablePlan, error) {
-	if term.IsTerminal(int(os.Stderr.Fd())) {
-		exec, err := runPlanningBuildWithSpinner(p)
-		_, _ = fmt.Fprintln(os.Stderr)
-		return exec, err
-	}
-	return p.Build(obs)
+	// Drop a trailing newline so the prepared-plan tree doesn't crowd
+	// against the spinner's final frame.
+	_, _ = fmt.Fprintln(os.Stderr)
+	return fm.treeOutput, fm.probeErr
 }
