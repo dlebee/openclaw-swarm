@@ -89,17 +89,21 @@ func (s *ConfigureWorkspaceStep) Check(ctx context.Context, t scaffold.Target) (
 	m := at.Machine
 	client, key, err := common.BorrowSSH(ctx, s.dial, common.ResolveMachineHost(ctx, m), common.MachineSSHPort(m), common.MachineAgentUser(m))
 	if err != nil {
-		return false, nil
+		return false, fmt.Errorf("dial %s: %w", m.Name, err)
 	}
 	defer common.ReturnSSH(ctx, key, client)
 
 	wsDir, err := resolveWorkspace(client, at.Spec.Workspace)
 	if err != nil {
-		return false, nil
+		return false, fmt.Errorf("resolve workspace on %s: %w", m.Name, err)
 	}
 
 	for _, f := range desiredFiles(at.Spec) {
-		if !managedSectionMatches(client, path.Join(wsDir, f.name), f.content) {
+		matches, err := managedSectionMatchesE(client, path.Join(wsDir, f.name), f.content)
+		if err != nil {
+			return false, fmt.Errorf("check %s on %s: %w", f.name, m.Name, err)
+		}
+		if !matches {
 			return false, nil
 		}
 	}
@@ -188,13 +192,26 @@ func extractManagedSection(fileContent string) string {
 }
 
 // managedSectionMatches reads a remote file and checks whether its managed
-// section content matches the desired content.
+// section content matches the desired content. Kept for callers (Verify) that
+// legitimately treat absence-or-drift as a single failure mode; new callers
+// should prefer managedSectionMatchesE so real SFTP errors propagate.
 func managedSectionMatches(client *xssh.Client, filePath, desired string) bool {
+	matches, _ := managedSectionMatchesE(client, filePath, desired)
+	return matches
+}
+
+// managedSectionMatchesE is the error-aware variant: absence is (false, nil);
+// any other SFTP/read error is returned verbatim so Check can surface it as
+// "check: ..." in the probe UI instead of silently reporting "will execute".
+func managedSectionMatchesE(client *xssh.Client, filePath, desired string) (bool, error) {
 	data, err := sshfile.ReadFile(client, filePath)
-	if errors.Is(err, os.ErrNotExist) || err != nil {
-		return false
+	if errors.Is(err, os.ErrNotExist) {
+		return false, nil
 	}
-	return extractManagedSection(string(data)) == strings.TrimSpace(desired)
+	if err != nil {
+		return false, err
+	}
+	return extractManagedSection(string(data)) == strings.TrimSpace(desired), nil
 }
 
 // writeManagedSection creates or updates a file's managed section, preserving

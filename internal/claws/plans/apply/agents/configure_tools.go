@@ -41,18 +41,21 @@ func (s *ConfigureToolsStep) Check(ctx context.Context, t scaffold.Target) (bool
 	m := at.Machine
 	client, key, err := common.BorrowSSH(ctx, s.dial, common.ResolveMachineHost(ctx, m), common.MachineSSHPort(m), common.MachineAgentUser(m))
 	if err != nil {
-		return false, nil
+		return false, fmt.Errorf("dial %s: %w", m.Name, err)
 	}
 	defer common.ReturnSSH(ctx, key, client)
 
 	idx, err := AgentConfigIndex(client, at.Spec.ID)
-	if err != nil || idx < 0 {
+	if err != nil {
+		return false, fmt.Errorf("read agents.list on %s: %w", m.Name, err)
+	}
+	if idx < 0 {
 		return false, nil
 	}
 
 	current, err := readToolsConfig(client, idx)
 	if err != nil {
-		return false, nil
+		return false, fmt.Errorf("read tools config on %s: %w", m.Name, err)
 	}
 	if !execMatch(current, at.Spec.Tools) {
 		return false, nil

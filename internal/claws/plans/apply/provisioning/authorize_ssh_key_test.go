@@ -25,7 +25,10 @@ func TestAuthorizeSSHKeyCheck_nilDialNotSatisfied(t *testing.T) {
 	}
 }
 
-func TestAuthorizeSSHKeyCheck_dialErrorNotSatisfied(t *testing.T) {
+func TestAuthorizeSSHKeyCheck_dialErrorPropagates(t *testing.T) {
+	// Dial failures must propagate as errors so the probe UI can render
+	// "check: dial refused" instead of lying as "will execute". See
+	// .cursor/rules/plan-checks-are-pure.mdc: errors are not "unsatisfied".
 	a := NewAuthorizeSSHKeyStep(Options{
 		SSHDial: func(ctx context.Context, host string, port int, user string) (*xssh.Client, error) {
 			_ = ctx
@@ -43,8 +46,8 @@ func TestAuthorizeSSHKeyCheck_dialErrorNotSatisfied(t *testing.T) {
 		},
 	}
 	satisfied, err := a.Check(context.Background(), scaffold.Target{ID: "t1", Payload: mt})
-	if err != nil || satisfied {
-		t.Fatalf("want not satisfied, no err; satisfied=%v err=%v", satisfied, err)
+	if err == nil || satisfied {
+		t.Fatalf("want not satisfied + err; satisfied=%v err=%v", satisfied, err)
 	}
 }
 

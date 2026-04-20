@@ -50,16 +50,20 @@ func (a *AuthorizeSSHKeyStep) Applicable(ctx context.Context, t scaffold.Target)
 	return true, nil
 }
 
-// Check implements scaffold.Step. When create-machine's Check has already attached an
-// instance with a public IPv4, dial once and verify the CLI public key line is present;
-// satisfied=true skips Execute. Dial or verify errors are not fatal: Execute may still
-// need to run to fix drift or reachability.
+// Check implements scaffold.Step — dials the target and verifies the CLI's
+// public key is present in authorized_keys. Dial failures are propagated
+// as errors so the probe UI renders "check: ..." rather than lying as
+// "will execute". A key-mismatch is NOT an error: it's the legitimate
+// "unsatisfied, Execute will fix drift" verdict.
 func (a *AuthorizeSSHKeyStep) Check(ctx context.Context, t scaffold.Target) (satisfied bool, err error) {
 	if a == nil || a.dial == nil || strings.TrimSpace(a.sshPubKey) == "" {
 		return false, nil
 	}
 	mt, ok := t.Payload.(*MachineTarget)
-	if !ok || mt == nil || mt.Instance == nil {
+	if !ok || mt == nil {
+		return false, nil
+	}
+	if mt.Instance == nil {
 		return false, nil
 	}
 	host := strings.TrimSpace(mt.Instance.PublicIPv4)
@@ -70,13 +74,13 @@ func (a *AuthorizeSSHKeyStep) Check(ctx context.Context, t scaffold.Target) (sat
 	user := bootstrapLoginUser(mt.Spec)
 	client, key, err := a.borrowSSH(ctx, host, port, user)
 	if err != nil {
-		return false, nil
+		return false, fmt.Errorf("dial %s@%s:%d: %w", user, host, port, err)
 	}
+	defer a.returnSSH(ctx, key, client)
 	if err := sshkeys.VerifyAuthorizedKeyLinePOSIX(client, a.sshPubKey); err != nil {
-		a.returnSSH(ctx, key, client)
+		// Key absent or mismatched. Not an error — Execute will fix drift.
 		return false, nil
 	}
-	a.returnSSH(ctx, key, client)
 	return true, nil
 }
 

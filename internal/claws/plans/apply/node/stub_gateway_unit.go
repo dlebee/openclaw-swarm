@@ -65,7 +65,7 @@ func (s *StubGatewayUnitStep) Check(ctx context.Context, t scaffold.Target) (boo
 	m := nt.Machine
 	client, key, err := common.BorrowSSH(ctx, s.dial, common.ResolveMachineHost(ctx, m), common.MachineSSHPort(m), common.MachineAgentUser(m))
 	if err != nil {
-		return false, nil
+		return false, fmt.Errorf("dial %s: %w", m.Name, err)
 	}
 	defer common.ReturnSSH(ctx, key, client)
 
@@ -75,7 +75,7 @@ else
   echo missing
 fi`)
 	if err != nil {
-		return false, nil
+		return false, fmt.Errorf("probe gateway/node units on %s: %w", m.Name, err)
 	}
 	return strings.TrimSpace(out) == "satisfied", nil
 }

@@ -46,7 +46,7 @@ func (s *AddAgentStep) Check(ctx context.Context, t scaffold.Target) (bool, erro
 	m := at.Machine
 	client, key, err := common.BorrowSSH(ctx, s.dial, common.ResolveMachineHost(ctx, m), common.MachineSSHPort(m), common.MachineAgentUser(m))
 	if err != nil {
-		return false, nil
+		return false, fmt.Errorf("dial %s: %w", m.Name, err)
 	}
 	defer common.ReturnSSH(ctx, key, client)
 
@@ -55,7 +55,7 @@ func (s *AddAgentStep) Check(ctx context.Context, t scaffold.Target) (bool, erro
 	// the phantom default for id="main" on a fresh install).
 	idx, err := AgentConfigIndex(client, at.Spec.ID)
 	if err != nil {
-		return false, nil
+		return false, fmt.Errorf("read agents.list on %s: %w", m.Name, err)
 	}
 	return idx >= 0, nil
 }

@@ -44,15 +44,15 @@ func (s *InstallCaddyStep) Check(ctx context.Context, t scaffold.Target) (bool, 
 	m := mt.Machine
 	client, key, err := common.BorrowSSH(ctx, s.dial, common.ResolveMachineHost(ctx, m), common.MachineSSHPort(m), common.MachineAgentUser(m))
 	if err != nil {
-		return false, nil
+		return false, fmt.Errorf("dial %s: %w", m.Name, err)
 	}
 	defer common.ReturnSSH(ctx, key, client)
 
 	out, err := bash.RunOutput(client, `command -v caddy >/dev/null 2>&1 && test -f /etc/caddy/Caddyfile && echo ok || echo no`)
-	if err != nil || strings.TrimSpace(out) != "ok" {
-		return false, nil
+	if err != nil {
+		return false, fmt.Errorf("probe caddy on %s: %w", m.Name, err)
 	}
-	return true, nil
+	return strings.TrimSpace(out) == "ok", nil
 }
 
 func (s *InstallCaddyStep) Execute(ctx context.Context, t scaffold.Target) error {

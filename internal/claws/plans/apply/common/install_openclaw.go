@@ -36,13 +36,13 @@ func (s *InstallOpenclawStep) Check(ctx context.Context, t scaffold.Target) (boo
 	m := mp.GetMachine()
 	client, key, err := BorrowSSH(ctx, s.dial, ResolveMachineHost(ctx, m), MachineSSHPort(m), MachineAgentUser(m))
 	if err != nil {
-		return false, nil
+		return false, fmt.Errorf("dial %s: %w", m.Name, err)
 	}
 	defer ReturnSSH(ctx, key, client)
 
 	out, err := bash.RunOutput(client, `openclaw --version 2>/dev/null || echo missing`)
 	if err != nil {
-		return false, nil
+		return false, fmt.Errorf("probe openclaw on %s: %w", m.Name, err)
 	}
 	return !strings.Contains(strings.TrimSpace(out), "missing"), nil
 }

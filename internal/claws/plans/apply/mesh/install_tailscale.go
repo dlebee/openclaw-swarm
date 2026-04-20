@@ -45,15 +45,12 @@ func (s *InstallTailscaleStep) Check(ctx context.Context, t scaffold.Target) (bo
 	m := mt.Machine
 	client, key, err := common.BorrowSSH(ctx, s.dial, common.ResolveMachineHost(ctx, m), common.MachineSSHPort(m), common.MachineAgentUser(m))
 	if err != nil {
-		return false, nil
+		return false, fmt.Errorf("dial %s: %w", m.Name, err)
 	}
 	defer common.ReturnSSH(ctx, key, client)
 
 	ip := TailscaleIP(client)
-	if ip == "" {
-		return false, nil
-	}
-	return true, nil
+	return ip != "", nil
 }
 
 func (s *InstallTailscaleStep) Execute(ctx context.Context, t scaffold.Target) error {

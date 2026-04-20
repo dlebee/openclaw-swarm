@@ -37,15 +37,15 @@ func (s *EnableUnattendedUpgradesStep) Check(ctx context.Context, t scaffold.Tar
 	}
 	client, key, err := borrowSSH(ctx, s.dial, host, machineSSHPort(mt.Spec), machineBootstrapUser(mt.Spec))
 	if err != nil {
-		return false, nil
+		return false, fmt.Errorf("dial %s: %w", host, err)
 	}
 	defer returnSSH(ctx, key, client)
 
 	installed, err := apt.IsInstalled(client, "unattended-upgrades")
-	if err != nil || !installed {
-		return false, nil
+	if err != nil {
+		return false, fmt.Errorf("probe unattended-upgrades on %s: %w", host, err)
 	}
-	return true, nil
+	return installed, nil
 }
 
 func (s *EnableUnattendedUpgradesStep) Execute(ctx context.Context, t scaffold.Target) error {

@@ -32,12 +32,15 @@ func (s *EnsureModelStep) Check(ctx context.Context, t scaffold.Target) (bool, e
 	m := at.Machine
 	client, key, err := common.BorrowSSH(ctx, s.dial, common.ResolveMachineHost(ctx, m), common.MachineSSHPort(m), common.MachineAgentUser(m))
 	if err != nil {
-		return false, nil
+		return false, fmt.Errorf("dial %s: %w", m.Name, err)
 	}
 	defer common.ReturnSSH(ctx, key, client)
 
 	agent, err := FindAgent(client, at.Spec.ID)
-	if err != nil || agent == nil {
+	if err != nil {
+		return false, fmt.Errorf("find agent %q: %w", at.Spec.ID, err)
+	}
+	if agent == nil {
 		return false, nil
 	}
 	return agent.Model == at.Spec.Model.Primary, nil

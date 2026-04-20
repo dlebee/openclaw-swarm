@@ -35,17 +35,17 @@ func (s *BootstrapGatewayStep) Applicable(ctx context.Context, t scaffold.Target
 	m := gt.Machine
 	client, key, err := borrowSSH(ctx, s.dial, machineHost(ctx, m), machineSSHPort(m), machineAgentUser(m))
 	if err != nil {
-		return true, nil // host unreachable → assume not yet bootstrapped
+		return false, fmt.Errorf("dial %s: %w", m.Name, err)
 	}
 	defer returnSSH(ctx, key, client)
 
 	home, err := ResolveHome(client)
 	if err != nil {
-		return true, nil
+		return false, fmt.Errorf("resolve home on %s: %w", m.Name, err)
 	}
 	exists, err := ConfigExists(client, home)
 	if err != nil {
-		return true, nil
+		return false, fmt.Errorf("probe gateway config on %s: %w", m.Name, err)
 	}
 	return !exists, nil
 }
@@ -58,19 +58,19 @@ func (s *BootstrapGatewayStep) Check(ctx context.Context, t scaffold.Target) (bo
 	m := gt.Machine
 	client, key, err := borrowSSH(ctx, s.dial, machineHost(ctx, m), machineSSHPort(m), machineAgentUser(m))
 	if err != nil {
-		return false, nil
+		return false, fmt.Errorf("dial %s: %w", m.Name, err)
 	}
 	defer returnSSH(ctx, key, client)
 
 	home, err := ResolveHome(client)
 	if err != nil {
-		return false, nil
+		return false, fmt.Errorf("resolve home on %s: %w", m.Name, err)
 	}
 	tok, err := ReadToken(client, home)
-	if err != nil || tok == "" {
-		return false, nil
+	if err != nil {
+		return false, fmt.Errorf("read gateway token on %s: %w", m.Name, err)
 	}
-	return true, nil
+	return tok != "", nil
 }
 
 // Execute runs the non-interactive onboarding command with --install-daemon.

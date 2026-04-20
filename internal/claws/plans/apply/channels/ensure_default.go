@@ -59,13 +59,16 @@ func (s *EnsureDefaultStep) Check(ctx context.Context, t scaffold.Target) (bool,
 	m := ct.Machine
 	client, key, err := common.BorrowSSH(ctx, s.dial, common.ResolveMachineHost(ctx, m), common.MachineSSHPort(m), common.MachineAgentUser(m))
 	if err != nil {
-		return false, nil
+		return false, fmt.Errorf("dial %s: %w", m.Name, err)
 	}
 	defer common.ReturnSSH(ctx, key, client)
 
 	for kind, wantName := range desiredDefaults(ct.Channels) {
 		current, err := ReadDefaultAccount(client, kind)
-		if err != nil || current != wantName {
+		if err != nil {
+			return false, fmt.Errorf("read default account %s on %s: %w", kind, m.Name, err)
+		}
+		if current != wantName {
 			return false, nil
 		}
 	}

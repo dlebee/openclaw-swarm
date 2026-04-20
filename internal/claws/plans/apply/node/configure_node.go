@@ -40,7 +40,7 @@ func (s *ConfigureNodeStep) Check(ctx context.Context, t scaffold.Target) (bool,
 	m := nt.Machine
 	client, key, err := common.BorrowSSH(ctx, s.dial, common.ResolveMachineHost(ctx, m), common.MachineSSHPort(m), common.MachineAgentUser(m))
 	if err != nil {
-		return false, nil
+		return false, fmt.Errorf("dial %s: %w", m.Name, err)
 	}
 	defer common.ReturnSSH(ctx, key, client)
 
@@ -51,7 +51,7 @@ func (s *ConfigureNodeStep) Check(ctx context.Context, t scaffold.Target) (bool,
 
 	currentEnv, err := systemd.ReadEnvDropIn(client, nodeUnit, true)
 	if err != nil {
-		return false, nil
+		return false, fmt.Errorf("read env drop-in on %s: %w", m.Name, err)
 	}
 	for k, v := range desiredEnv {
 		if currentEnv[k] != v {

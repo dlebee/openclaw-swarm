@@ -44,7 +44,10 @@ func (s *EnsureAgentUserStep) Applicable(_ context.Context, t scaffold.Target) (
 
 func (s *EnsureAgentUserStep) Check(ctx context.Context, t scaffold.Target) (bool, error) {
 	mt, ok := t.Payload.(*MachineTarget)
-	if !ok || mt == nil || mt.Instance == nil {
+	if !ok || mt == nil {
+		return false, nil
+	}
+	if mt.Instance == nil {
 		return false, nil
 	}
 	host := strings.TrimSpace(mt.Instance.PublicIPv4)
@@ -53,15 +56,15 @@ func (s *EnsureAgentUserStep) Check(ctx context.Context, t scaffold.Target) (boo
 	}
 	client, key, err := s.borrowSSH(ctx, host, sshPort(mt.Spec), bootstrapLoginUser(mt.Spec))
 	if err != nil {
-		return false, nil
+		return false, fmt.Errorf("dial %s: %w", host, err)
 	}
 	defer s.returnSSH(ctx, key, client)
 
 	exists, err := user.Exists(client, mt.Spec.AgentUser)
-	if err != nil || !exists {
-		return false, nil
+	if err != nil {
+		return false, fmt.Errorf("user.Exists on %s: %w", host, err)
 	}
-	return true, nil
+	return exists, nil
 }
 
 func (s *EnsureAgentUserStep) Execute(ctx context.Context, t scaffold.Target) error {

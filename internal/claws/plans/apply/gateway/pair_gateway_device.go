@@ -44,13 +44,13 @@ func (s *PairGatewayDeviceStep) Check(ctx context.Context, t scaffold.Target) (b
 	m := gt.Machine
 	client, key, err := borrowSSH(ctx, s.dial, machineHost(ctx, m), machineSSHPort(m), machineAgentUser(m))
 	if err != nil {
-		return false, nil
+		return false, fmt.Errorf("dial %s: %w", m.Name, err)
 	}
 	defer returnSSH(ctx, key, client)
 
 	dl, err := ListDevices(client)
 	if err != nil {
-		return false, nil
+		return false, fmt.Errorf("list devices on %s: %w", m.Name, err)
 	}
 	return HasPairedLocalDevice(dl), nil
 }

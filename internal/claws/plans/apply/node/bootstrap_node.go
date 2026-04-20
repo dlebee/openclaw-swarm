@@ -35,13 +35,18 @@ func (s *BootstrapNodeStep) Applicable(ctx context.Context, t scaffold.Target) (
 	m := nt.Machine
 	client, key, err := common.BorrowSSH(ctx, s.dial, common.ResolveMachineHost(ctx, m), common.MachineSSHPort(m), common.MachineAgentUser(m))
 	if err != nil {
-		return true, nil // host unreachable → assume not yet bootstrapped
+		// Host unreachable is an error, not a silent "applicable" verdict.
+		// The probe UI should render "applicable: dial %s" rather than
+		// lie about the install status.
+		return false, fmt.Errorf("dial %s: %w", m.Name, err)
 	}
 	defer common.ReturnSSH(ctx, key, client)
 
-	// Check if the systemd unit exists (written by `openclaw node install`).
 	out, err := bash.RunOutput(client, `test -f ~/.config/systemd/user/openclaw-node.service && echo exists || echo missing`)
-	if err != nil || strings.TrimSpace(out) == "missing" {
+	if err != nil {
+		return false, fmt.Errorf("probe node unit on %s: %w", m.Name, err)
+	}
+	if strings.TrimSpace(out) == "missing" {
 		return true, nil
 	}
 	return false, nil // unit exists → already installed
@@ -52,15 +57,15 @@ func (s *BootstrapNodeStep) Check(ctx context.Context, t scaffold.Target) (bool,
 	m := nt.Machine
 	client, key, err := common.BorrowSSH(ctx, s.dial, common.ResolveMachineHost(ctx, m), common.MachineSSHPort(m), common.MachineAgentUser(m))
 	if err != nil {
-		return false, nil
+		return false, fmt.Errorf("dial %s: %w", m.Name, err)
 	}
 	defer common.ReturnSSH(ctx, key, client)
 
 	out, err := bash.RunOutput(client, `test -f ~/.config/systemd/user/openclaw-node.service && echo exists || echo missing`)
-	if err != nil || strings.TrimSpace(out) == "missing" {
-		return false, nil
+	if err != nil {
+		return false, fmt.Errorf("probe node unit on %s: %w", m.Name, err)
 	}
-	return true, nil
+	return strings.TrimSpace(out) != "missing", nil
 }
 
 func (s *BootstrapNodeStep) Execute(ctx context.Context, t scaffold.Target) error {

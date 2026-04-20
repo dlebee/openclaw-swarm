@@ -46,15 +46,15 @@ func (s *EnableFail2banStep) Check(ctx context.Context, t scaffold.Target) (bool
 	}
 	client, key, err := borrowSSH(ctx, s.dial, host, machineSSHPort(mt.Spec), machineBootstrapUser(mt.Spec))
 	if err != nil {
-		return false, nil
+		return false, fmt.Errorf("dial %s: %w", host, err)
 	}
 	defer returnSSH(ctx, key, client)
 
 	active, err := systemd.IsActive(client, "fail2ban", false)
-	if err != nil || !active {
-		return false, nil
+	if err != nil {
+		return false, fmt.Errorf("probe fail2ban on %s: %w", host, err)
 	}
-	return true, nil
+	return active, nil
 }
 
 func (s *EnableFail2banStep) Execute(ctx context.Context, t scaffold.Target) error {

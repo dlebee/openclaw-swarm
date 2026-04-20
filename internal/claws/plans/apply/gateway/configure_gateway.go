@@ -41,17 +41,17 @@ func (s *ConfigureGatewayStep) Check(ctx context.Context, t scaffold.Target) (bo
 	m := gt.Machine
 	client, key, err := borrowSSH(ctx, s.dial, machineHost(ctx, m), machineSSHPort(m), machineAgentUser(m))
 	if err != nil {
-		return false, nil
+		return false, fmt.Errorf("dial %s: %w", m.Name, err)
 	}
 	defer returnSSH(ctx, key, client)
 
 	currentMode, err := ReadConfigValue(client, "gateway.mode")
 	if err != nil {
-		return false, nil
+		return false, fmt.Errorf("read gateway.mode on %s: %w", m.Name, err)
 	}
 	currentBind, err := ReadConfigValue(client, "gateway.bind")
 	if err != nil {
-		return false, nil
+		return false, fmt.Errorf("read gateway.bind on %s: %w", m.Name, err)
 	}
 
 	desiredBind := DesiredBind(gt.Spec)
@@ -62,7 +62,7 @@ func (s *ConfigureGatewayStep) Check(ctx context.Context, t scaffold.Target) (bo
 	desiredEnv := gatewayEnv(gt.Spec)
 	currentEnv, err := systemd.ReadEnvDropIn(client, gatewayUnit, true)
 	if err != nil {
-		return false, nil
+		return false, fmt.Errorf("read env drop-in on %s: %w", m.Name, err)
 	}
 	for k, v := range desiredEnv {
 		if currentEnv[k] != v {

@@ -38,13 +38,13 @@ func (s *ConfigureBindingsStep) Check(ctx context.Context, t scaffold.Target) (b
 	m := at.Machine
 	client, key, err := common.BorrowSSH(ctx, s.dial, common.ResolveMachineHost(ctx, m), common.MachineSSHPort(m), common.MachineAgentUser(m))
 	if err != nil {
-		return false, nil
+		return false, fmt.Errorf("dial %s: %w", m.Name, err)
 	}
 	defer common.ReturnSSH(ctx, key, client)
 
 	current, err := ListBindings(client, at.Spec.ID)
 	if err != nil {
-		return false, nil
+		return false, fmt.Errorf("list bindings on %s: %w", m.Name, err)
 	}
 
 	toAdd, toRemove := diffBindings(current, at.Spec.Bindings)

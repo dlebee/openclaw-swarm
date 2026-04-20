@@ -35,13 +35,16 @@ func (s *InstallPackagesStep) Check(ctx context.Context, t scaffold.Target) (boo
 	}
 	client, key, err := borrowSSH(ctx, s.dial, host, machineSSHPort(mt.Spec), machineBootstrapUser(mt.Spec))
 	if err != nil {
-		return false, nil
+		return false, fmt.Errorf("dial %s: %w", host, err)
 	}
 	defer returnSSH(ctx, key, client)
 
 	for _, pkg := range securityPackages {
 		installed, err := apt.IsInstalled(client, pkg)
-		if err != nil || !installed {
+		if err != nil {
+			return false, fmt.Errorf("probe %s on %s: %w", pkg, host, err)
+		}
+		if !installed {
 			return false, nil
 		}
 	}

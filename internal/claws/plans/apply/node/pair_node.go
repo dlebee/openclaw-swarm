@@ -33,13 +33,13 @@ func (s *PairNodeStep) Check(ctx context.Context, t scaffold.Target) (bool, erro
 	gwMach := nt.GWMach
 	client, key, err := common.BorrowSSH(ctx, s.dial, common.ResolveMachineHost(ctx, gwMach), common.MachineSSHPort(gwMach), common.MachineAgentUser(gwMach))
 	if err != nil {
-		return false, nil
+		return false, fmt.Errorf("dial gateway %s: %w", gwMach.Name, err)
 	}
 	defer common.ReturnSSH(ctx, key, client)
 
 	dl, err := gwService.ListDevices(client)
 	if err != nil {
-		return false, nil
+		return false, fmt.Errorf("list devices on %s: %w", gwMach.Name, err)
 	}
 	return isNodePaired(dl, nt.Spec.Name), nil
 }

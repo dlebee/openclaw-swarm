@@ -35,15 +35,15 @@ func (s *EnableUFWStep) Check(ctx context.Context, t scaffold.Target) (bool, err
 	}
 	client, key, err := borrowSSH(ctx, s.dial, host, machineSSHPort(mt.Spec), machineBootstrapUser(mt.Spec))
 	if err != nil {
-		return false, nil
+		return false, fmt.Errorf("dial %s: %w", host, err)
 	}
 	defer returnSSH(ctx, key, client)
 
 	active, err := ufw.IsActive(client)
-	if err != nil || !active {
-		return false, nil
+	if err != nil {
+		return false, fmt.Errorf("probe ufw on %s: %w", host, err)
 	}
-	return true, nil
+	return active, nil
 }
 
 func (s *EnableUFWStep) Execute(ctx context.Context, t scaffold.Target) error {

@@ -69,7 +69,15 @@ func (s *WaitCloudInitStep) Applicable(_ context.Context, t scaffold.Target) (bo
 // re-running it is never wrong.
 func (s *WaitCloudInitStep) Check(ctx context.Context, t scaffold.Target) (bool, error) {
 	mt, ok := t.Payload.(*MachineTarget)
-	if !ok || mt == nil || mt.Instance == nil {
+	if !ok || mt == nil {
+		return false, nil
+	}
+	// No instance yet → unsatisfied, not an error. Applicable-style: a
+	// downstream phase hasn't created the machine, so there's nothing to
+	// probe. This is the ONLY remaining "false, nil on nil data" branch:
+	// every other failure is propagated as an error so the probe UI can
+	// render "check: ..." instead of lying as "will execute".
+	if mt.Instance == nil {
 		return false, nil
 	}
 	host := strings.TrimSpace(mt.Instance.PublicIPv4)
@@ -78,13 +86,13 @@ func (s *WaitCloudInitStep) Check(ctx context.Context, t scaffold.Target) (bool,
 	}
 	client, key, err := s.borrowSSH(ctx, host, sshPort(mt.Spec), bootstrapLoginUser(mt.Spec))
 	if err != nil {
-		return false, nil
+		return false, fmt.Errorf("dial %s: %w", host, err)
 	}
 	defer s.returnSSH(ctx, key, client)
 
 	present, err := cloudinit.Has(client)
 	if err != nil {
-		return false, nil
+		return false, fmt.Errorf("detect cloud-init on %s: %w", host, err)
 	}
 	return !present, nil
 }

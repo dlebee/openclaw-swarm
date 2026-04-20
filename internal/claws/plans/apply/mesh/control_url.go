@@ -30,9 +30,25 @@ func (*ResolveControlURLStep) Applicable(_ context.Context, t scaffold.Target) (
 	return ok && mt.IsGatewayHost && mt.Gateway != nil, nil
 }
 
+// Check implements scaffold.Step — asks the read-through resolver whether
+// a control URL is computable right now. This is intentionally NOT a
+// memo-only lookup: if it were, a cold process with an already-converged
+// gateway would always report "will execute", because the plan cache only
+// lives for the duration of a single run.
+//
+// getOrResolveControlURL is a Resolve*() helper per
+// .cursor/rules/plan-checks-are-pure.mdc: caching is a pure optimization
+// (cold == hot), not a side channel to communicate with other steps.
 func (s *ResolveControlURLStep) Check(ctx context.Context, t scaffold.Target) (bool, error) {
-	_, ok := scaffold.PlanCacheGet(ctx, CacheKeyControlURL)
-	return ok, nil
+	mt, ok := t.Payload.(*MeshTarget)
+	if !ok || mt == nil || mt.Gateway == nil {
+		return false, nil
+	}
+	url, err := getOrResolveControlURL(ctx, s.dial, mt)
+	if err != nil {
+		return false, err
+	}
+	return url != "", nil
 }
 
 func (s *ResolveControlURLStep) Execute(ctx context.Context, t scaffold.Target) error {
