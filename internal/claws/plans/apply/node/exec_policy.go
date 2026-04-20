@@ -84,7 +84,7 @@ func (s *ExecPolicyStep) Execute(ctx context.Context, t scaffold.Target) error {
 		return nil
 	}
 
-	script := fmt.Sprintf(`openclaw exec-policy set %s`, strings.Join(args, " "))
+	script := common.OpenclawCLIPreamble() + fmt.Sprintf(`openclaw exec-policy set %s`, strings.Join(args, " "))
 	out, err := bash.RunOutput(client, script)
 	if err != nil {
 		return fmt.Errorf("exec-policy: %w\n%s", err, out)
@@ -118,11 +118,11 @@ func (s *ExecPolicyStep) Verify(ctx context.Context, t scaffold.Target) error {
 }
 
 func readExecPolicy(client *xssh.Client) (security, ask string) {
-	secOut, err := bash.RunOutput(client, `openclaw config get tools.exec.security 2>/dev/null || echo ""`)
+	secOut, err := bash.RunOutput(client, common.OpenclawCLIPreamble()+`openclaw config get tools.exec.security 2>/dev/null || echo ""`)
 	if err == nil {
 		security = strings.TrimSpace(secOut)
 	}
-	askOut, err := bash.RunOutput(client, `openclaw config get tools.exec.ask 2>/dev/null || echo ""`)
+	askOut, err := bash.RunOutput(client, common.OpenclawCLIPreamble()+`openclaw config get tools.exec.ask 2>/dev/null || echo ""`)
 	if err == nil {
 		ask = strings.TrimSpace(askOut)
 	}

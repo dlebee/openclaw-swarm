@@ -65,7 +65,7 @@ func (s *InstallNodejsStep) Execute(ctx context.Context, t scaffold.Target) erro
 
 	script := `set -euo pipefail
 if ! command -v node >/dev/null 2>&1; then
-  curl -fsSL https://deb.nodesource.com/setup_22.x | sudo bash -
+  curl -fsSL --http1.1 --retry 5 --retry-all-errors --retry-delay 3 https://deb.nodesource.com/setup_22.x | sudo bash -
 fi
 export DEBIAN_FRONTEND=noninteractive
 sudo apt-get install -y -qq nodejs
@@ -88,7 +88,11 @@ func (s *InstallNodejsStep) Verify(ctx context.Context, t scaffold.Target) error
 		return fmt.Errorf("install-nodejs verify: target %q does not provide a machine", t.ID)
 	}
 	m := mp.GetMachine()
-	client, key, err := BorrowSSH(ctx, s.dial, ResolveMachineHost(ctx, m), MachineSSHPort(m), MachineAgentUser(m))
+	// The nodesource setup script + apt install often trip needrestart,
+	// which restarts sshd mid-session. Retry the dial so a single SYN
+	// timeout doesn't fail the phase — same precedent as
+	// InstallTailscaleStep.Verify.
+	client, key, err := BorrowSSHWithRetry(ctx, s.dial, ResolveMachineHost(ctx, m), MachineSSHPort(m), MachineAgentUser(m))
 	if err != nil {
 		return fmt.Errorf("install-nodejs verify: dial: %w", err)
 	}

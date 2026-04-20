@@ -92,14 +92,19 @@ type Options struct {
 // AddPhases appends one scaffold phase per automation to plan. Pass manual=true
 // to include only manual automations (claws automations apply), or manual=false
 // to include only non-manual ones (injected into claws apply).
-func AddPhases(p *scaffold.Plan, automations []manifestdata.Automation, opts Options, manual bool) {
+// It returns the phase names actually appended (skips empty automations).
+func AddPhases(p *scaffold.Plan, automations []manifestdata.Automation, opts Options, manual bool) []string {
 	mtByName := indexMachineTargets(opts.MachineTargets)
+	var added []string
 	for _, auto := range automations {
 		if auto.Manual != manual {
 			continue
 		}
-		addAutomationPhase(p, auto, mtByName, opts)
+		if addAutomationPhase(p, auto, mtByName, opts) {
+			added = append(added, auto.Name)
+		}
 	}
+	return added
 }
 
 // AddPhasesFiltered is like AddPhases but only includes automations whose
@@ -118,17 +123,24 @@ func AddPhasesFiltered(p *scaffold.Plan, automations []manifestdata.Automation, 
 	}
 }
 
-func addAutomationPhase(p *scaffold.Plan, auto manifestdata.Automation, mtByName map[string]*provisioning.MachineTarget, opts Options) {
+func addAutomationPhase(p *scaffold.Plan, auto manifestdata.Automation, mtByName map[string]*provisioning.MachineTarget, opts Options) bool {
 	targets := buildTargets(auto, mtByName)
 	if len(targets) == 0 || len(auto.Steps) == 0 {
-		return
+		return false
 	}
 	ph := p.AddPhase(auto.Name)
 	ph.Concurrency = effectiveConcurrency(auto)
+	// Non-manual automations probe in parallel after security; manual phases
+	// keep the default linear chain (after prior phase) so they run after
+	// injected non-manual automations unless given explicit ProbeDependsOn.
+	if !auto.Manual {
+		ph.ProbeDependsOn = []string{"security"}
+	}
 	ph.AddTargets(targets...)
 	for _, step := range auto.Steps {
 		ph.AddStep(NewDynamicStep(step, auto.RunAs, auto.Env, opts))
 	}
+	return true
 }
 
 func buildTargets(auto manifestdata.Automation, mtByName map[string]*provisioning.MachineTarget) []scaffold.Target {

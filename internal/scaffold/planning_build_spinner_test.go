@@ -5,7 +5,9 @@ import (
 	"fmt"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
+	"time"
 )
 
 type recordingProbeObserver struct {
@@ -133,6 +135,136 @@ func TestAnnotatePlanCellsWithProbeObs_AllCellsFireOnce(t *testing.T) {
 	}
 }
 
+func TestAnnotatePlanCellsWithProbeObs_IndependentPhaseProbesRunConcurrently(t *testing.T) {
+	p := New()
+
+	ph0 := p.AddPhase("root")
+	ph0.AddTargets(Target{ID: "t"})
+	ph0.AddStep(&mockStep{name: "s", applicable: true, checkSatisfied: true})
+
+	startGate := make(chan struct{})
+	barrier := make(chan struct{})
+	var concurrent int32
+	checkBlock := func(context.Context) (bool, error) {
+		<-startGate
+		atomic.AddInt32(&concurrent, 1)
+		<-barrier
+		return true, nil
+	}
+
+	phA := p.AddPhase("a")
+	phA.ProbeDependsOn = []string{"root"}
+	phA.AddTargets(Target{ID: "t"})
+	phA.AddStep(&mockStep{name: "s", applicable: true, checkFunc: checkBlock})
+
+	phB := p.AddPhase("b")
+	phB.ProbeDependsOn = []string{"root"}
+	phB.AddTargets(Target{ID: "t"})
+	phB.AddStep(&mockStep{name: "s", applicable: true, checkFunc: checkBlock})
+
+	ex, err := p.Build()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	ctx := context.Background()
+	errCh := make(chan error, 1)
+	go func() {
+		_, err := ex.DescribeStyledWithHintsObs(ctx, 80, PlanDisplayHints{}, ProbeNoop{})
+		errCh <- err
+	}()
+
+	close(startGate)
+	deadline := time.After(2 * time.Second)
+	for atomic.LoadInt32(&concurrent) < 2 {
+		select {
+		case <-deadline:
+			t.Fatalf("timed out waiting for concurrent phase probes (got %d)", concurrent)
+		default:
+			time.Sleep(1 * time.Millisecond)
+		}
+	}
+	close(barrier)
+
+	if err := <-errCh; err != nil {
+		t.Fatalf("describe: %v", err)
+	}
+}
+
+func TestAnnotatePlanCellsWithProbeObs_ProbeCycleReturnsError(t *testing.T) {
+	p := New()
+	phA := p.AddPhase("a")
+	phA.AddTargets(Target{ID: "t"})
+	phA.AddStep(&mockStep{name: "s", applicable: true})
+	phA.ProbeDependsOn = []string{"c"}
+
+	phB := p.AddPhase("b")
+	phB.AddTargets(Target{ID: "t"})
+	phB.AddStep(&mockStep{name: "s", applicable: true})
+	phB.ProbeDependsOn = []string{"a"}
+
+	phC := p.AddPhase("c")
+	phC.AddTargets(Target{ID: "t"})
+	phC.AddStep(&mockStep{name: "s", applicable: true})
+	phC.ProbeDependsOn = []string{"b"}
+
+	ex, err := p.Build()
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = ex.DescribeStyledWithHintsObs(context.Background(), 80, PlanDisplayHints{}, ProbeNoop{})
+	if err == nil {
+		t.Fatal("expected probe dependency cycle error")
+	}
+	if !strings.Contains(err.Error(), "cycle") {
+		t.Fatalf("error should mention cycle: %v", err)
+	}
+}
+
+func TestAnnotatePlanCellsWithProbeObs_ParallelProbeTargets(t *testing.T) {
+	p := New()
+	ph := p.AddPhase("phase")
+	ph.ProbeConcurrency = 4
+	for i := 0; i < 4; i++ {
+		ph.AddTargets(Target{ID: fmt.Sprintf("t%d", i)})
+	}
+	barrier := make(chan struct{})
+	var concurrent int32
+	checkBlock := func(context.Context) (bool, error) {
+		atomic.AddInt32(&concurrent, 1)
+		<-barrier
+		return true, nil
+	}
+	ph.AddStep(&mockStep{name: "s1", applicable: true, checkFunc: checkBlock})
+
+	ex, err := p.Build()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	ctx := context.Background()
+	errCh := make(chan error, 1)
+	go func() {
+		_, err := ex.DescribeStyledWithHintsObs(ctx, 80, PlanDisplayHints{}, ProbeNoop{})
+		errCh <- err
+	}()
+
+	deadline := time.After(2 * time.Second)
+	for atomic.LoadInt32(&concurrent) < 4 {
+		select {
+		case <-deadline:
+			t.Fatalf("timed out waiting for 4 concurrent target probes (got %d)", concurrent)
+		default:
+			time.Sleep(1 * time.Millisecond)
+		}
+	}
+	close(barrier)
+
+	if err := <-errCh; err != nil {
+		t.Fatalf("describe: %v", err)
+	}
+}
+
 func TestAnnotatePlanCellsWithProbeObs_ProbesTargetsSequentially(t *testing.T) {
 	const nTargets = 4
 
@@ -207,7 +339,7 @@ func TestProbeCellCount_ExcludesFilteredPhases(t *testing.T) {
 // --- Tea model tests -------------------------------------------------------
 
 func TestPlanProbeModel_TracksInFlightAndCompleted(t *testing.T) {
-	m := newPlanProbeModel(3)
+	m := newPlanProbeModel(3, nil)
 
 	m.Update(probeCellStartMsg{phase: "p", targetID: "a", step: "s1", seq: 1})
 	m.Update(probeCellStartMsg{phase: "p", targetID: "b", step: "s1", seq: 2})
@@ -236,7 +368,7 @@ func TestPlanProbeModel_TracksInFlightAndCompleted(t *testing.T) {
 }
 
 func TestPlanProbeModel_InflightStableOrder(t *testing.T) {
-	m := newPlanProbeModel(5)
+	m := newPlanProbeModel(5, nil)
 	m.Update(probeCellStartMsg{phase: "p", targetID: "alpha", step: "s1", seq: 1})
 	m.Update(probeCellStartMsg{phase: "p", targetID: "bravo", step: "s1", seq: 2})
 	m.Update(probeCellStartMsg{phase: "p", targetID: "charlie", step: "s1", seq: 3})
@@ -254,7 +386,7 @@ func TestPlanProbeModel_InflightStableOrder(t *testing.T) {
 }
 
 func TestPlanProbeModel_FinishSnapsToTotal(t *testing.T) {
-	m := newPlanProbeModel(5)
+	m := newPlanProbeModel(5, nil)
 	m.Update(probeCellStartMsg{phase: "a", targetID: "t", step: "s", seq: 1})
 	m.Update(probeFinishedMsg{tree: "TREE", err: nil})
 	if !m.done {
@@ -272,7 +404,7 @@ func TestPlanProbeModel_FinishSnapsToTotal(t *testing.T) {
 }
 
 func TestPlanProbeModel_TruncatesLongInflight(t *testing.T) {
-	m := newPlanProbeModel(100)
+	m := newPlanProbeModel(100, nil)
 	for i := 0; i < maxInflightRows+3; i++ {
 		m.Update(probeCellStartMsg{
 			phase:    "p",

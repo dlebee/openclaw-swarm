@@ -70,7 +70,7 @@ machines:
     type: multipass
     cpus: 2
     memory: 2G
-    disk: 8G
+    disk: 20G
     bootstrap_user: root
     agent_user: agent
 

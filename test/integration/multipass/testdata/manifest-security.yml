@@ -18,7 +18,7 @@ machines:
     type: multipass
     cpus: 1
     memory: 1G
-    disk: 5G
+    disk: 20G
     bootstrap_user: root
     agent_user: agent
 
@@ -26,6 +26,6 @@ machines:
     type: multipass
     cpus: 1
     memory: 1G
-    disk: 5G
+    disk: 20G
     bootstrap_user: root
     agent_user: agent

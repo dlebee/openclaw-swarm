@@ -29,6 +29,12 @@ type Options struct {
 	Machines []manifestdata.Machine
 	Gateways []manifestdata.Gateway
 	Nodes    []manifestdata.Node
+
+	// GatewayProbeDependsOn names phases whose probe must finish before the
+	// mesh control-plane phase probes (mesh-gateway, or the single noop mesh
+	// phase). mesh-join always probes after mesh-gateway. Execute order is
+	// unchanged; this only affects prepared-plan probing parallelism.
+	GatewayProbeDependsOn []string
 }
 
 // BuildMeshTargets creates scaffold targets for all machines that participate
@@ -127,6 +133,9 @@ func AddPhase(p *scaffold.Plan, machineTargets []scaffold.Target, opts Options) 
 
 	if len(meshTargets) == 0 {
 		ph := p.AddPhase("mesh")
+		if len(opts.GatewayProbeDependsOn) > 0 {
+			ph.ProbeDependsOn = append([]string(nil), opts.GatewayProbeDependsOn...)
+		}
 		ph.AddTargets(machineTargets...)
 		ph.AddStep(scaffold.NoopStep{StepName: "configure-mesh"})
 		return ph
@@ -140,6 +149,9 @@ func AddPhase(p *scaffold.Plan, machineTargets []scaffold.Target, opts Options) 
 		}
 	}
 	phGW := p.AddPhase("mesh-gateway")
+	if len(opts.GatewayProbeDependsOn) > 0 {
+		phGW.ProbeDependsOn = append([]string(nil), opts.GatewayProbeDependsOn...)
+	}
 	phGW.AddTargets(gatewayTargets...)
 	phGW.AddStep(NewResolveControlURLStep(opts))
 	phGW.AddStep(NewInstallHeadscaleStep(opts))
@@ -148,6 +160,7 @@ func AddPhase(p *scaffold.Plan, machineTargets []scaffold.Target, opts Options) 
 
 	// Phase 2: join all mesh targets (gateway + nodes).
 	phJoin := p.AddPhase("mesh-join")
+	phJoin.ProbeDependsOn = []string{"mesh-gateway"}
 	phJoin.AddTargets(meshTargets...)
 	phJoin.AddStep(NewInstallTailscaleStep(opts))
 	return phJoin

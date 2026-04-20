@@ -19,7 +19,7 @@ type ChannelAccounts map[string][]string
 // ListChannelAccounts runs `openclaw channels list --json` and returns
 // a map of kind -> []accountName.
 func ListChannelAccounts(client *xssh.Client) (ChannelAccounts, error) {
-	out, err := bash.RunOutput(client, `openclaw channels list --json 2>/dev/null || echo "{}"`)
+	out, err := bash.RunOutput(client, common.OpenclawCLIPreamble()+`openclaw channels list --json 2>/dev/null || echo "{}"`)
 	if err != nil {
 		return ChannelAccounts{}, nil
 	}
@@ -50,7 +50,7 @@ func AccountExists(accounts ChannelAccounts, kind, name string) bool {
 // ReadDefaultAccount reads `channels.<kind>.defaultAccount` from the remote config.
 func ReadDefaultAccount(client *xssh.Client, kind string) (string, error) {
 	key := fmt.Sprintf("channels.%s.defaultAccount", kind)
-	out, err := bash.RunOutput(client, fmt.Sprintf(
+	out, err := bash.RunOutput(client, common.OpenclawCLIPreamble()+fmt.Sprintf(
 		`openclaw config get %s 2>/dev/null || echo ""`, key))
 	if err != nil {
 		return "", nil

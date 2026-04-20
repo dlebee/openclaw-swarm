@@ -88,23 +88,25 @@ func probeKey(phase, targetID, step string) string {
 }
 
 type planProbeModel struct {
-	spinner    spinner.Model
-	total      int
-	completed  int
-	inflight   map[string]probeInflight
-	treeOutput string
-	probeErr   error
-	done       bool
+	spinner     spinner.Model
+	total       int
+	completed   int
+	inflight    map[string]probeInflight
+	treeOutput  string
+	probeErr    error
+	done        bool
+	cancelProbe context.CancelFunc // stops Applicable+Check (key or shared ctx)
 }
 
-func newPlanProbeModel(total int) *planProbeModel {
+func newPlanProbeModel(total int, cancelProbe context.CancelFunc) *planProbeModel {
 	return &planProbeModel{
 		spinner: spinner.New(
 			spinner.WithSpinner(spinner.MiniDot),
 			spinner.WithStyle(lipgloss.NewStyle().Foreground(lipgloss.Color("205"))),
 		),
-		total:    total,
-		inflight: make(map[string]probeInflight),
+		total:       total,
+		inflight:    make(map[string]probeInflight),
+		cancelProbe: cancelProbe,
 	}
 }
 
@@ -114,6 +116,15 @@ func (m *planProbeModel) Init() tea.Cmd {
 
 func (m *planProbeModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
+	case tea.KeyMsg:
+		switch msg.String() {
+		case "ctrl+c", "q", "esc":
+			if !m.done && m.cancelProbe != nil {
+				m.cancelProbe()
+			}
+			return m, nil
+		}
+
 	case probeFinishedMsg:
 		m.done = true
 		m.treeOutput = msg.tree
@@ -203,6 +214,7 @@ func (m *planProbeModel) View() string {
 			rows = append(rows, "  "+styleProbeSep.Render(fmt.Sprintf("… +%d more", truncated)))
 		}
 	}
+	rows = append(rows, "  "+styleProbeCounter.Render("ctrl+c · esc · q — cancel probing"))
 	return lipgloss.JoinVertical(lipgloss.Left, rows...)
 }
 
@@ -227,12 +239,18 @@ func runPlanProbeWithSpinner(ctx context.Context, exec *ExecutablePlan, width in
 		return exec.DescribeStyledWithHints(ctx, width, h)
 	}
 
-	m := newPlanProbeModel(exec.ProbeCellCount(h))
-	prog := tea.NewProgram(m, tea.WithOutput(os.Stderr))
+	probeCtx, probeCancel := context.WithCancel(ctx)
+	defer probeCancel()
+
+	m := newPlanProbeModel(exec.ProbeCellCount(h), probeCancel)
+	prog := tea.NewProgram(m,
+		tea.WithOutput(os.Stderr),
+		tea.WithContext(probeCtx),
+	)
 
 	go func() {
 		obs := &spinnerProbeObserver{send: prog.Send}
-		tree, err := exec.DescribeStyledWithHintsObs(ctx, width, h, obs)
+		tree, err := exec.DescribeStyledWithHintsObs(probeCtx, width, h, obs)
 		prog.Send(probeFinishedMsg{tree: tree, err: err})
 	}()
 

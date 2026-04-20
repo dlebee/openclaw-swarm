@@ -13,6 +13,10 @@ import (
 // docs/issues/03-agent-phase-concurrency.md.
 const maxAgentConcurrency = 1
 
+// maxAgentProbeConcurrency caps parallel Applicable+Check per target during
+// prepared-plan probing only. Execute still uses maxAgentConcurrency.
+const maxAgentProbeConcurrency = 5
+
 // SSHDialFunc opens an SSH client to a remote host.
 type SSHDialFunc = common.SSHDialFunc
 
@@ -59,6 +63,14 @@ type Options struct {
 func AddPhase(p *scaffold.Plan, targets []scaffold.Target, opts Options) *scaffold.Phase {
 	ph := p.AddPhase("agents")
 	ph.Concurrency = maxAgentConcurrency
+	nProbe := len(targets)
+	if nProbe < 1 {
+		nProbe = 1
+	}
+	if nProbe > maxAgentProbeConcurrency {
+		nProbe = maxAgentProbeConcurrency
+	}
+	ph.ProbeConcurrency = nProbe
 	ph.AddTargets(targets...)
 	ph.AddStep(NewAddAgentStep(opts))
 	ph.AddStep(NewEnsureModelStep(opts))

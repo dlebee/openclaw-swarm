@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/gluwa/openclaw-swarm2/internal/claws/plans/apply/common"
 	manifestdata "github.com/gluwa/openclaw-swarm2/internal/manifests/data"
 	"github.com/gluwa/openclaw-swarm2/internal/platformutil/bash"
 	"github.com/gluwa/openclaw-swarm2/internal/platformutil/sshfile"
@@ -46,13 +47,9 @@ func NeedsInsecureWS(gw manifestdata.Gateway) bool {
 	return NeedsLANBind(gw)
 }
 
-// NodeCompileCacheDir is the path openclaw recommends for Node's V8 module
-// compile cache (see openclaw/docs/vps.md, openclaw/docs/platforms/raspberry-pi.md
-// and openclaw/src/commands/doctor-platform-notes.ts). /var/tmp is preferred
-// over /tmp so the cache survives reboots and warms repeated CLI invocations
-// reliably; `openclaw doctor` actively nags when this is unset or lives under
-// /tmp.
-const NodeCompileCacheDir = "/var/tmp/openclaw-compile-cache"
+// NodeCompileCacheDir is an alias for [common.OpenclawNodeCompileCacheDir]
+// (systemd drop-ins and EnsureNodeCompileCacheDir).
+const NodeCompileCacheDir = common.OpenclawNodeCompileCacheDir
 
 // StartupOptimEnv returns the environment variables openclaw recommends for
 // fastest CLI startup on hosts that repeatedly respawn short-lived node
@@ -198,7 +195,7 @@ func StartAndWait(ctx context.Context, client *xssh.Client, userMode bool) error
 // ReadConfigValue reads a single openclaw config value from the remote host.
 // Returns the trimmed output of `openclaw config get <key>`, or "" on error.
 func ReadConfigValue(client *xssh.Client, key string) (string, error) {
-	out, err := bash.RunOutput(client, fmt.Sprintf(
+	out, err := bash.RunOutput(client, common.OpenclawCLIPreamble()+fmt.Sprintf(
 		`openclaw config get %s 2>/dev/null || echo "__missing__"`, key))
 	if err != nil {
 		return "", err
@@ -264,7 +261,7 @@ func ListDevices(client *xssh.Client) (*DeviceList, error) {
 // which we explicitly suppress with 2>/dev/null), or the JSON was
 // unparseable.
 func listDevicesViaCLI(client *xssh.Client) (*DeviceList, bool) {
-	out, err := bash.RunOutput(client, `openclaw devices list --json 2>/dev/null`)
+	out, err := bash.RunOutput(client, common.OpenclawCLIPreamble()+`openclaw devices list --json 2>/dev/null`)
 	if err != nil {
 		return nil, false
 	}
@@ -356,7 +353,7 @@ func HasPairedLocalDevice(dl *DeviceList) bool {
 
 // ApproveDevice approves a pending device by its requestId.
 func ApproveDevice(client *xssh.Client, requestID string) error {
-	script := fmt.Sprintf(`openclaw devices approve %q`, requestID)
+	script := common.OpenclawCLIPreamble() + fmt.Sprintf(`openclaw devices approve %q`, requestID)
 	out, err := bash.RunOutput(client, script)
 	if err != nil {
 		return fmt.Errorf("approve device %s: %w\n%s", requestID, err, out)

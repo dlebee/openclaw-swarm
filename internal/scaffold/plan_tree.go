@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/charmbracelet/lipgloss"
 	"github.com/charmbracelet/lipgloss/tree"
@@ -50,6 +51,10 @@ type annotatedCell struct {
 	seq                   int
 	kind                  cellStatusKind
 	detail                string
+	// applicableDur / checkDur are wall time for Applicable and Check during probe.
+	checkRan      bool
+	applicableDur time.Duration
+	checkDur      time.Duration
 }
 
 // planTargetSegment is one target under a phase with ordered cells (steps).
@@ -227,11 +232,46 @@ func targetRootLine(targetID string) string {
 	)
 }
 
+func formatProbeDuration(d time.Duration) string {
+	if d <= 0 {
+		return "0ms"
+	}
+	rd := d.Round(time.Millisecond)
+	if rd < time.Millisecond && d > 0 {
+		return "<1ms"
+	}
+	return rd.String()
+}
+
+func formatCheckLabel(c annotatedCell) string {
+	if c.checkRan {
+		return formatProbeDuration(c.checkDur)
+	}
+	return "—"
+}
+
+func probeTimingSuffixStyled(c annotatedCell) string {
+	if c.kind == cellStatusPhaseSkipped {
+		return ""
+	}
+	s := fmt.Sprintf("app %s  chk %s", formatProbeDuration(c.applicableDur), formatCheckLabel(c))
+	return "  " + planSubtleStyle.Render(s)
+}
+
+// StepTimingPlain returns probe timings for plain-text plan output (no ANSI).
+func StepTimingPlain(c annotatedCell) string {
+	if c.kind == cellStatusPhaseSkipped {
+		return ""
+	}
+	return fmt.Sprintf("  app %s  chk %s", formatProbeDuration(c.applicableDur), formatCheckLabel(c))
+}
+
 func stepStatusLine(c annotatedCell) string {
 	stepSt := planStepStyle.Render(stepDisplayName(c.step))
 	sep := "  "
 	tag := statusStyleForKind(c.kind).Render(cellStatusText(c))
-	return lipgloss.JoinHorizontal(lipgloss.Left, stepSt, sep, tag)
+	timing := probeTimingSuffixStyled(c)
+	return lipgloss.JoinHorizontal(lipgloss.Left, stepSt, sep, tag, timing)
 }
 
 // renderPreparedPlanTree renders probed cells as Phase → Target → step + status.

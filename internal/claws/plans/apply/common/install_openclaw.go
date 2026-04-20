@@ -44,7 +44,7 @@ func (s *InstallOpenclawStep) Check(ctx context.Context, t scaffold.Target) (boo
 	}
 	defer ReturnSSH(ctx, key, client)
 
-	out, err := bash.RunOutput(client, `openclaw --version 2>/dev/null || echo missing`)
+	out, err := bash.RunOutput(client, OpenclawCLIPreamble()+`openclaw --version 2>/dev/null || echo missing`)
 	if err != nil {
 		return false, fmt.Errorf("probe openclaw on %s: %w", m.Name, err)
 	}
@@ -77,13 +77,18 @@ func (s *InstallOpenclawStep) Verify(ctx context.Context, t scaffold.Target) err
 		return fmt.Errorf("install-openclaw verify: target %q does not provide a machine", t.ID)
 	}
 	m := mp.GetMachine()
-	client, key, err := BorrowSSH(ctx, s.dial, ResolveMachineHost(ctx, m), MachineSSHPort(m), MachineAgentUser(m))
+	// `npm install -g openclaw` often triggers a queued needrestart /
+	// unattended-upgrades pass that briefly restarts sshd, and Execute's
+	// retry already papered over that for the install itself. Verify needs
+	// the same resilience or a single post-install SYN timeout fails the
+	// phase — matches the rationale on InstallTailscaleStep.Verify.
+	client, key, err := BorrowSSHWithRetry(ctx, s.dial, ResolveMachineHost(ctx, m), MachineSSHPort(m), MachineAgentUser(m))
 	if err != nil {
 		return fmt.Errorf("install-openclaw verify: dial: %w", err)
 	}
 	defer ReturnSSH(ctx, key, client)
 
-	out, err := bash.RunOutput(client, `openclaw --version`)
+	out, err := bash.RunOutput(client, OpenclawCLIPreamble()+`openclaw --version`)
 	if err != nil {
 		return fmt.Errorf("install-openclaw verify: %w", err)
 	}

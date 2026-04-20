@@ -121,6 +121,16 @@ func TestBuild_validation(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), "no targets") {
 		t.Fatalf("expected targets error: %v", err)
 	}
+
+	p3 := New()
+	ph3 := p3.AddPhase("badprobe")
+	ph3.AddTargets(Target{ID: "t"})
+	ph3.AddStep(&mockStep{name: "s"})
+	ph3.ProbeConcurrency = -1
+	_, err = p3.Build()
+	if err == nil || !strings.Contains(err.Error(), "probe concurrency") {
+		t.Fatalf("expected probe concurrency error: %v", err)
+	}
 }
 
 func TestDescribe(t *testing.T) {

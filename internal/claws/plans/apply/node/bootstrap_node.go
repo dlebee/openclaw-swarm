@@ -123,8 +123,8 @@ func (s *BootstrapNodeStep) Execute(ctx context.Context, t scaffold.Target) erro
 	script := fmt.Sprintf(`set -euo pipefail
 export XDG_RUNTIME_DIR=/run/user/$(id -u)
 export OPENCLAW_GATEWAY_TOKEN=%q
-%sopenclaw node install --host %q --port 18789 --display-name %q --runtime node --force
-`, token, envPrefix, gwHost, nt.Spec.Name)
+%s%sopenclaw node install --host %q --port 18789 --display-name %q --runtime node --force
+`, token, common.OpenclawCLIPreamble(), envPrefix, gwHost, nt.Spec.Name)
 
 	out, err := bash.RunOutput(client, script)
 	if err != nil {

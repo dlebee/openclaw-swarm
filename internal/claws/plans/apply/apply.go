@@ -62,6 +62,7 @@ func BuildPlan(o BuildOptions) (*scaffold.Plan, error) {
 	security.AddPhase(p, targets, security.Options{
 		SSHDial: security.SSHDialFunc(o.SSHDial),
 	})
+	var nonManualAutoNames, manualAutoNames []string
 	if len(o.Manifest.Automations) > 0 {
 		resolvedEnv, err := manifestsvc.LoadEnvFile(o.ManifestPath, o.Manifest)
 		if err != nil {
@@ -74,16 +75,21 @@ func BuildPlan(o BuildOptions) (*scaffold.Plan, error) {
 			ResolvedEnv:         resolvedEnv,
 			AssumeWillProvision: true,
 		}
-		automations.AddPhases(p, o.Manifest.Automations, autoOpts, false)
+		nonManualAutoNames = automations.AddPhases(p, o.Manifest.Automations, autoOpts, false)
 		if o.IncludeManualAutomations {
-			automations.AddPhases(p, o.Manifest.Automations, autoOpts, true)
+			manualAutoNames = automations.AddPhases(p, o.Manifest.Automations, autoOpts, true)
 		}
 	}
+	meshProbeDeps := []string{"security"}
+	if n := len(nonManualAutoNames) + len(manualAutoNames); n > 0 {
+		meshProbeDeps = append(append([]string{}, nonManualAutoNames...), manualAutoNames...)
+	}
 	mesh.AddPhase(p, targets, mesh.Options{
-		SSHDial:  mesh.SSHDialFunc(o.SSHDial),
-		Machines: o.Manifest.Machines,
-		Gateways: o.Manifest.Gateways,
-		Nodes:    o.Manifest.Nodes,
+		SSHDial:               mesh.SSHDialFunc(o.SSHDial),
+		Machines:              o.Manifest.Machines,
+		Gateways:              o.Manifest.Gateways,
+		Nodes:                 o.Manifest.Nodes,
+		GatewayProbeDependsOn: meshProbeDeps,
 	})
 	if len(o.Manifest.Gateways) > 0 {
 		gwTargets := gateway.BuildGatewayTargets(o.Manifest.Gateways, o.Manifest.Machines)
@@ -102,22 +108,31 @@ func BuildPlan(o BuildOptions) (*scaffold.Plan, error) {
 			return nil, fmt.Errorf("apply plan: resolve channel tokens: %w", err)
 		}
 		if len(chTargets) > 0 {
-			channels.AddPhase(p, chTargets, channels.Options{
+			chPh := channels.AddPhase(p, chTargets, channels.Options{
 				SSHDial: channels.SSHDialFunc(o.SSHDial),
 			})
+			chPh.ProbeDependsOn = []string{"gateway"}
 		}
 	}
 	if len(o.Manifest.Nodes) > 0 {
 		nodeTargets := node.BuildNodeTargets(o.Manifest.Nodes, o.Manifest.Machines, o.Manifest.Gateways)
-		node.AddPhase(p, nodeTargets, node.Options{
+		nodePh := node.AddPhase(p, nodeTargets, node.Options{
 			SSHDial: node.SSHDialFunc(o.SSHDial),
 		})
+		if len(o.Manifest.Gateways) > 0 {
+			nodePh.ProbeDependsOn = []string{"gateway"}
+		}
 	}
 	if len(o.Manifest.Agents) > 0 {
 		agentTargets := agents.BuildAgentTargets(o.Manifest.Agents, o.Manifest.Gateways, o.Manifest.Machines)
-		agents.AddPhase(p, agentTargets, agents.Options{
+		agPh := agents.AddPhase(p, agentTargets, agents.Options{
 			SSHDial: agents.SSHDialFunc(o.SSHDial),
 		})
+		// Probe only: channels, node, and agents may run Applicable+Check in
+		// parallel after gateway. Execute order remains plan append order.
+		if len(o.Manifest.Gateways) > 0 {
+			agPh.ProbeDependsOn = []string{"gateway"}
+		}
 	}
 
 	// PreRun installs a host resolver that every non-provisioning phase

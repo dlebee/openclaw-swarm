@@ -135,7 +135,7 @@ func (s *ConfigureWorkspaceStep) Execute(ctx context.Context, t scaffold.Target)
 	}
 
 	if at.Spec.Identity != nil && at.Spec.Identity.Name != "" {
-		cmd := fmt.Sprintf(`openclaw agents set-identity --agent %q --name %q`, at.Spec.ID, at.Spec.Identity.Name)
+		cmd := common.OpenclawCLIPreamble() + fmt.Sprintf(`openclaw agents set-identity --agent %q --name %q`, at.Spec.ID, at.Spec.Identity.Name)
 		if at.Spec.Identity.Emoji != "" {
 			cmd += fmt.Sprintf(` --emoji %q`, at.Spec.Identity.Emoji)
 		}

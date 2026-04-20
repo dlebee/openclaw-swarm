@@ -85,7 +85,7 @@ func (s *AddChannelStep) Execute(ctx context.Context, t scaffold.Target) error {
 			return fmt.Errorf("add-channels: token for %s (%s) is empty", ch.Name, ch.TokenEnv)
 		}
 
-		script := fmt.Sprintf(
+		script := common.OpenclawCLIPreamble() + fmt.Sprintf(
 			`openclaw channels add --channel %s --account %q --token %q`,
 			kind, ch.Name, token)
 

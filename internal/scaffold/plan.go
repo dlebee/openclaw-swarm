@@ -56,6 +56,9 @@ func (p *Plan) Build(obs ...progress.BuildObserver) (*ExecutablePlan, error) {
 		if ph.Concurrency < 1 {
 			return nil, fmt.Errorf("scaffold: phase %q: concurrency must be >= 1", ph.Name)
 		}
+		if ph.ProbeConcurrency < 0 {
+			return nil, fmt.Errorf("scaffold: phase %q: probe concurrency must be >= 0", ph.Name)
+		}
 		if len(ph.Steps) == 0 {
 			return nil, fmt.Errorf("scaffold: phase %q has no steps", ph.Name)
 		}
@@ -71,6 +74,9 @@ func (p *Plan) Build(obs ...progress.BuildObserver) (*ExecutablePlan, error) {
 			}
 		}
 	}
-	compiled := compilePlan(p, obs)
+	compiled, err := compilePlan(p, obs)
+	if err != nil {
+		return nil, err
+	}
 	return &ExecutablePlan{compiled: compiled, preRun: p.PreRun}, nil
 }

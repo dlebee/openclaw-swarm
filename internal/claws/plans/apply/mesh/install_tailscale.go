@@ -72,8 +72,8 @@ func (s *InstallTailscaleStep) Execute(ctx context.Context, t scaffold.Target) e
 export DEBIAN_FRONTEND=noninteractive
 if ! command -v tailscale >/dev/null 2>&1; then
   mkdir -p /usr/share/keyrings
-  curl -fsSL https://pkgs.tailscale.com/stable/ubuntu/noble.noarmor.gpg | sudo tee /usr/share/keyrings/tailscale-archive-keyring.gpg >/dev/null
-  curl -fsSL https://pkgs.tailscale.com/stable/ubuntu/noble.tailscale-keyring.list | sudo tee /etc/apt/sources.list.d/tailscale.list >/dev/null
+  curl -fsSL --http1.1 --retry 5 --retry-all-errors --retry-delay 3 https://pkgs.tailscale.com/stable/ubuntu/noble.noarmor.gpg | sudo tee /usr/share/keyrings/tailscale-archive-keyring.gpg >/dev/null
+  curl -fsSL --http1.1 --retry 5 --retry-all-errors --retry-delay 3 https://pkgs.tailscale.com/stable/ubuntu/noble.tailscale-keyring.list | sudo tee /etc/apt/sources.list.d/tailscale.list >/dev/null
   sudo apt-get update -qq
   sudo apt-get install -y -qq tailscale
 fi
@@ -161,7 +161,7 @@ fi
 export DEBIAN_FRONTEND=noninteractive
 sudo ufw allow 41641/udp comment 'tailscale' >/dev/null 2>&1 || true
 %s%sif ! command -v tailscale >/dev/null 2>&1; then
-  curl -fsSL https://tailscale.com/install.sh | sh
+  curl -fsSL --http1.1 --retry 5 --retry-all-errors --retry-delay 3 https://tailscale.com/install.sh | sh
 fi
 # Ensure tailscaled is running before calling tailscale up.
 if ! sudo systemctl is-active --quiet tailscaled 2>/dev/null; then

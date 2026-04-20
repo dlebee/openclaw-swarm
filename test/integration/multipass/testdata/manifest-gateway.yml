@@ -24,8 +24,8 @@
 #   degenerates into a noop configure-mesh step. OnlyPhases in the
 #   test filters it out regardless.
 #
-# Why the machine is bumped to 2 CPU / 2 GiB / 8 GiB disk vs. the
-# other Multipass fixtures (1/1G/5G):
+# Why the machine is bumped to 2 CPU / 2 GiB / 20 GiB disk vs. the
+# smaller mesh/provisioning shapes (1/1G/20G there too now):
 #
 #   `openclaw onboard --install-daemon` runs `npm install -g
 #   openclaw`, which pulls a ~300MB node_modules tree and then
@@ -47,7 +47,7 @@ machines:
     type: multipass
     cpus: 2
     memory: 2G
-    disk: 8G
+    disk: 20G
     bootstrap_user: root
     agent_user: agent
 

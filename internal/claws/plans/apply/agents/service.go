@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/gluwa/openclaw-swarm2/internal/claws/plans/apply/common"
 	"github.com/gluwa/openclaw-swarm2/internal/platformutil/bash"
 	xssh "golang.org/x/crypto/ssh"
 )
@@ -21,7 +22,7 @@ type AgentInfo struct {
 
 // ListAgents runs `openclaw agents list --json` and parses the result.
 func ListAgents(client *xssh.Client) ([]AgentInfo, error) {
-	out, err := bash.RunOutput(client, `openclaw agents list --json 2>/dev/null || echo "[]"`)
+	out, err := bash.RunOutput(client, common.OpenclawCLIPreamble()+`openclaw agents list --json 2>/dev/null || echo "[]"`)
 	if err != nil {
 		return nil, fmt.Errorf("agents list: %w", err)
 	}
@@ -51,7 +52,7 @@ func FindAgent(client *xssh.Client, id string) (*AgentInfo, error) {
 // Returns -1 if not found. Uses `openclaw config get agents.list` to read
 // the raw list and find the position by ID.
 func AgentConfigIndex(client *xssh.Client, id string) (int, error) {
-	out, err := bash.RunOutput(client, `openclaw config get agents.list --json 2>/dev/null || echo "[]"`)
+	out, err := bash.RunOutput(client, common.OpenclawCLIPreamble()+`openclaw config get agents.list --json 2>/dev/null || echo "[]"`)
 	if err != nil {
 		return -1, fmt.Errorf("agent config index: %w", err)
 	}
@@ -88,7 +89,7 @@ type bindingMatch struct {
 
 // ListBindings runs `openclaw agents bindings --agent <id> --json` and parses the result.
 func ListBindings(client *xssh.Client, agentID string) ([]BindingInfo, error) {
-	out, err := bash.RunOutput(client, fmt.Sprintf(
+	out, err := bash.RunOutput(client, common.OpenclawCLIPreamble()+fmt.Sprintf(
 		`openclaw agents bindings --agent %q --json 2>/dev/null || echo "[]"`, agentID))
 	if err != nil {
 		return nil, fmt.Errorf("agent bindings: %w", err)

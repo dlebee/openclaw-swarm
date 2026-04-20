@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/gluwa/openclaw-swarm2/internal/claws/plans/apply/common"
 	manifestdata "github.com/gluwa/openclaw-swarm2/internal/manifests/data"
 	"github.com/gluwa/openclaw-swarm2/internal/platformutil/bash"
 	"github.com/gluwa/openclaw-swarm2/internal/platformutil/systemd"
@@ -117,8 +118,8 @@ func (s *ConfigureGatewayStep) Execute(ctx context.Context, t scaffold.Target) e
 	}
 
 	script := fmt.Sprintf(`set -euo pipefail
-openclaw config set --batch-json '%s'
-`, string(batchJSON))
+%sopenclaw config set --batch-json '%s'
+`, common.OpenclawCLIPreamble(), string(batchJSON))
 
 	out, err := bash.RunOutput(client, script)
 	if err != nil {

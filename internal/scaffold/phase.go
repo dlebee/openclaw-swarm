@@ -12,6 +12,25 @@ type Phase struct {
 	Steps       []Step
 	Concurrency int
 	Barrier     Barrier
+
+	// ProbeDependsOn names phases whose probe (Applicable+Check for every
+	// cell in that phase) must finish before this phase's probe starts.
+	//
+	// Execute and barrier ordering are unchanged: phases still run in plan
+	// append order during apply. Only the prepared-plan probe can schedule
+	// independent phases in parallel when their dependency sets allow it.
+	//
+	// nil means "depend on the single immediately preceding phase in plan
+	// order" (the first phase has no probe dependencies). A non-nil slice
+	// is used verbatim; an empty slice means this phase's probe has no
+	// dependencies (use sparingly).
+	ProbeDependsOn []string
+
+	// ProbeConcurrency caps how many targets probe concurrently
+	// (Applicable+Check). Steps for a single target still run strictly in
+	// order. Execute uses Concurrency instead; they are independent.
+	// Zero means 1 (fully sequential target probe, legacy behavior).
+	ProbeConcurrency int
 }
 
 // AddStep registers a step to run for every target in the phase.

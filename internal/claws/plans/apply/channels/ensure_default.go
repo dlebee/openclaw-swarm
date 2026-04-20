@@ -87,7 +87,7 @@ func (s *EnsureDefaultStep) Execute(ctx context.Context, t scaffold.Target) erro
 	user := common.MachineAgentUser(m)
 
 	for kind, name := range desiredDefaults(ct.Channels) {
-		script := fmt.Sprintf(`openclaw config set "channels.%s.defaultAccount" %q`, kind, name)
+		script := common.OpenclawCLIPreamble() + fmt.Sprintf(`openclaw config set "channels.%s.defaultAccount" %q`, kind, name)
 		if err := RunWithConflictAndTransientRetry(ctx, s.dial, host, port, user, script); err != nil {
 			return fmt.Errorf("ensure-default-account: %s: %w", kind, err)
 		}

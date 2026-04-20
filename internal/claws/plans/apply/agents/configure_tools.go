@@ -102,8 +102,8 @@ func (s *ConfigureToolsStep) Execute(ctx context.Context, t scaffold.Target) err
 	}
 
 	script := fmt.Sprintf(`set -euo pipefail
-openclaw config set --batch-json '%s'
-`, string(batchJSON))
+%sopenclaw config set --batch-json '%s'
+`, common.OpenclawCLIPreamble(), string(batchJSON))
 
 	out, err := bash.RunOutput(client, script)
 	if err != nil {
@@ -160,7 +160,7 @@ type remoteToolsConfig struct {
 
 func readToolsConfig(client *xssh.Client, idx int) (*remoteToolsConfig, error) {
 	key := fmt.Sprintf("agents.list[%d].tools", idx)
-	out, err := bash.RunOutput(client, fmt.Sprintf(
+	out, err := bash.RunOutput(client, common.OpenclawCLIPreamble()+fmt.Sprintf(
 		`openclaw config get %s --json 2>/dev/null || echo "{}"`, key))
 	if err != nil {
 		return nil, err
@@ -225,7 +225,7 @@ type remoteElevatedConfig struct {
 }
 
 func readElevatedConfig(client *xssh.Client) (*remoteElevatedConfig, error) {
-	out, err := bash.RunOutput(client,
+	out, err := bash.RunOutput(client, common.OpenclawCLIPreamble()+
 		`openclaw config get tools.elevated --json 2>/dev/null || echo "null"`)
 	if err != nil {
 		return nil, err

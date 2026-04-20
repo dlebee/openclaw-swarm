@@ -59,13 +59,14 @@
 #   and TestAgentsSmoke will exercise the Applicable=true branch
 #   when it's added.
 #
-# Why 2 CPUs / 2 GiB / 8 GiB disk per VM:
+# Why 2 CPUs / 2 GiB / 20 GiB disk per VM:
 #
 #   `npm install -g openclaw` + first TypeScript compile OOMs on the
 #   1 GiB/1 CPU shape that the mesh test uses, because the mesh test
 #   never runs the gateway/node phases. Here we do, so we match the
-#   channels/gateway envelope instead. 8 GiB disk easily fits apt
-#   cache + node_modules + journal + tailscale state.
+#   channels/gateway envelope instead. 20 GiB disk fits apt cache +
+#   node_modules + journal + tailscale state with margin when other
+#   Multipass tests run concurrently.
 
 prefix: claws-it-multipass-node
 
@@ -74,14 +75,14 @@ machines:
     type: multipass
     cpus: 2
     memory: 2G
-    disk: 8G
+    disk: 20G
     bootstrap_user: root
     agent_user: agent
   - name: node-host
     type: multipass
     cpus: 2
     memory: 2G
-    disk: 8G
+    disk: 20G
     bootstrap_user: root
     agent_user: agent
 

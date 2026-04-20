@@ -31,11 +31,11 @@
 # Topology (identical to manifest-cron.yml so phase-specific assertions
 # stay reusable across tests):
 #
-#   gateway-host   (2 CPU / 2 GiB / 5 GiB disk) — runs openclaw-gateway
+#   gateway-host   (2 CPU / 2 GiB / 20 GiB disk) — runs openclaw-gateway
 #                  and the telegram channel daemon. No fake-ollama
 #                  here: TestPhasesIsolatedNoCache does not trigger
 #                  agent turns, only applies config.
-#   scraper-host   (2 CPU / 2 GiB / 8 GiB disk) — runs openclaw-node
+#   scraper-host   (2 CPU / 2 GiB / 20 GiB disk) — runs openclaw-node
 #                  (scraper-node). Same exec_policy as manifest-cron.yml
 #                  so the `node` phase exercises the ExecPolicyStep
 #                  Applicable=true branch.
@@ -54,14 +54,14 @@ machines:
     type: multipass
     cpus: 2
     memory: 2G
-    disk: 5G
+    disk: 20G
     bootstrap_user: root
     agent_user: agent
   - name: scraper-host
     type: multipass
     cpus: 2
     memory: 2G
-    disk: 8G
+    disk: 20G
     bootstrap_user: root
     agent_user: agent
 

@@ -77,7 +77,7 @@ func (s *AddAgentStep) Execute(ctx context.Context, t scaffold.Target) error {
 		return s.seedDefaultAgent(client, at.Spec.Workspace)
 	}
 
-	script := fmt.Sprintf(
+	script := common.OpenclawCLIPreamble() + fmt.Sprintf(
 		`openclaw agents add %q --workspace %q --model %q --non-interactive 2>&1`,
 		at.Spec.ID, at.Spec.Workspace, at.Spec.Model.Primary)
 
@@ -109,8 +109,8 @@ func (s *AddAgentStep) seedDefaultAgent(client *xssh.Client, workspace string) e
 		return fmt.Errorf("add-agent: marshal seed for %q: %w", defaultAgentID, err)
 	}
 	script := fmt.Sprintf(`set -euo pipefail
-openclaw config set --batch-json '%s'
-`, string(batchJSON))
+%sopenclaw config set --batch-json '%s'
+`, common.OpenclawCLIPreamble(), string(batchJSON))
 	out, err := bash.RunOutput(client, script)
 	if err != nil {
 		return fmt.Errorf("add-agent: seed agents.list for %q failed: %w\n%s", defaultAgentID, err, out)

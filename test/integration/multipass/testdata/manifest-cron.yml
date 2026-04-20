@@ -8,7 +8,7 @@
 # adapted to run on real VMs over a real tailnet instead of a Docker
 # bridge):
 #
-#   gateway-host   (2 CPU / 2 GiB / 5 GiB disk) — openclaw-gateway +
+#   gateway-host   (2 CPU / 2 GiB / 20 GiB disk) — openclaw-gateway +
 #                  fake-ollama stub (test/infra/fake-ollama.py) co-
 #                  located. The stub is SFTP'd up post-apply by the
 #                  test; the test then points
@@ -19,7 +19,7 @@
 #                  gateway saves a third VM that would have added
 #                  ~60s of apt/npm plus fresh tailscale install
 #                  without buying any coverage.
-#   scraper-host   (2 CPU / 2 GiB / 8 GiB disk) — openclaw-node
+#   scraper-host   (2 CPU / 2 GiB / 20 GiB disk) — openclaw-node
 #                  (scraper-node). The reporter agent's tools.exec is
 #                  pinned here so every exec tool-call the LLM emits
 #                  rides over the tailnet ws to this VM, proving the
@@ -101,21 +101,17 @@
 #   cron failure here is unambiguously a scheduler / LLM / node-exec
 #   regression, not a channels-config regression.
 #
-# Resource envelope (identical to every other Multipass fixture now
-# that fake-ollama removed the LLM install footprint):
+# Resource envelope: 20 GiB disk per VM so apt + npm + openclaw
+# install headroom stays well above ENOSPC when several Multipass
+# integration tests run in parallel on the same host (the fake-
+# ollama path still lays down a full gateway + node stack).
 #
-#   gateway-host: 2 CPU / 2 GiB / 5 GiB disk is sufficient — there's
-#   no ollama tarball or model weights to stage, so disk stays under
-#   ~1 GiB during the run; RSS is dominated by openclaw-gateway +
-#   the ts-node subprocess spawned per isolated cron session (well
-#   under 1 GiB total). The previous fixture allocated 4 CPU / 8 GiB
-#   / 20 GiB specifically to give qwen2.5:0.5b inference headroom
-#   and the ollama install tarball room to extract; with fake-ollama
-#   answering in <1 ms that headroom is pure waste.
+#   gateway-host: 2 CPU / 2 GiB / 20 GiB disk — openclaw-gateway,
+#   npm global install, and isolated cron ts-node sessions.
 #
-#   scraper-host stays on 2 CPU / 2 GiB / 8 GiB — its only job is
-#   to accept exec dispatches from the gateway, which was always
-#   well within that envelope.
+#   scraper-host: 2 CPU / 2 GiB / 20 GiB disk — openclaw-node and
+#   tailscale state; sized to match gateway so parallel test runs
+#   do not starve either VM.
 
 prefix: claws-it-multipass-cron
 
@@ -124,14 +120,14 @@ machines:
     type: multipass
     cpus: 2
     memory: 2G
-    disk: 5G
+    disk: 20G
     bootstrap_user: root
     agent_user: agent
   - name: scraper-host
     type: multipass
     cpus: 2
     memory: 2G
-    disk: 8G
+    disk: 20G
     bootstrap_user: root
     agent_user: agent
 

@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/gluwa/openclaw-swarm2/internal/claws/plans/apply/common"
 	"github.com/gluwa/openclaw-swarm2/internal/platformutil/bash"
 	"github.com/gluwa/openclaw-swarm2/internal/scaffold"
 )
@@ -114,10 +115,10 @@ func (s *BootstrapGatewayStep) Execute(ctx context.Context, t scaffold.Target) e
 	// by ensure-agent-user) keeps /run/user/<uid> populated.
 	script := fmt.Sprintf(`set -euo pipefail
 export XDG_RUNTIME_DIR=/run/user/$(id -u)
-%sopenclaw onboard --non-interactive --mode local --auth-choice skip \
+%s%sopenclaw onboard --non-interactive --mode local --auth-choice skip \
   --gateway-bind %s --gateway-token %q \
   --install-daemon --skip-health --accept-risk --json
-`, envPrefix, bind, token)
+`, common.OpenclawCLIPreamble(), envPrefix, bind, token)
 
 	out, err := bash.RunOutput(client, script)
 	if err != nil {

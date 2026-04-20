@@ -1,6 +1,10 @@
 package scaffold
 
-import "context"
+import (
+	"context"
+	"sync"
+	"time"
+)
 
 // ProbeObserver receives per-cell lifecycle events during the plan probe.
 //
@@ -13,9 +17,10 @@ import "context"
 //     OnProbeStart events identify exactly which cells are wedged.
 //   - OnProbeEnd fires AFTER the probe finishes, carrying the resulting
 //     cell status so a UI can move the cell out of "in flight" and into
-//     "completed". Probing runs one cell at a time within a phase (targets
-//     and steps in plan order), so at most one (phase, target, step) is
-//     in flight unless the observer is shared with other work.
+//     "completed". Within a phase, steps for one target run in order; multiple
+//     targets may probe at once when Phase.ProbeConcurrency > 1. Independent
+//     phases (per Phase.ProbeDependsOn) may also probe concurrently, so
+//     observers may see multiple cells in flight.
 //   - Implementations should not block for long; any delay becomes part of
 //     the probe's wall-clock time.
 type ProbeObserver interface {
@@ -43,14 +48,13 @@ func annotatePlanCellsWithProbe(ctx context.Context, compiled []compiledPhase, h
 //
 // Concurrency model:
 //
-//   - Phases run in declared order. Check methods in later phases may rely
-//     on plan-cache entries populated by earlier phases' Checks (control URL,
-//     preauth key, etc.), so we do not probe phases concurrently.
-//   - Within a phase, probing is strictly sequential: targets in plan order,
-//     and for each target, steps in plan order. Parallel probing per target
-//     (or across targets) is unsafe because earlier Checks hydrate shared
-//     target payloads (e.g. provisioning create-machine before authorize-
-//     ssh-key). Phase.Concurrency applies to Execute, not to probe.
+//   - Between phases, probing follows Phase.ProbeDependsOn (resolved at
+//     Build): phases in the same wave have no active mutual dependencies and
+//     may run Applicable+Check in parallel. Execute still runs phases in
+//     strict plan append order.
+//   - Within a phase, steps for one target run in plan order. Across targets,
+//     up to Phase.ProbeConcurrency probes may run in parallel (default 1).
+//     Phase.Concurrency applies only to Execute.
 //
 // Output ordering: cells are pre-allocated at deterministic indices; the
 // sequential probe writes each cell in turn.
@@ -93,19 +97,12 @@ func annotatePlanCellsWithProbeObs(ctx context.Context, compiled []compiledPhase
 		}
 	}
 
-	// Phase-by-phase parallel probe. We can't fan out across phases because
-	// Check methods sometimes rely on plan-cache entries populated by
-	// earlier phases' Checks (control URL, preauth key, etc.).
-	for pi, ph := range compiled {
-		if phaseFiltered(ph.name, h.OnlyPhases, h.SkipPhases) {
-			continue
-		}
-		if err := ctx.Err(); err != nil {
-			return nil, err
-		}
-		if err := probePhase(ctx, ph, phaseStart[pi], out, obs, h.DryRun, h.Force); err != nil {
-			return nil, err
-		}
+	waves, err := computeProbeWaves(compiled, h)
+	if err != nil {
+		return nil, err
+	}
+	if err := runProbeWaves(ctx, waves, compiled, phaseStart, out, obs, h.DryRun, h.Force); err != nil {
+		return nil, err
 	}
 
 	return out, nil
@@ -121,9 +118,8 @@ func cellOutIdx(phaseStart []int, pi, stepsInPhase, ti, si int) int {
 	return phaseStart[pi] + ti*stepsInPhase + si
 }
 
-// probePhase runs Applicable+Check for every cell in deterministic order:
-// targets in plan order, steps in plan order for each target. Fully
-// sequential so later steps never race earlier hydration on shared payloads.
+// probePhase runs Applicable+Check for every cell. Steps for a target are
+// sequential; targets may probe in parallel up to ph.probeConcurrency.
 func probePhase(
 	ctx context.Context,
 	ph compiledPhase,
@@ -137,21 +133,64 @@ func probePhase(
 	}
 
 	stepsInPhase := len(ph.steps)
-	for ti, t := range ph.targets {
-		if err := ctx.Err(); err != nil {
-			return err
-		}
-		for si, s := range ph.steps {
+	n := ph.probeConcurrency
+	if n < 1 {
+		n = 1
+	}
+	if n == 1 {
+		for ti, t := range ph.targets {
 			if err := ctx.Err(); err != nil {
 				return err
 			}
-			idx := phaseOffset + ti*stepsInPhase + si
-			obs.OnProbeStart(ph.name, t.ID, s.Name())
-			kind, detail := probeCellForPlan(ctx, t, s, dryRun, force)
-			out[idx].kind = kind
-			out[idx].detail = detail
-			obs.OnProbeEnd(ph.name, t.ID, s.Name(), kind)
+			if err := probeTargetRow(ctx, ph, phaseOffset, ti, t, stepsInPhase, out, obs, dryRun, force); err != nil {
+				return err
+			}
 		}
+		return ctx.Err()
+	}
+
+	sem := make(chan struct{}, n)
+	var wg sync.WaitGroup
+	for ti, t := range ph.targets {
+		wg.Add(1)
+		go func(ti int, t Target) {
+			defer wg.Done()
+			select {
+			case sem <- struct{}{}:
+				defer func() { <-sem }()
+			case <-ctx.Done():
+				return
+			}
+			_ = probeTargetRow(ctx, ph, phaseOffset, ti, t, stepsInPhase, out, obs, dryRun, force)
+		}(ti, t)
+	}
+	wg.Wait()
+	return ctx.Err()
+}
+
+func probeTargetRow(
+	ctx context.Context,
+	ph compiledPhase,
+	phaseOffset, ti int,
+	t Target,
+	stepsInPhase int,
+	out []annotatedCell,
+	obs ProbeObserver,
+	dryRun, force bool,
+) error {
+	for si, s := range ph.steps {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		idx := phaseOffset + ti*stepsInPhase + si
+		obs.OnProbeStart(ph.name, t.ID, s.Name())
+		kind, detail, app, chk, checkRan := probeCellForPlan(ctx, t, s, dryRun, force)
+		out[idx].kind = kind
+		out[idx].detail = detail
+		out[idx].applicableDur = app
+		out[idx].checkDur = chk
+		out[idx].checkRan = checkRan
+		obs.OnProbeEnd(ph.name, t.ID, s.Name(), kind)
 	}
 	return ctx.Err()
 }
@@ -170,25 +209,30 @@ func countProbeCells(compiled []compiledPhase, h PlanDisplayHints) int {
 	return n
 }
 
-func probeCellForPlan(ctx context.Context, t Target, s Step, pipelineDryRun, force bool) (cellStatusKind, string) {
+func probeCellForPlan(ctx context.Context, t Target, s Step, pipelineDryRun, force bool) (kind cellStatusKind, detail string, app, chk time.Duration, checkRan bool) {
+	t0 := time.Now()
 	ok, err := s.Applicable(ctx, t)
+	app = time.Since(t0)
 	if err != nil {
-		return cellStatusApplicableErr, err.Error()
+		return cellStatusApplicableErr, err.Error(), app, 0, false
 	}
 	if !ok {
-		return cellStatusNotApplicable, ""
+		return cellStatusNotApplicable, "", app, 0, false
 	}
 	if !force {
+		t1 := time.Now()
 		satisfied, err := s.Check(ctx, t)
+		chk = time.Since(t1)
+		checkRan = true
 		if err != nil {
-			return cellStatusCheckErr, err.Error()
+			return cellStatusCheckErr, err.Error(), app, chk, checkRan
 		}
 		if satisfied {
-			return cellStatusSatisfied, ""
+			return cellStatusSatisfied, "", app, chk, checkRan
 		}
 	}
 	if pipelineDryRun {
-		return cellStatusWouldExecute, ""
+		return cellStatusWouldExecute, "", app, chk, checkRan
 	}
-	return cellStatusWillExecute, ""
+	return cellStatusWillExecute, "", app, chk, checkRan
 }

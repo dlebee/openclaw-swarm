@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/gluwa/openclaw-swarm2/internal/claws/plans/apply/common"
 	"github.com/gluwa/openclaw-swarm2/internal/platformutil/bash"
 	"github.com/gluwa/openclaw-swarm2/internal/scaffold"
 )
@@ -72,7 +73,7 @@ func (s *PairGatewayDeviceStep) Execute(ctx context.Context, t scaffold.Target) 
 	defer returnSSH(ctx, key, client)
 
 	// Trigger the local device pairing request.
-	_, _ = bash.RunOutput(client, `openclaw nodes list >/dev/null 2>&1 || true`)
+	_, _ = bash.RunOutput(client, common.OpenclawCLIPreamble()+`openclaw nodes list >/dev/null 2>&1 || true`)
 
 	for attempt := 0; attempt < pairingRetries; attempt++ {
 		dl, err := ListDevices(client)

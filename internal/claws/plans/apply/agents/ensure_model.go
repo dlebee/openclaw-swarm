@@ -94,8 +94,8 @@ func (s *EnsureModelStep) Execute(ctx context.Context, t scaffold.Target) error 
 	}
 
 	script := fmt.Sprintf(`set -euo pipefail
-openclaw config set --batch-json '%s'
-`, string(batchJSON))
+%sopenclaw config set --batch-json '%s'
+`, common.OpenclawCLIPreamble(), string(batchJSON))
 
 	out, err := bash.RunOutput(client, script)
 	if err != nil {
