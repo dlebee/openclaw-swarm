@@ -34,6 +34,7 @@ func applyCmd(manifestFile *string) *cobra.Command {
 	var (
 		dryRun     bool
 		prettyPlan bool
+		force      bool
 		names      []string
 	)
 	cmd := &cobra.Command{
@@ -95,6 +96,7 @@ func applyCmd(manifestFile *string) *cobra.Command {
 
 			return planaut.Run(ctx, plan, planaut.RunOptions{
 				DryRun:     dryRun,
+				Force:      force,
 				PrettyPlan: prettyPlan,
 				Out:        cmd.OutOrStdout(),
 				ProgressOut: os.Stderr,
@@ -115,6 +117,7 @@ func applyCmd(manifestFile *string) *cobra.Command {
 	}
 	cmd.Flags().BoolVar(&dryRun, "dry-run", false, "print plan and skip execution")
 	cmd.Flags().BoolVar(&prettyPlan, "pretty-plan", false, "show plan in a scrollable Bubble Tea viewport")
+	cmd.Flags().BoolVar(&force, "force", false, "skip each step's check script and run execute unconditionally (applicable still gates which targets run)")
 	cmd.Flags().StringSliceVar(&names, "name", nil, "run only named automations (repeatable; selects manual ones too)")
 	return cmd
 }

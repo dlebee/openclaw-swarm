@@ -42,6 +42,14 @@ type Endpoint struct {
 // Resolve calls read from that cache, so they're O(1) and don't re-hit
 // the hosting provider. Pass the enriched context back into anything
 // downstream that expects common.ResolveMachineHost to work.
+//
+// Cache-purity invariant: PrepareEndpoints MUST both (a) eagerly warm the
+// plan cache with a single provider ListByTag, AND (b) install a lazy
+// HostResolverFn so that any subsequent common.ResolveMachineHost call
+// on the same context is read-through — a cold cache and a hot cache
+// produce the same answer (rule: "Cold cache == hot cache"). Without
+// (b), Resolve was ordering-dependent on Prepare being called first; with
+// it, ResolveMachineHost itself re-hydrates on miss.
 type EndpointResolver struct {
 	ctx context.Context
 }
@@ -51,6 +59,11 @@ type EndpointResolver struct {
 // discover their current PublicIPv4. Results are cached on the returned
 // context so later Resolve calls — and any shared helpers that go through
 // common.ResolveMachineHost — see them for free.
+//
+// In addition to the eager seed, a HostResolverFn is registered on the
+// context so that common.ResolveMachineHost can lazily re-hydrate on a
+// plan-cache miss. This makes the whole pipeline read-through: callers
+// no longer need to remember to pair Prepare with Resolve.
 //
 // For SSH-type manifests (or manifests with no machines at all) this is
 // a cheap no-op: the provider is nil and we skip straight to Resolve,
@@ -74,13 +87,43 @@ func PrepareEndpoints(
 		return ctx, nil, err
 	}
 	if provider != nil {
+		// Register the lazy resolver FIRST so that if the eager seed
+		// fails we still fall back to a pure read-through. Once
+		// registered the same ctx is "hydratable" from anywhere.
+		prefix := m.Prefix
+		machines := m.Machines
+		common.RegisterHostResolver(ctx, func(ctx context.Context, machineName string) (string, bool, error) {
+			if h, ok := scaffold.LookupPlanMachineHost(ctx, machineName); ok && h != "" {
+				return h, true, nil
+			}
+			if _, done := scaffold.PlanCacheGet(ctx, planCacheEndpointsResolverDone); !done {
+				targets := provisioning.BuildMachineTargets(machines)
+				if err := provisioning.ResolveHostedInstances(ctx, provider, prefix, targets); err != nil {
+					return "", false, err
+				}
+				scaffold.PlanCacheSet(ctx, planCacheEndpointsResolverDone, true)
+			}
+			if h, ok := scaffold.LookupPlanMachineHost(ctx, machineName); ok && h != "" {
+				return h, true, nil
+			}
+			return "", false, nil
+		})
+
 		targets := provisioning.BuildMachineTargets(m.Machines)
 		if err := provisioning.ResolveHostedInstances(ctx, provider, m.Prefix, targets); err != nil {
 			return ctx, nil, err
 		}
+		scaffold.PlanCacheSet(ctx, planCacheEndpointsResolverDone, true)
 	}
 	return ctx, &EndpointResolver{ctx: ctx}, nil
 }
+
+// planCacheEndpointsResolverDone guards the lazy HostResolverFn registered
+// by PrepareEndpoints against re-running ResolveHostedInstances for every
+// cache miss. Namespaced separately from apply.go's key so the two entry
+// points don't step on each other when a single process runs both flows
+// (rare today, but keeps the contract clean).
+const planCacheEndpointsResolverDone = "CLIUTIL_ENDPOINTS_RESOLVER_DONE"
 
 // Resolve returns the effective SSH endpoint for m. Resolution order:
 //

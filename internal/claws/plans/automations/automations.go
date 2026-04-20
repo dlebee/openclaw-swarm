@@ -211,6 +211,13 @@ type RunOptions struct {
 	ProgressOut io.Writer
 	Confirm     func() (bool, error)
 	PrettyPlan  bool
+
+	// Force, when true, runs every applicable step's Execute even if its
+	// Check script would have reported "satisfied". Handy for re-running
+	// one-shot maintenance automations where the check can't distinguish
+	// "already done" from "needs doing again". See
+	// scaffold.ExecuteOptions.Force for the detailed semantics.
+	Force bool
 }
 
 // Run executes the automations plan through scaffold.ExecWithConfirm.
@@ -237,6 +244,7 @@ func Run(ctx context.Context, plan *scaffold.Plan, o RunOptions) error {
 	return scaffold.ExecWithConfirm(ctx, plan, scaffold.PipelineOptions{
 		ExecuteOptions: scaffold.ExecuteOptions{
 			DryRun:   o.DryRun,
+			Force:    o.Force,
 			Progress: styled,
 		},
 		BuildProgress:     styled,

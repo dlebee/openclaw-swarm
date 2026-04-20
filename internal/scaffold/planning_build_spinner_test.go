@@ -75,11 +75,40 @@ func TestAnnotatePlanCellsWithProbeObs_FiresLifecycleForEveryCell(t *testing.T) 
 	}
 }
 
-func TestAnnotatePlanCellsWithProbeObs_StepsSequentialWithinTarget(t *testing.T) {
-	// Two steps per target; concurrency=10 so cross-target interleaving is
-	// allowed. Within a target, step order must stay sequential — a probe
-	// UI relies on it and real Check methods rely on it (e.g. the
-	// mt.Instance chain in provisioning).
+func TestAnnotatePlanCellsWithProbeObs_ForceSkipsCheckAndLabelsWillExecute(t *testing.T) {
+	// Satisfied-by-check step. Without Force, the probe should call
+	// Check and label the cell satisfied. With Force=true, Check must
+	// NOT be called at all and the probe should label it "will execute".
+	a := &mockStep{name: "only", applicable: true, checkSatisfied: true}
+	p := New()
+	ph := p.AddPhase("phase")
+	ph.AddTargets(Target{ID: "t1"})
+	ph.AddStep(a)
+	ex, err := p.Build()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	obs := &recordingProbeObserver{}
+	if _, err := ex.DescribeStyledWithHintsObs(context.Background(), 80, PlanDisplayHints{Force: true}, obs); err != nil {
+		t.Fatalf("describe: %v", err)
+	}
+	a.mu.Lock()
+	calls := strings.Join(a.calls, ",")
+	a.mu.Unlock()
+	if strings.Contains(calls, "check") {
+		t.Fatalf("force probe must not call Check; got calls=%q", calls)
+	}
+	if !strings.Contains(calls, "applicable") {
+		t.Fatalf("force probe must still call Applicable; got calls=%q", calls)
+	}
+}
+
+func TestAnnotatePlanCellsWithProbeObs_AllCellsFireOnce(t *testing.T) {
+	// Post-audit (groups A+B) Checks are pure, so steps within a target may
+	// now probe concurrently with each other. We no longer enforce
+	// sequential order; we only verify every cell fires exactly once and
+	// ends exactly once.
 	p := New()
 	ph := p.AddPhase("phase")
 	ph.AddTargets(Target{ID: "t1"}, Target{ID: "t2"}, Target{ID: "t3"})
@@ -97,24 +126,16 @@ func TestAnnotatePlanCellsWithProbeObs_StepsSequentialWithinTarget(t *testing.T)
 		t.Fatalf("describe: %v", err)
 	}
 
-	// For each target, the s1 start must precede the s2 start.
-	posS1 := map[string]int{}
-	posS2 := map[string]int{}
-	for i, line := range obs.starts {
-		parts := strings.Split(line, "/")
-		target, step := parts[1], parts[2]
-		switch step {
-		case "s1":
-			posS1[target] = i
-		case "s2":
-			posS2[target] = i
-		}
+	want := map[string]int{
+		"phase/t1/s1": 1, "phase/t1/s2": 1,
+		"phase/t2/s1": 1, "phase/t2/s2": 1,
+		"phase/t3/s1": 1, "phase/t3/s2": 1,
 	}
-	for _, tID := range []string{"t1", "t2", "t3"} {
-		if posS1[tID] >= posS2[tID] {
-			t.Fatalf("target %s: s1 (pos=%d) must precede s2 (pos=%d); starts=%v",
-				tID, posS1[tID], posS2[tID], obs.starts)
-		}
+	if got := tallyLines(obs.starts); !equalTally(got, want) {
+		t.Fatalf("starts tally: got %v, want %v", got, want)
+	}
+	if got := tallyLines(obs.ends); !equalTally(got, want) {
+		t.Fatalf("ends tally: got %v, want %v", got, want)
 	}
 }
 

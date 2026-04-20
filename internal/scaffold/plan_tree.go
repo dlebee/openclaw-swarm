@@ -24,6 +24,13 @@ type PlanDisplayHints struct {
 	DryRun     bool
 	OnlyPhases []string
 	SkipPhases []string
+
+	// Force mirrors ExecuteOptions.Force. When true, the probe skips
+	// Check for every applicable cell and labels it "will execute" (or
+	// "would execute" under DryRun). This keeps the preview honest —
+	// without it, the user could see "satisfied" in the plan and then
+	// watch Execute run anyway because Check was bypassed at exec time.
+	Force bool
 }
 
 type cellStatusKind int

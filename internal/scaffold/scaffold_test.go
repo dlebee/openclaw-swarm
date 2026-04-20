@@ -290,6 +290,37 @@ func TestExecute_check_satisfied(t *testing.T) {
 	}
 }
 
+func TestExecute_force_bypassesCheck(t *testing.T) {
+	// checkSatisfied=true means the non-forced path should stop after
+	// check. With Force=true we expect check to be skipped entirely and
+	// Execute+Verify to run.
+	a := &mockStep{name: "A", applicable: true, checkSatisfied: true}
+	p := New()
+	ph := p.AddPhase("p1")
+	ph.AddTargets(Target{ID: "t1"})
+	ph.AddStep(a)
+	ex, _ := p.Build()
+	_ = ex.Execute(context.Background(), ExecuteOptions{Progress: progress.Noop{}, Force: true})
+	if got := strings.Join(a.calls, ","); got != "applicable,execute,verify" {
+		t.Fatalf("force should skip check; got %q", got)
+	}
+}
+
+func TestExecute_force_stillRespectsApplicable(t *testing.T) {
+	// Applicable=false is a structural gate, not an idempotency probe —
+	// Force must not override it.
+	a := &mockStep{name: "A", applicable: false}
+	p := New()
+	ph := p.AddPhase("p1")
+	ph.AddTargets(Target{ID: "t1"})
+	ph.AddStep(a)
+	ex, _ := p.Build()
+	_ = ex.Execute(context.Background(), ExecuteOptions{Progress: progress.Noop{}, Force: true})
+	if got := strings.Join(a.calls, ","); got != "applicable" {
+		t.Fatalf("force should still respect applicable=false; got %q", got)
+	}
+}
+
 func TestExecute_barrier_fail(t *testing.T) {
 	a := &mockStep{name: "A", applicable: true}
 	p := New()

@@ -185,9 +185,15 @@ func (p *Provider) WaitRunning(ctx context.Context, resourceID string) (*hosting
 		inst, err := p.info(ctx, resourceID)
 		if err == nil && strings.EqualFold(inst.Status, "running") && inst.PublicIPv4 != "" {
 			tags, terr := p.tags.load(resourceID)
-			if terr == nil {
-				inst.Tags = tags
+			if terr != nil {
+				// Don't return a "running" instance with silently
+				// empty Tags when the sidecar is corrupt — the
+				// caller would have no way to know its identity
+				// metadata is wrong. Surface the error so destroy/
+				// apply can decide.
+				return inst, fmt.Errorf("multipass wait-running %s: load tags: %w", resourceID, terr)
 			}
+			inst.Tags = tags
 			return inst, nil
 		}
 		if ctx.Err() != nil {
@@ -245,10 +251,16 @@ func (p *Provider) ListByTag(ctx context.Context, tag string) ([]hosting.Instanc
 		return nil, err
 	}
 	var out []hosting.Instance
+	var decodeErrs []error
 	for _, label := range labels {
 		tags, err := p.tags.load(label)
 		if err != nil {
-			// A corrupt sidecar is not fatal for the other VMs — just skip.
+			// Corrupt sidecar: don't silently drop the VM — aggregate
+			// the error so callers see "this VM exists but its tag
+			// metadata is unparseable" rather than "no such VM".
+			// Other VMs still proceed so a single bad sidecar can't
+			// stall the whole listing.
+			decodeErrs = append(decodeErrs, fmt.Errorf("load tags for %q: %w", label, err))
 			continue
 		}
 		if !matchesTag(tags, tag) {
@@ -256,11 +268,19 @@ func (p *Provider) ListByTag(ctx context.Context, tag string) ([]hosting.Instanc
 		}
 		inst, err := p.info(ctx, label)
 		if err != nil {
-			// VM disappeared between `list` and `info`. Treat as gone.
+			// VM disappeared between `list` and `info`. Treat as gone —
+			// this is an expected race under concurrent destroy, not a
+			// caller-facing error.
 			continue
 		}
 		inst.Tags = tags
 		out = append(out, *inst)
+	}
+	if len(decodeErrs) > 0 {
+		// Return both the partial result and the aggregated error so
+		// read-only callers (probe UI) can render a distinct warning
+		// while destroy/apply can choose to fail loudly.
+		return out, errors.Join(decodeErrs...)
 	}
 	return out, nil
 }

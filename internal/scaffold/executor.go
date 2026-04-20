@@ -21,7 +21,7 @@ func runPlan(ctx context.Context, compiled []compiledPhase, opts ExecuteOptions)
 			continue
 		}
 		obs.OnPhaseStart(pi+1, total, ph.name)
-		results, phaseErr := executePhase(ctx, ph, obs, opts.DryRun)
+		results, phaseErr := executePhase(ctx, ph, obs, opts.DryRun, opts.Force)
 		if phaseErr == nil && ph.barrier != nil {
 			if err := ph.barrier.Evaluate(ctx, ph.name, results); err != nil {
 				phaseErr = fmt.Errorf("barrier %q: %w", ph.name, err)
@@ -60,7 +60,8 @@ func phaseFiltered(name string, only, skip []string) bool {
 
 // executePhase fans out targets across worker slots, each running its step
 // pipeline sequentially. Returns all cell results and the first target error.
-func executePhase(ctx context.Context, ph compiledPhase, obs progress.Observer, dryRun bool) ([]CellResult, error) {
+// force forwards ExecuteOptions.Force through to runCell.
+func executePhase(ctx context.Context, ph compiledPhase, obs progress.Observer, dryRun, force bool) ([]CellResult, error) {
 	nTargets := len(ph.targets)
 	if nTargets == 0 {
 		return nil, nil
@@ -109,7 +110,7 @@ func executePhase(ctx context.Context, ph compiledPhase, obs progress.Observer, 
 				if dryRun {
 					res = CellResult{TargetID: t.ID, StepName: step.Name()}
 				} else {
-					res = runCell(ctx, t, step)
+					res = runCell(ctx, t, step, force)
 				}
 				cells = append(cells, res)
 				obs.OnStepEnd(ph.name, t.ID, step.Name(), slot, res.ToOutcome())

@@ -51,6 +51,7 @@ func ExecWithConfirm(ctx context.Context, p *Plan, o PipelineOptions) error {
 		DryRun:     o.DryRun,
 		OnlyPhases: o.OnlyPhases,
 		SkipPhases: o.SkipPhases,
+		Force:      o.Force,
 	}
 	if o.PrettyPlan {
 		if f, ok := o.Out.(*os.File); ok && term.IsTerminal(int(f.Fd())) {

@@ -25,7 +25,15 @@ func (r CellResult) ToOutcome() progress.CellOutcome {
 }
 
 // runCell runs Applicable → Check → Execute → Verify for one (target, step) pair.
-func runCell(ctx context.Context, t Target, s Step) CellResult {
+//
+// When force is true, Check is skipped entirely — the cell proceeds from a
+// successful Applicable directly to Execute. This is the "I know the remote
+// has drifted in a way my check script can't detect, just run it" escape
+// hatch (see ExecuteOptions.Force). Applicable is NOT bypassed: it's the
+// structural gate ("does this step even target this payload type") rather
+// than an idempotency probe, and skipping it could e.g. scp-upload to a
+// target the step wasn't meant for. Verify still runs after Execute.
+func runCell(ctx context.Context, t Target, s Step, force bool) CellResult {
 	res := CellResult{TargetID: t.ID, StepName: s.Name()}
 	ok, err := s.Applicable(ctx, t)
 	if err != nil {
@@ -36,14 +44,16 @@ func runCell(ctx context.Context, t Target, s Step) CellResult {
 		res.Skipped = true
 		return res
 	}
-	satisfied, err := s.Check(ctx, t)
-	if err != nil {
-		res.Err = err
-		return res
-	}
-	if satisfied {
-		res.Satisfied = true
-		return res
+	if !force {
+		satisfied, err := s.Check(ctx, t)
+		if err != nil {
+			res.Err = err
+			return res
+		}
+		if satisfied {
+			res.Satisfied = true
+			return res
+		}
 	}
 	if err := s.Execute(ctx, t); err != nil {
 		res.Err = err
