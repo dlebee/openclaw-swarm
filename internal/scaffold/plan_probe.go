@@ -1,15 +1,8 @@
 package scaffold
 
-import (
-	"context"
-	"sync"
-)
+import "context"
 
 // ProbeObserver receives per-cell lifecycle events during the plan probe.
-// It replaces the older index-based contract because the probe now runs
-// targets within a phase in parallel (bounded by Phase.Concurrency), so a
-// single "index/total" counter can't represent what's actually happening —
-// multiple cells may be in flight at once.
 //
 // Contract:
 //   - Total is passed separately (see ProbeCellCount) before the probe
@@ -20,12 +13,11 @@ import (
 //     OnProbeStart events identify exactly which cells are wedged.
 //   - OnProbeEnd fires AFTER the probe finishes, carrying the resulting
 //     cell status so a UI can move the cell out of "in flight" and into
-//     "completed". Order of End events across cells is non-deterministic
-//     under concurrency — use the (phase, targetID, step) tuple as the
-//     key.
-//   - Implementations are invoked from probe goroutines; they must be safe
-//     for concurrent use and must not block (any delay becomes part of the
-//     probe's wall-clock time).
+//     "completed". Probing runs one cell at a time within a phase (targets
+//     and steps in plan order), so at most one (phase, target, step) is
+//     in flight unless the observer is shared with other work.
+//   - Implementations should not block for long; any delay becomes part of
+//     the probe's wall-clock time.
 type ProbeObserver interface {
 	OnProbeStart(phase, targetID, step string)
 	OnProbeEnd(phase, targetID, step string, kind cellStatusKind)
@@ -47,40 +39,28 @@ func annotatePlanCellsWithProbe(ctx context.Context, compiled []compiledPhase, h
 	return annotatePlanCellsWithProbeObs(ctx, compiled, h, ProbeNoop{})
 }
 
-// annotatePlanCellsWithProbeObs is the observer-aware, concurrent variant.
+// annotatePlanCellsWithProbeObs is the observer-aware variant.
 //
 // Concurrency model:
 //
-//   - Phases run in declared order. Phase ordering still matters because
-//     Execute side-effects from an earlier phase can change what a later
-//     phase's Check observes (e.g. provisioning.Execute creates the VM;
-//     mesh.Check then probes it). During the PROBE pass we only run
-//     Check, so cross-phase data flow isn't via Execute — it's via the
-//     pre-probe Resolve/Hydrate pass (see PreRun in apply.BuildPlan and
-//     provisioning.ResolveHostedInstances) which seeds the plan cache
-//     for every phase.
-//   - Within a phase, (target, step) cells probe in parallel up to
-//     ph.concurrency. After the cache-purity audit landed (groups A+B)
-//     every Check is required to be pure: no payload mutation, no plan
-//     cache writes, read-through via Resolve* helpers. That means cells
-//     within a single target no longer have a strict ordering dependency
-//     — CreateMachine.Check no longer populates MachineTarget.Instance
-//     (ResolveHostedInstances does, in PreRun), so steps like
-//     authorize-ssh-key can probe concurrently with it.
+//   - Phases run in declared order. Check methods in later phases may rely
+//     on plan-cache entries populated by earlier phases' Checks (control URL,
+//     preauth key, etc.), so we do not probe phases concurrently.
+//   - Within a phase, probing is strictly sequential: targets in plan order,
+//     and for each target, steps in plan order. Parallel probing per target
+//     (or across targets) is unsafe because earlier Checks hydrate shared
+//     target payloads (e.g. provisioning create-machine before authorize-
+//     ssh-key). Phase.Concurrency applies to Execute, not to probe.
 //
-// Output ordering: cells are pre-allocated at their deterministic (phase,
-// target, step) positions, and probe goroutines write into their own
-// indices. No lock is needed on `out` because each goroutine owns a
-// disjoint slice range.
+// Output ordering: cells are pre-allocated at deterministic indices; the
+// sequential probe writes each cell in turn.
 func annotatePlanCellsWithProbeObs(ctx context.Context, compiled []compiledPhase, h PlanDisplayHints, obs ProbeObserver) ([]annotatedCell, error) {
 	if obs == nil {
 		obs = ProbeNoop{}
 	}
 
 	// Pre-compute the cell layout. phaseStart[pi] is the index of the
-	// first cell of phase pi in `out`. This lets each goroutine turn
-	// (pi, ti, si) into an outIdx with plain arithmetic — no lookup table
-	// or locking required.
+	// first cell of phase pi in `out` (flat index: ti*stepsInPhase+si).
 	phaseStart := make([]int, len(compiled))
 	total := 0
 	for pi, ph := range compiled {
@@ -96,7 +76,7 @@ func annotatePlanCellsWithProbeObs(ctx context.Context, compiled []compiledPhase
 				idx := cellOutIdx(phaseStart, pi, len(ph.steps), ti, si)
 				kind := cellStatusPhaseSkipped
 				if !filtered {
-					// Placeholder until the probe goroutine fills this in.
+					// Placeholder until the probe run fills this in.
 					// We never leave these placeholder values in a returned
 					// slice unless ctx was cancelled mid-probe (in which case
 					// we return the error instead).
@@ -141,13 +121,9 @@ func cellOutIdx(phaseStart []int, pi, stepsInPhase, ti, si int) int {
 	return phaseStart[pi] + ti*stepsInPhase + si
 }
 
-// probePhase fans out every (target, step) cell across worker slots
-// (bounded by ph.concurrency). Checks are pure post-audit, so cells within
-// a single target no longer need to run sequentially — interleaving is
-// safe and materially cuts probe wall-clock on I/O-bound phases.
-//
-// Writes results into `out` at the pre-assigned indices; no locking is
-// needed because each goroutine owns a disjoint slice position.
+// probePhase runs Applicable+Check for every cell in deterministic order:
+// targets in plan order, steps in plan order for each target. Fully
+// sequential so later steps never race earlier hydration on shared payloads.
 func probePhase(
 	ctx context.Context,
 	ph compiledPhase,
@@ -160,45 +136,23 @@ func probePhase(
 		return nil
 	}
 
-	// Separate cancel scope so a single ctx-cancel propagates to every
-	// in-flight probe in this phase without bringing down the caller's ctx.
-	ctx, cancel := context.WithCancel(ctx)
-	defer cancel()
-
-	concurrency := ph.concurrency
-	if concurrency < 1 {
-		concurrency = 1
-	}
-	sem := make(chan struct{}, concurrency)
-	var wg sync.WaitGroup
-
 	stepsInPhase := len(ph.steps)
-
 	for ti, t := range ph.targets {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
 		for si, s := range ph.steps {
-			wg.Add(1)
-			go func(ti, si int, t Target, s Step) {
-				defer wg.Done()
-				select {
-				case sem <- struct{}{}:
-					defer func() { <-sem }()
-				case <-ctx.Done():
-					return
-				}
-
-				if ctx.Err() != nil {
-					return
-				}
-				idx := phaseOffset + ti*stepsInPhase + si
-				obs.OnProbeStart(ph.name, t.ID, s.Name())
-				kind, detail := probeCellForPlan(ctx, t, s, dryRun, force)
-				out[idx].kind = kind
-				out[idx].detail = detail
-				obs.OnProbeEnd(ph.name, t.ID, s.Name(), kind)
-			}(ti, si, t, s)
+			if err := ctx.Err(); err != nil {
+				return err
+			}
+			idx := phaseOffset + ti*stepsInPhase + si
+			obs.OnProbeStart(ph.name, t.ID, s.Name())
+			kind, detail := probeCellForPlan(ctx, t, s, dryRun, force)
+			out[idx].kind = kind
+			out[idx].detail = detail
+			obs.OnProbeEnd(ph.name, t.ID, s.Name(), kind)
 		}
 	}
-	wg.Wait()
 	return ctx.Err()
 }
 

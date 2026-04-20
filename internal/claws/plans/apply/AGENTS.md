@@ -2,7 +2,7 @@
 
 This tree implements `scaffold.Step` for every phase of `claws apply`. Steps are invoked in two distinct passes:
 
-1. **Probe** — concurrent, read-only. `Applicable` and `Check` run in parallel across targets (and, in the future, phases) to render the preview tree.
+1. **Probe** — read-only, strictly sequential within each phase: targets in plan order, then steps in plan order per target (so earlier Checks can hydrate shared payloads before later ones). `Phase.Concurrency` applies only to **Execute**, not probe.
 2. **Execute** — sequential within a target, concurrent across targets within a phase. `Execute` and `Verify` do the real work.
 
 ## Applicable and Check are pure predicates

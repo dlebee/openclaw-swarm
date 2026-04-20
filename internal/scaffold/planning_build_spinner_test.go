@@ -5,9 +5,7 @@ import (
 	"fmt"
 	"strings"
 	"sync"
-	"sync/atomic"
 	"testing"
-	"time"
 )
 
 type recordingProbeObserver struct {
@@ -58,9 +56,8 @@ func TestAnnotatePlanCellsWithProbeObs_FiresLifecycleForEveryCell(t *testing.T) 
 		t.Fatalf("describe: %v", err)
 	}
 
-	// Every cell fires Start and End exactly once. Order across targets is
-	// non-deterministic under parallel probing; order within a target is
-	// checked separately (see TestAnnotatePlanCellsWithProbeObs_StepsSequentialWithinTarget).
+	// Every cell fires Start and End exactly once. Targets and steps run
+	// in plan order (sequential probe).
 	want := map[string]int{
 		"probe-phase/alpha/s1": 1,
 		"probe-phase/alpha/s2": 1,
@@ -105,10 +102,7 @@ func TestAnnotatePlanCellsWithProbeObs_ForceSkipsCheckAndLabelsWillExecute(t *te
 }
 
 func TestAnnotatePlanCellsWithProbeObs_AllCellsFireOnce(t *testing.T) {
-	// Post-audit (groups A+B) Checks are pure, so steps within a target may
-	// now probe concurrently with each other. We no longer enforce
-	// sequential order; we only verify every cell fires exactly once and
-	// ends exactly once.
+	// Verify every cell fires exactly once and ends exactly once.
 	p := New()
 	ph := p.AddPhase("phase")
 	ph.AddTargets(Target{ID: "t1"}, Target{ID: "t2"}, Target{ID: "t3"})
@@ -139,40 +133,8 @@ func TestAnnotatePlanCellsWithProbeObs_AllCellsFireOnce(t *testing.T) {
 	}
 }
 
-func TestAnnotatePlanCellsWithProbeObs_RunsTargetsInParallel(t *testing.T) {
-	// Use a slow Check to force overlap — each target blocks until all peers
-	// have also entered Check. If probes were sequential, the gate would
-	// deadlock (per-target wait never completes). We give each probe 2s
-	// before declaring the parallelism "broken".
+func TestAnnotatePlanCellsWithProbeObs_ProbesTargetsSequentially(t *testing.T) {
 	const nTargets = 4
-
-	var gate sync.WaitGroup
-	gate.Add(nTargets)
-	var entered atomic.Int64
-
-	slow := func() *mockStep {
-		return &mockStep{
-			name:       "slow-check",
-			applicable: true,
-			checkFunc: func(ctx context.Context) (bool, error) {
-				entered.Add(1)
-				gate.Done()
-				done := make(chan struct{})
-				go func() {
-					gate.Wait()
-					close(done)
-				}()
-				select {
-				case <-done:
-					return true, nil
-				case <-time.After(2 * time.Second):
-					return false, fmt.Errorf("parallel gate timed out")
-				case <-ctx.Done():
-					return false, ctx.Err()
-				}
-			},
-		}
-	}
 
 	p := New()
 	ph := p.AddPhase("phase")
@@ -181,7 +143,7 @@ func TestAnnotatePlanCellsWithProbeObs_RunsTargetsInParallel(t *testing.T) {
 		targets = append(targets, Target{ID: fmt.Sprintf("t%d", i)})
 	}
 	ph.AddTargets(targets...)
-	ph.AddStep(slow())
+	ph.AddStep(&mockStep{name: "s1", applicable: true, checkSatisfied: true})
 	ph.Concurrency = nTargets
 
 	ex, err := p.Build()
@@ -193,11 +155,25 @@ func TestAnnotatePlanCellsWithProbeObs_RunsTargetsInParallel(t *testing.T) {
 	if _, err := ex.DescribeStyledWithHintsObs(context.Background(), 80, PlanDisplayHints{}, obs); err != nil {
 		t.Fatalf("describe: %v", err)
 	}
-	if got := entered.Load(); got != nTargets {
-		t.Fatalf("entered: got %d, want %d", got, nTargets)
+	if obs.peak() != 1 {
+		t.Fatalf("peak in-flight: got %d, want 1 (one probe cell at a time)", obs.peak())
 	}
-	if obs.peak() != nTargets {
-		t.Fatalf("peak in-flight: got %d, want %d", obs.peak(), nTargets)
+	var order []string
+	for _, line := range obs.starts {
+		parts := strings.Split(line, "/")
+		if len(parts) != 3 {
+			t.Fatalf("unexpected start line %q", line)
+		}
+		order = append(order, parts[1])
+	}
+	want := []string{"t0", "t1", "t2", "t3"}
+	if len(order) != len(want) {
+		t.Fatalf("starts: len %d, want %d: %v", len(order), len(want), order)
+	}
+	for i := range want {
+		if order[i] != want[i] {
+			t.Fatalf("target order at %d: got %q want %q (full=%v)", i, order[i], want[i], order)
+		}
 	}
 }
 
