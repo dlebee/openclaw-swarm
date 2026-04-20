@@ -74,6 +74,9 @@ func validateStep(step AutomationStep, autoTouchesSelf bool, remoteCount int, al
 	}
 	switch kind {
 	case StepKindBash, StepKindPython:
+		if step.IfChanged {
+			return fmt.Errorf("if_changed is only valid on kind: scp.upload, not %q", kind)
+		}
 		return nil
 	case StepKindSCPUpload, StepKindSCPDownload:
 		if !allowSelf {
@@ -96,6 +99,9 @@ func validateStep(step AutomationStep, autoTouchesSelf bool, remoteCount int, al
 		}
 		if err := validateMode(step.Mode); err != nil {
 			return err
+		}
+		if step.IfChanged && kind != StepKindSCPUpload {
+			return fmt.Errorf("if_changed is only valid on kind: scp.upload, not %q", kind)
 		}
 		return nil
 	default:

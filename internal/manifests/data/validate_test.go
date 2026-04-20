@@ -177,6 +177,44 @@ func TestValidateManifest_SCPSteps(t *testing.T) {
 			t.Fatalf("want octal error, got %v", err)
 		}
 	})
+
+	t.Run("if_changed ok on scp.upload", func(t *testing.T) {
+		t.Parallel()
+		m := base(AutomationStep{
+			Name: "push", Kind: StepKindSCPUpload,
+			Source: "a", Destination: "b",
+			IfChanged: true,
+		}, true)
+		if err := ValidateManifest(m); err != nil {
+			t.Fatalf("unexpected: %v", err)
+		}
+	})
+
+	t.Run("if_changed rejected on scp.download", func(t *testing.T) {
+		t.Parallel()
+		m := base(AutomationStep{
+			Name: "pull", Kind: StepKindSCPDownload,
+			Source: "a", Destination: "b",
+			IfChanged: true,
+		}, true)
+		err := ValidateManifest(m)
+		if err == nil || !strings.Contains(err.Error(), "if_changed") {
+			t.Fatalf("want if_changed error, got %v", err)
+		}
+	})
+
+	t.Run("if_changed rejected on bash", func(t *testing.T) {
+		t.Parallel()
+		m := base(AutomationStep{
+			Name: "run", Kind: StepKindBash,
+			Execute:   "echo hi",
+			IfChanged: true,
+		}, true)
+		err := ValidateManifest(m)
+		if err == nil || !strings.Contains(err.Error(), "if_changed") {
+			t.Fatalf("want if_changed error, got %v", err)
+		}
+	})
 }
 
 func TestValidateStep_UnknownKind(t *testing.T) {

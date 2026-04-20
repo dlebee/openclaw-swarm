@@ -161,6 +161,20 @@ type AutomationStep struct {
 	Source      string `yaml:"source,omitempty"`
 	Destination string `yaml:"destination,omitempty"`
 	Mode        string `yaml:"mode,omitempty"`
+
+	// IfChanged, when true on a scp.upload step, turns the step into a
+	// content-addressed upload: the default Check compares the SHA256 of
+	// the local source to the SHA256 of the remote destination (via
+	// `sha256sum` on the target). When they match the step is satisfied
+	// and Execute is skipped; when they differ (or the remote file is
+	// absent) Execute runs the SFTP transfer.
+	//
+	// Only valid for kind: scp.upload. An explicit `check:` / `check_file:`
+	// on the same step takes precedence over this default — if the
+	// operator wrote their own idempotency probe, we respect it. Regular
+	// files only for now; directory sources with if_changed are rejected
+	// at validation time (recursive hashing is a bigger change).
+	IfChanged bool `yaml:"if_changed,omitempty"`
 }
 
 // Machine is a host entry (cloud or static SSH).

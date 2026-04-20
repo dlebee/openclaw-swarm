@@ -78,7 +78,15 @@ func (d *DynamicStep) Applicable(ctx context.Context, t scaffold.Target) (bool, 
 	return true, nil
 }
 
-// Check runs the check script if set; not set = always false (always execute).
+// Check reports whether the step is already satisfied.
+//
+// Precedence:
+//  1. Explicit `check:` / `check_file:` script on the step — run it,
+//     exit-0 ⇒ satisfied.
+//  2. kind: scp.upload + if_changed: true and no explicit check — run
+//     the content-hash default: satisfied iff sha256(local source) ==
+//     sha256sum(remote destination).
+//  3. Otherwise not satisfied (Execute will run every time).
 //
 // When a remote target has no reachable host and AssumeWillProvision=true
 // (plan probe inside `claws apply`), return false so the step is shown as
@@ -93,6 +101,9 @@ func (d *DynamicStep) Check(ctx context.Context, t scaffold.Target) (bool, error
 		return false, fmt.Errorf("%s: resolve check: %w", d.step.Name, err)
 	}
 	if script == "" {
+		if d.kind() == manifestdata.StepKindSCPUpload && d.step.IfChanged {
+			return d.checkUploadByHash(ctx, t)
+		}
 		return false, nil
 	}
 	runErr, dialErr := d.probeScript(ctx, t, script)
@@ -103,6 +114,57 @@ func (d *DynamicStep) Check(ctx context.Context, t scaffold.Target) (bool, error
 		return false, nil
 	}
 	return true, nil
+}
+
+// checkUploadByHash implements the default idempotency probe for
+// kind: scp.upload + if_changed: true. It compares the SHA256 of the
+// local source file with the remote destination's sha256sum.
+//
+// Semantics:
+//   - Remote file missing → not satisfied (let Execute upload it).
+//   - Remote sha != local sha → not satisfied.
+//   - Remote sha == local sha → satisfied, skip Execute.
+//   - Any error (local hash read, SSH dial, remote sha256sum failure) is
+//     surfaced as a Check error per the cache-purity rule "errors are not
+//     cache misses" — the probe UI will render "check: <detail>" rather
+//     than silently report "will execute".
+//
+// Directories are intentionally unsupported for if_changed (the
+// validator / LocalSHA256 both reject them); the feature is scoped to
+// single-file uploads where the hash equivalence is unambiguous.
+func (d *DynamicStep) checkUploadByHash(ctx context.Context, t scaffold.Target) (bool, error) {
+	localPath := d.resolveSourcePath()
+	localSum, err := sshfile.LocalSHA256(localPath)
+	if err != nil {
+		return false, fmt.Errorf("%s: hash local %s: %w", d.step.Name, localPath, err)
+	}
+	client, key, err := d.dial(ctx, t)
+	if err != nil {
+		return false, fmt.Errorf("%s: check dial: %w", d.step.Name, err)
+	}
+	defer common.ReturnSSH(ctx, key, client)
+
+	remoteSum, exists, err := sshfile.RemoteSHA256(client, d.step.Destination)
+	if err != nil {
+		return false, fmt.Errorf("%s: hash remote %s: %w", d.step.Name, d.step.Destination, err)
+	}
+	if !exists {
+		return false, nil
+	}
+	return remoteSum == localSum, nil
+}
+
+// resolveSourcePath resolves step.Source for scp.upload. Absolute paths
+// are used as-is; relative paths are resolved against opts.ManifestDir
+// (same contract as resolveScript for *_file fields). Without this the
+// operator has to think about whether their cwd matches the manifest
+// directory, which quietly bites during CI.
+func (d *DynamicStep) resolveSourcePath() string {
+	p := d.step.Source
+	if filepath.IsAbs(p) || d.opts.ManifestDir == "" {
+		return p
+	}
+	return filepath.Join(d.opts.ManifestDir, p)
 }
 
 // Execute runs the step's main work:
@@ -180,8 +242,9 @@ func (d *DynamicStep) executeUpload(ctx context.Context, t scaffold.Target) erro
 	defer common.ReturnSSH(ctx, key, client)
 
 	mode := d.parsedMode()
-	if err := sshfile.Upload(client, d.step.Source, d.step.Destination, mode); err != nil {
-		return fmt.Errorf("%s: upload %s -> %s: %w", d.step.Name, d.step.Source, d.step.Destination, err)
+	src := d.resolveSourcePath()
+	if err := sshfile.Upload(client, src, d.step.Destination, mode); err != nil {
+		return fmt.Errorf("%s: upload %s -> %s: %w", d.step.Name, src, d.step.Destination, err)
 	}
 	return nil
 }
