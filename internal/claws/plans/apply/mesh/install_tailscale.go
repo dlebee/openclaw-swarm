@@ -35,6 +35,11 @@ func (*InstallTailscaleStep) Applicable(_ context.Context, t scaffold.Target) (b
 	return ok, nil
 }
 
+// Check implements scaffold.Step — asks the remote machine whether tailscale
+// is installed and joined. Pure read: Check does NOT mutate the plan cache.
+// Re-seeding the plan-cache mesh-IP on cold-start runs (where Execute is
+// skipped because the machine is already joined) is the job of
+// ResolveMeshIP, called by downstream consumers that actually need the IP.
 func (s *InstallTailscaleStep) Check(ctx context.Context, t scaffold.Target) (bool, error) {
 	mt := t.Payload.(*MeshTarget)
 	m := mt.Machine
@@ -48,10 +53,6 @@ func (s *InstallTailscaleStep) Check(ctx context.Context, t scaffold.Target) (bo
 	if ip == "" {
 		return false, nil
 	}
-	// Re-populate the plan cache on idempotent runs where Execute is skipped
-	// because tailscale is already joined. Downstream phases (node
-	// bootstrap) depend on this being set.
-	scaffold.RecordPlanMachineMeshIP(ctx, m.Name, ip)
 	return true, nil
 }
 

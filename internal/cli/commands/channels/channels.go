@@ -9,6 +9,7 @@ import (
 
 	"github.com/charmbracelet/huh"
 	chsvc "github.com/gluwa/openclaw-swarm2/internal/claws/plans/apply/channels"
+	"github.com/gluwa/openclaw-swarm2/internal/cli/cliutil"
 	manifestdata "github.com/gluwa/openclaw-swarm2/internal/manifests/data"
 	manifestsvc "github.com/gluwa/openclaw-swarm2/internal/manifests/service"
 	"github.com/gluwa/openclaw-swarm2/internal/state"
@@ -78,28 +79,22 @@ require a one-time pairing code to activate the bot.`),
 				return fmt.Errorf("unknown reference machine %q for gateway %q", gw.Reference, gw.Name)
 			}
 
-			host := strings.TrimSpace(mach.Host)
-			if host == "" {
-				return fmt.Errorf("machine %q has no host", mach.Name)
+			// Channel pairing happens post-provisioning, so the resolver's
+			// agent → bootstrap → root precedence is what we want; hosted
+			// machines (multipass/linode) get their live PublicIPv4 via the
+			// provider lookup, and SSH-type machines fall back to the
+			// static Host field from the manifest.
+			_, resolver, err := cliutil.PrepareEndpoints(cmd.Context(), abs, m)
+			if err != nil {
+				return err
 			}
-			port := mach.SSHPort
-			if port == 0 {
-				port = 22
-			}
-			// Channel pairing happens post-provisioning, so default to the
-			// agent user (the ops identity). Bootstrap_user is a last-ditch
-			// fallback for static ssh-type machines that don't declare an
-			// agent user.
-			user := strings.TrimSpace(mach.AgentUser)
-			if user == "" {
-				user = strings.TrimSpace(mach.BootstrapUser)
-			}
-			if user == "" {
-				user = "root"
+			ep, err := resolver.Resolve(mach)
+			if err != nil {
+				return err
 			}
 
-			addr := net.JoinHostPort(host, strconv.Itoa(port))
-			client, err := store.DialSSH(addr, user)
+			addr := net.JoinHostPort(ep.Host, strconv.Itoa(ep.Port))
+			client, err := store.DialSSH(addr, ep.User)
 			if err != nil {
 				return fmt.Errorf("SSH to %s: %w", addr, err)
 			}

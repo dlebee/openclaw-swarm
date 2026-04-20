@@ -26,6 +26,11 @@ type mockStep struct {
 	mu             sync.Mutex
 	onExecuteSleep time.Duration
 	onExecuteHook  func()
+	// checkFunc, when non-nil, overrides the default Check behavior. Used by
+	// tests that need Check to perform real work (e.g. block on a sync gate
+	// to prove parallel probing). Defaults to nil so existing tests keep
+	// using the simple checkSatisfied / checkErr fields.
+	checkFunc func(ctx context.Context) (bool, error)
 }
 
 func (m *mockStep) record(s string) {
@@ -46,6 +51,9 @@ func (m *mockStep) Applicable(ctx context.Context, t Target) (bool, error) {
 
 func (m *mockStep) Check(ctx context.Context, t Target) (bool, error) {
 	m.record("check")
+	if m.checkFunc != nil {
+		return m.checkFunc(ctx)
+	}
 	if m.checkErr != nil {
 		return false, m.checkErr
 	}

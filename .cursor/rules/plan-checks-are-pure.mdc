@@ -1,0 +1,54 @@
+---
+description: Keep scaffold Applicable/Check methods pure; put world-touching logic in Resolve* helpers backed by the plan cache.
+globs: internal/claws/plans/**/*.go,internal/scaffold/plan_cache.go,internal/scaffold/plan_probe.go,internal/scaffold/executable.go
+alwaysApply: false
+---
+
+# Plan probe purity
+
+`Applicable` and `Check` on a `scaffold.Step` are pure predicates. They are called concurrently during the probe pass. A cold cache and a hot cache MUST produce the same verdict.
+
+## Rules
+
+- Do NOT call `PlanCacheSet`, `RecordPlanMachine*`, or any other cache-writing helper from inside `Applicable` or `Check`.
+- Do NOT mutate `t.Payload` (e.g. `mt.Instance = ...`) from inside `Applicable` or `Check`.
+- Do NOT swallow probe errors as `false, nil`. Return `false, err` so the preview can render "unknown" instead of lying as "will execute".
+- World-touching work (provider `ListByTag`, SSH probes, headscale CLI, preauth-key derivation) goes in a `Resolve*()` helper, not in `Check`.
+
+## The Resolve pattern
+
+A `Resolve*()` helper MAY be cached, but MUST NOT depend on the cache being warm:
+
+1. Check the plan cache (or a typed field on the payload).
+2. On hit → return the cached value.
+3. On miss → do the work, write the result back, return it.
+
+Same verdict regardless of call order. Concurrency-safe via singleflight or `sync.Once`.
+
+Reference implementation — copy this shape:
+
+```go
+// internal/claws/plans/apply/mesh/control_url.go
+func getOrResolveControlURL(ctx context.Context, dial SSHDialFunc, mt *MeshTarget) (string, error) {
+    if v, ok := scaffold.PlanCacheGet(ctx, CacheKeyControlURL); ok {
+        if s, _ := v.(string); s != "" {
+            return s, nil
+        }
+    }
+    url, err := resolveControlURL(ctx, dial, mt, mt.Gateway)
+    if err != nil {
+        return "", fmt.Errorf("resolve control URL: %w", err)
+    }
+    scaffold.PlanCacheSet(ctx, CacheKeyControlURL, url)
+    return url, nil
+}
+```
+
+## Anti-patterns to avoid
+
+- `create_machine.go:Check` writing `mt.Instance`, `RecordPlanMachineExists`, `RecordPlanMachineHost` — makes probe ordering-dependent.
+- `install_tailscale.go:Check` writing `RecordPlanMachineMeshIP` — same problem.
+- `wait_cloud_init.go:Check` returning `false, nil` on every error path — hides SSH failures as "will execute".
+- Check methods that only read a cache their own Execute populates (e.g. `resolve_control_url.Check`, `resolve_preauth_key.Check`) — always misreport "will execute" on cold runs.
+
+Prefer resolving the actual underlying state every time, cached for cheapness.

@@ -43,8 +43,14 @@ func (a *CreateMachineStep) Applicable(ctx context.Context, t scaffold.Target) (
 	return manifestdata.IsHostedMachineType(mt.Spec.Type), nil
 }
 
-// Check implements scaffold.Step — list instances tagged claws/<prefix>, then match
-// uniquely by Linode label (prefix-machineName).
+// Check implements scaffold.Step — asks the resolver whether an instance
+// already exists for this target. Pure read: Check does NOT mutate
+// t.Payload or the plan cache. Execute is responsible for payload/cache
+// population.
+//
+// Calling ResolveMachineStatus (rather than inlining the ListByTag+match)
+// gives us a plan-scoped memo so downstream Checks and Execute paths can
+// ask the same question for free.
 func (a *CreateMachineStep) Check(ctx context.Context, t scaffold.Target) (satisfied bool, err error) {
 	mt, ok := t.Payload.(*MachineTarget)
 	if !ok || mt == nil {
@@ -53,35 +59,11 @@ func (a *CreateMachineStep) Check(ctx context.Context, t scaffold.Target) (satis
 	if a.provider == nil {
 		return false, fmt.Errorf("create-machine: hosting provider is required for %q", t.ID)
 	}
-	prefixTag := clawsPrefixTag(a.prefix)
-	wantLabel := machineLabel(a.prefix, mt.Spec.Name)
-	instances, err := a.provider.ListByTag(ctx, prefixTag)
+	status, err := ResolveMachineStatus(ctx, a.provider, a.prefix, mt)
 	if err != nil {
 		return false, err
 	}
-	var matches []hosting.Instance
-	for i := range instances {
-		if instances[i].Label == wantLabel {
-			matches = append(matches, instances[i])
-		}
-	}
-	switch len(matches) {
-	case 0:
-		scaffold.RecordPlanMachineExists(ctx, t.ID, false)
-		return false, nil
-	case 1:
-		inst := matches[0]
-		mt.Instance = &inst
-		scaffold.RecordPlanMachineExists(ctx, t.ID, true)
-		// Cache the resolved IP so downstream phases (mesh, gateway, node,
-		// channels, agents, automations) can dial by public IPv4 without
-		// each target struct carrying a pointer back to this MachineTarget.
-		scaffold.RecordPlanMachineHost(ctx, mt.Spec.Name, inst.PublicIPv4)
-		return true, nil
-	default:
-		return false, fmt.Errorf("create-machine: %d instances with label %q under tag %q (want at most 1)",
-			len(matches), wantLabel, prefixTag)
-	}
+	return status.Exists, nil
 }
 
 // Execute implements scaffold.Step.
@@ -95,6 +77,22 @@ func (a *CreateMachineStep) Execute(ctx context.Context, t scaffold.Target) erro
 	}
 	if a.sshPubKey == "" {
 		return fmt.Errorf("create-machine: SSH public key is empty for %q", t.ID)
+	}
+	// Consult the resolver first so Execute is idempotent on already-
+	// converged infrastructure (e.g. a cold-start run where the probe
+	// never touched mt.Payload, or a --only invocation that skipped the
+	// provisioning Check). If the instance already exists we hydrate the
+	// payload + plan cache from the resolver's snapshot and return
+	// without re-creating.
+	status, err := ResolveMachineStatus(ctx, a.provider, a.prefix, mt)
+	if err != nil {
+		return err
+	}
+	if status.Exists && status.Instance != nil {
+		inst := *status.Instance
+		mt.Instance = &inst
+		scaffold.RecordPlanMachineHost(ctx, mt.Spec.Name, inst.PublicIPv4)
+		return nil
 	}
 	rootPass, err := randomRootPassword()
 	if err != nil {
@@ -149,9 +147,12 @@ func (a *CreateMachineStep) Execute(ctx context.Context, t scaffold.Target) erro
 	}
 	mt.Instance = inst
 	// Cache the resolved IP so downstream phases (mesh, gateway, node, etc.)
-	// can dial the freshly provisioned machine by PublicIPv4. See the matching
-	// RecordPlanMachineHost call in Check for the existing-instance path.
+	// can dial the freshly provisioned machine by PublicIPv4.
 	scaffold.RecordPlanMachineHost(ctx, mt.Spec.Name, inst.PublicIPv4)
+	// Seed the resolver with the authoritative snapshot so subsequent
+	// ResolveMachineStatus callers in this plan run don't have to round-trip
+	// through the provider to rediscover what we just produced.
+	RecordMachineStatus(ctx, a.prefix, mt.Spec.Name, MachineStatus{Exists: true, Instance: inst})
 	return nil
 }
 

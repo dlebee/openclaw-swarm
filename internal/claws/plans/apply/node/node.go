@@ -4,12 +4,11 @@ package node
 
 import (
 	"context"
-	"fmt"
 	"strings"
 
 	"github.com/gluwa/openclaw-swarm2/internal/claws/plans/apply/common"
+	"github.com/gluwa/openclaw-swarm2/internal/claws/plans/apply/mesh"
 	manifestdata "github.com/gluwa/openclaw-swarm2/internal/manifests/data"
-	"github.com/gluwa/openclaw-swarm2/internal/platformutil/bash"
 	"github.com/gluwa/openclaw-swarm2/internal/scaffold"
 )
 
@@ -65,8 +64,7 @@ func (nt *NodeTarget) GatewayInternalHost(ctx context.Context, dial common.SSHDi
 		return ip
 	}
 	if nt.onHeadscale() && dial != nil {
-		if ip, err := readGatewayMeshIP(ctx, dial, nt.GWMach); err == nil && ip != "" {
-			scaffold.RecordPlanMachineMeshIP(ctx, nt.GWMach.Name, ip)
+		if ip, err := mesh.ResolveMeshIP(ctx, dial, nt.GWMach); err == nil && ip != "" {
 			return ip
 		}
 	}
@@ -81,30 +79,6 @@ func (nt *NodeTarget) onHeadscale() bool {
 		return false
 	}
 	return strings.EqualFold(strings.TrimSpace(nt.Gateway.Networking.Mode), "headscale")
-}
-
-// readGatewayMeshIP SSHes into gwMach and returns the IPv4 address reported
-// by `tailscale ip -4`. Only called on cold-start runs where the plan-cache
-// mesh-IP entry hasn't been populated by mesh.install-tailscale. Returns an
-// empty string + error if tailscale isn't installed or isn't in a logged-in
-// state on the gateway — both are recoverable via a full apply run, which
-// is the right signal to propagate upward rather than guessing a host.
-func readGatewayMeshIP(ctx context.Context, dial common.SSHDialFunc, gwMach manifestdata.Machine) (string, error) {
-	host := common.ResolveMachineHost(ctx, gwMach)
-	if host == "" {
-		return "", fmt.Errorf("gateway host not resolvable for %q", gwMach.Name)
-	}
-	client, key, err := common.BorrowSSH(ctx, dial, host, common.MachineSSHPort(gwMach), common.MachineAgentUser(gwMach))
-	if err != nil {
-		return "", fmt.Errorf("dial gateway %q: %w", gwMach.Name, err)
-	}
-	defer common.ReturnSSH(ctx, key, client)
-
-	out, err := bash.RunOutput(client, `tailscale ip -4 2>/dev/null | head -n 1`)
-	if err != nil {
-		return "", fmt.Errorf("tailscale ip on %q: %w", gwMach.Name, err)
-	}
-	return strings.TrimSpace(out), nil
 }
 
 // BuildNodeTargets creates scaffold targets from manifest nodes, resolving

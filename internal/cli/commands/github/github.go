@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"github.com/charmbracelet/huh"
+	"github.com/gluwa/openclaw-swarm2/internal/cli/cliutil"
 	manifestdata "github.com/gluwa/openclaw-swarm2/internal/manifests/data"
 	manifestsvc "github.com/gluwa/openclaw-swarm2/internal/manifests/service"
 	"github.com/gluwa/openclaw-swarm2/internal/platformutil/apt"
@@ -49,7 +50,7 @@ distributed to the remaining selected machines via 'gh auth login --with-token'.
 		RunE: func(cmd *cobra.Command, args []string) error {
 			out := cmd.OutOrStdout()
 
-			m, err := loadManifest(manifestFile)
+			m, abs, err := loadManifest(manifestFile)
 			if err != nil {
 				return err
 			}
@@ -71,6 +72,11 @@ distributed to the remaining selected machines via 'gh auth login --with-token'.
 				return fmt.Errorf("expand private key path: %w", err)
 			}
 
+			_, resolver, err := cliutil.PrepareEndpoints(cmd.Context(), abs, m)
+			if err != nil {
+				return err
+			}
+
 			// Probe SSH reachability with a quick TCP dial. Anything that
 			// doesn't respond within the probe window is silently skipped —
 			// this mirrors the old openclaw-swarm 'status.ProbeMachine' gate
@@ -84,14 +90,14 @@ distributed to the remaining selected machines via 'gh auth login --with-token'.
 			var reachable []target
 			for i := range m.Machines {
 				mach := &m.Machines[i]
-				host, port, user, err := sshEndpoint(mach)
+				ep, err := resolver.Resolve(*mach)
 				if err != nil {
 					continue
 				}
-				if !dialOK(host, port, 3*time.Second) {
+				if !dialOK(ep.Host, ep.Port, 3*time.Second) {
 					continue
 				}
-				reachable = append(reachable, target{machine: mach, host: host, port: port, user: user})
+				reachable = append(reachable, target{machine: mach, host: ep.Host, port: ep.Port, user: ep.User})
 			}
 			if len(reachable) == 0 {
 				fmt.Fprintln(out, "No reachable machines.")
@@ -239,39 +245,19 @@ gh --version
 // helpers
 // ---------------------------------------------------------------------------
 
-func loadManifest(manifestFile *string) (*manifestdata.Manifest, error) {
+func loadManifest(manifestFile *string) (*manifestdata.Manifest, string, error) {
 	if manifestFile == nil || strings.TrimSpace(*manifestFile) == "" {
-		return nil, fmt.Errorf("specify manifest path: claws -f manifest.yml github ...")
+		return nil, "", fmt.Errorf("specify manifest path: claws -f manifest.yml github ...")
 	}
 	abs, err := filepath.Abs(*manifestFile)
 	if err != nil {
-		return nil, fmt.Errorf("manifest path: %w", err)
+		return nil, "", fmt.Errorf("manifest path: %w", err)
 	}
-	return manifestsvc.LoadFile(abs)
-}
-
-// sshEndpoint resolves a machine's SSH host/port/user tuple. GitHub
-// integration is an ops-time operation so it runs as the agent user,
-// not the bootstrap user. Falls back to bootstrap_user / root only when
-// agent_user isn't set (typically static ssh-type machines that predate
-// the two-user split).
-func sshEndpoint(mach *manifestdata.Machine) (host string, port int, user string, err error) {
-	host = strings.TrimSpace(mach.Host)
-	if host == "" {
-		return "", 0, "", fmt.Errorf("machine %q has no host", mach.Name)
+	m, err := manifestsvc.LoadFile(abs)
+	if err != nil {
+		return nil, "", err
 	}
-	port = mach.SSHPort
-	if port == 0 {
-		port = 22
-	}
-	user = strings.TrimSpace(mach.AgentUser)
-	if user == "" {
-		user = strings.TrimSpace(mach.BootstrapUser)
-	}
-	if user == "" {
-		user = "root"
-	}
-	return host, port, user, nil
+	return m, abs, nil
 }
 
 // dialOK performs a short TCP connect to host:port. Used as a cheap liveness

@@ -10,6 +10,7 @@ import (
 	"syscall"
 
 	"github.com/charmbracelet/huh"
+	"github.com/gluwa/openclaw-swarm2/internal/cli/cliutil"
 	manifestdata "github.com/gluwa/openclaw-swarm2/internal/manifests/data"
 	manifestsvc "github.com/gluwa/openclaw-swarm2/internal/manifests/service"
 	"github.com/gluwa/openclaw-swarm2/internal/state"
@@ -55,32 +56,29 @@ picker is shown. Use --name to skip the picker.`),
 				return err
 			}
 
-			// `claws ssh` defaults to the agent user — it's the account
-			// that stays usable throughout a machine's lifetime. The
-			// bootstrap user may have been disabled by security hardening,
-			// so falling back to it here would break interactive access on
-			// locked-down machines. Operators who need the privileged
-			// identity pass --user explicitly.
-			sshUser := user
-			if sshUser == "" {
-				sshUser = strings.TrimSpace(mach.AgentUser)
+			// Resolve the live endpoint (multipass/linode VMs discover
+			// their current PublicIPv4 via the hosting provider; ssh-type
+			// machines read Host straight from the manifest).
+			_, resolver, err := cliutil.PrepareEndpoints(cmd.Context(), abs, m)
+			if err != nil {
+				return err
 			}
-			if sshUser == "" {
-				sshUser = strings.TrimSpace(mach.BootstrapUser)
-			}
-			if sshUser == "" {
-				sshUser = "root"
-			}
-			port := mach.SSHPort
-			if port == 0 {
-				port = 22
-			}
-			host := strings.TrimSpace(mach.Host)
-			if host == "" {
-				return fmt.Errorf("machine %q has no host", mach.Name)
+			ep, err := resolver.Resolve(*mach)
+			if err != nil {
+				return err
 			}
 
-			return execSSH(host, port, sshUser, id.PrivateKeyPath)
+			// `claws ssh` defaults to the resolver's agent → bootstrap → root
+			// precedence, but --user wins when explicitly set: operators
+			// may need to re-enter as root on a hardened box before the
+			// agent user exists. We override only the user here — the host
+			// and port are always what the resolver produced.
+			sshUser := strings.TrimSpace(user)
+			if sshUser == "" {
+				sshUser = ep.User
+			}
+
+			return execSSH(ep.Host, ep.Port, sshUser, id.PrivateKeyPath)
 		},
 	}
 	cmd.Flags().StringVar(&name, "name", "", "machine name as declared in the manifest")

@@ -49,6 +49,7 @@ func ResolveHostedInstances(ctx context.Context, provider hosting.Provider, pref
 			loaded = true
 		}
 		want := machineLabel(prefix, mt.Spec.Name)
+		var found bool
 		for i := range instances {
 			if instances[i].Label == want {
 				inst := instances[i]
@@ -57,8 +58,18 @@ func ResolveHostedInstances(ctx context.Context, provider hosting.Provider, pref
 				// phases resolve the PublicIPv4 through the usual
 				// common.ResolveMachineHost path.
 				scaffold.RecordPlanMachineHost(ctx, mt.Spec.Name, inst.PublicIPv4)
+				// Seed the resolver cache so subsequent ResolveMachineStatus
+				// callers in this plan run don't reissue ListByTag.
+				RecordMachineStatus(ctx, prefix, mt.Spec.Name, MachineStatus{Exists: true, Instance: &inst})
+				found = true
 				break
 			}
+		}
+		if !found {
+			// Record the negative result too — downstream callers that ask
+			// "does this machine exist?" should get the same "no" they'd
+			// get by doing ListByTag themselves.
+			RecordMachineStatus(ctx, prefix, mt.Spec.Name, MachineStatus{Exists: false})
 		}
 	}
 	return nil

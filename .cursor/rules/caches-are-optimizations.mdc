@@ -1,0 +1,31 @@
+---
+description: Caches are pure optimizations; code must be correct with a cold cache.
+alwaysApply: true
+---
+
+# Caches are optimizations, not sources of truth
+
+Any cache — in-memory map, plan cache, context-scoped store, sync.Map, singleflight, HTTP response cache, anything — is a speed hack. **Correctness must not depend on it.**
+
+## Rules
+
+1. **Read-through**, not read-only. A cache lookup is `GetOrCompute(key)`: hit returns cached value; miss does the real work, writes the result, returns it. Callers never see a miss as "not present in the world".
+
+2. **No producer/consumer pairs in separate call sites**. Do not have function A write a cache that function B reads and relies on — that's hidden ordering coupling. Either both call the same `Resolve*()` helper, or the value is passed explicitly.
+
+3. **Cold cache == hot cache, semantically**. The program must produce the same answer on the first call of a run as on the hundredth. If "cache empty → false" is a valid answer, you have a state machine, not a cache. Name it accordingly (`hasMemoizedControlURL`, not `getControlURL`).
+
+4. **Check the world, not the memo**. Predicates that decide real-world state (is X installed? does VM exist?) must inspect reality, using the cache as a latency shortcut. They must not return "no" just because nobody populated the cache yet.
+
+5. **Errors are not cache misses**. If the underlying source fails, propagate the error. Do not return a zero value that callers will misread as "definitely absent".
+
+## Reference
+
+- `internal/claws/plans/apply/mesh/control_url.go:getOrResolveControlURL` — correct shape.
+- See `internal/claws/plans/apply/AGENTS.md` for domain-specific application.
+
+## Smell checklist
+
+- A `Check`/`Is*`/`Has*` function whose body is just `_, ok := cache.Get(k); return ok` → almost certainly wrong; it's asking the memo, not the world.
+- Writes to a shared cache inside a function documented as "read-only" or "pure" → ordering bug waiting to happen.
+- "Cold cache" branches duplicated across every consumer → the resolver should own that fallback, not each caller.

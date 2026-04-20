@@ -185,23 +185,24 @@ func TestCheck_satisfiedWhenExisting(t *testing.T) {
 	wantLabel := machineLabel("pfx", "web")
 	prefixTag := clawsPrefixTag("pfx")
 	perMachineTag := machineTag("pfx", "web")
+	provider := &mockProvider{
+		listByTag: map[string][]hosting.Instance{
+			prefixTag: {{
+				Provider:   "mock",
+				ResourceID: "999",
+				Label:      wantLabel,
+				Region:     "us-east",
+				PublicIPv4: "198.51.100.1",
+				Status:     "running",
+				Tags:       []string{prefixTag, perMachineTag},
+			}},
+		},
+	}
 	p := scaffold.New()
 	AddPhase(p, BuildMachineTargets([]manifestdata.Machine{
 		{Name: "web", Type: manifestdata.MachineTypeLinode, Region: "us-east", SKU: "g6-nanode-1", Image: "linode/debian12"},
 	}), Options{
-		Provider: &mockProvider{
-			listByTag: map[string][]hosting.Instance{
-				prefixTag: {{
-					Provider:   "mock",
-					ResourceID: "999",
-					Label:      wantLabel,
-					Region:     "us-east",
-					PublicIPv4: "198.51.100.1",
-					Status:     "running",
-					Tags:       []string{prefixTag, perMachineTag},
-				}},
-			},
-		},
+		Provider:  provider,
 		Prefix:    "pfx",
 		SSHPubKey: "ssh-rsa AAAA",
 	})
@@ -212,18 +213,105 @@ func TestCheck_satisfiedWhenExisting(t *testing.T) {
 	}
 
 	var mt *MachineTarget
+	var targets []scaffold.Target
 	for _, ph := range p.Phases {
 		for _, tgt := range ph.Targets {
 			if m, ok := tgt.Payload.(*MachineTarget); ok {
 				mt = m
+				targets = append(targets, tgt)
 			}
 		}
 	}
 
-	if err := ex.Execute(context.Background(), scaffold.ExecuteOptions{Progress: progress.Noop{}}); err != nil {
+	// Mirror the production apply flow: run the pre-probe hosted-instance
+	// resolver before Execute so MachineTarget.Instance is populated by a
+	// dedicated resolver pass (rather than by Check as a side effect).
+	// Check's purity rule (see .cursor/rules/plan-checks-are-pure.mdc)
+	// forbids it from mutating the payload.
+	ctx := scaffold.EnsurePlanCache(context.Background())
+	if err := ResolveHostedInstances(ctx, provider, "pfx", targets); err != nil {
+		t.Fatalf("resolve hosted: %v", err)
+	}
+	if mt.Instance == nil || mt.Instance.ResourceID != "999" {
+		t.Fatalf("expected existing instance from pre-probe resolver, got %+v", mt.Instance)
+	}
+
+	if err := ex.Execute(ctx, scaffold.ExecuteOptions{Progress: progress.Noop{}}); err != nil {
 		t.Fatal(err)
 	}
 	if mt.Instance == nil || mt.Instance.ResourceID != "999" {
-		t.Fatalf("expected existing instance, got %+v", mt.Instance)
+		t.Fatalf("expected existing instance after Execute, got %+v", mt.Instance)
+	}
+}
+
+func TestResolveMachineStatus_cacheShared(t *testing.T) {
+	wantLabel := machineLabel("pfx", "web")
+	prefixTag := clawsPrefixTag("pfx")
+	provider := &mockProvider{
+		listByTag: map[string][]hosting.Instance{
+			prefixTag: {{
+				Provider:   "mock",
+				ResourceID: "1",
+				Label:      wantLabel,
+				PublicIPv4: "203.0.113.5",
+			}},
+		},
+	}
+	ctx := scaffold.EnsurePlanCache(context.Background())
+	mt := &MachineTarget{Spec: manifestdata.Machine{Name: "web", Type: manifestdata.MachineTypeLinode}}
+
+	s1, err := ResolveMachineStatus(ctx, provider, "pfx", mt)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !s1.Exists || s1.Instance == nil || s1.Instance.ResourceID != "1" {
+		t.Fatalf("unexpected first resolve: %+v", s1)
+	}
+
+	// Swap the provider's data out from under us. The second call should
+	// still return the cached snapshot, proving the cache is shared and
+	// read-through (cold == hot).
+	provider.listByTag = nil
+	s2, err := ResolveMachineStatus(ctx, provider, "pfx", mt)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !s2.Exists || s2.Instance == nil || s2.Instance.ResourceID != "1" {
+		t.Fatalf("cache miss on second resolve: %+v", s2)
+	}
+}
+
+func TestCreateMachine_Check_doesNotMutatePayloadOrCache(t *testing.T) {
+	wantLabel := machineLabel("pfx", "web")
+	prefixTag := clawsPrefixTag("pfx")
+	provider := &mockProvider{
+		listByTag: map[string][]hosting.Instance{
+			prefixTag: {{
+				Provider:   "mock",
+				ResourceID: "42",
+				Label:      wantLabel,
+				PublicIPv4: "203.0.113.9",
+			}},
+		},
+	}
+	step := NewCreateMachineStep(Options{Provider: provider, Prefix: "pfx", SSHPubKey: "ssh-rsa AAAA"})
+	mt := &MachineTarget{Spec: manifestdata.Machine{Name: "web", Type: manifestdata.MachineTypeLinode}}
+	ctx := scaffold.EnsurePlanCache(context.Background())
+
+	satisfied, err := step.Check(ctx, scaffold.Target{ID: "web", Payload: mt})
+	if err != nil {
+		t.Fatalf("check: %v", err)
+	}
+	if !satisfied {
+		t.Fatalf("expected satisfied=true for an existing instance")
+	}
+	if mt.Instance != nil {
+		t.Fatalf("Check must NOT mutate payload; got mt.Instance=%+v", mt.Instance)
+	}
+	if h, ok := scaffold.LookupPlanMachineHost(ctx, "web"); ok {
+		t.Fatalf("Check must NOT write RecordPlanMachineHost; got %q", h)
+	}
+	if _, known := scaffold.DoesMachineExist(ctx, "web"); known {
+		t.Fatal("Check must NOT write RecordPlanMachineExists")
 	}
 }

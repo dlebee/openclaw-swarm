@@ -16,6 +16,7 @@ import (
 
 	"github.com/charmbracelet/huh"
 	gwsvc "github.com/gluwa/openclaw-swarm2/internal/claws/plans/apply/gateway"
+	"github.com/gluwa/openclaw-swarm2/internal/cli/cliutil"
 	manifestdata "github.com/gluwa/openclaw-swarm2/internal/manifests/data"
 	manifestsvc "github.com/gluwa/openclaw-swarm2/internal/manifests/service"
 	clawssh "github.com/gluwa/openclaw-swarm2/internal/ssh"
@@ -54,7 +55,7 @@ tunnel is ready, and keeps the forward open until you press Ctrl+C. Pass
 (with the auth token) to the console.`),
 		Args: cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			m, err := loadManifest(manifestFile)
+			m, abs, err := loadManifest(manifestFile)
 			if err != nil {
 				return err
 			}
@@ -63,10 +64,15 @@ tunnel is ready, and keeps the forward open until you press Ctrl+C. Pass
 				return err
 			}
 
-			host, port, user, err := sshEndpoint(mach)
+			_, resolver, err := cliutil.PrepareEndpoints(cmd.Context(), abs, m)
 			if err != nil {
 				return err
 			}
+			ep, err := resolver.Resolve(*mach)
+			if err != nil {
+				return err
+			}
+			host, port, user := ep.Host, ep.Port, ep.User
 
 			store, err := state.OpenDefault()
 			if err != nil {
@@ -157,7 +163,7 @@ machine and runs 'openclaw tui'. Requires 'openclaw' to be installed on the
 remote host (provided by 'claws apply').`),
 		Args: cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			m, err := loadManifest(manifestFile)
+			m, abs, err := loadManifest(manifestFile)
 			if err != nil {
 				return err
 			}
@@ -166,10 +172,15 @@ remote host (provided by 'claws apply').`),
 				return err
 			}
 
-			host, port, user, err := sshEndpoint(mach)
+			_, resolver, err := cliutil.PrepareEndpoints(cmd.Context(), abs, m)
 			if err != nil {
 				return err
 			}
+			ep, err := resolver.Resolve(*mach)
+			if err != nil {
+				return err
+			}
+			host, port, user := ep.Host, ep.Port, ep.User
 
 			store, err := state.OpenDefault()
 			if err != nil {
@@ -210,15 +221,19 @@ remote host (provided by 'claws apply').`),
 // helpers
 // ---------------------------------------------------------------------------
 
-func loadManifest(manifestFile *string) (*manifestdata.Manifest, error) {
+func loadManifest(manifestFile *string) (*manifestdata.Manifest, string, error) {
 	if manifestFile == nil || strings.TrimSpace(*manifestFile) == "" {
-		return nil, fmt.Errorf("specify manifest path: claws -f manifest.yml gateways ...")
+		return nil, "", fmt.Errorf("specify manifest path: claws -f manifest.yml gateways ...")
 	}
 	abs, err := filepath.Abs(*manifestFile)
 	if err != nil {
-		return nil, fmt.Errorf("manifest path: %w", err)
+		return nil, "", fmt.Errorf("manifest path: %w", err)
 	}
-	return manifestsvc.LoadFile(abs)
+	m, err := manifestsvc.LoadFile(abs)
+	if err != nil {
+		return nil, "", err
+	}
+	return m, abs, nil
 }
 
 // argName prefers --name when provided, else the first positional arg.
@@ -284,25 +299,6 @@ func findMachine(m *manifestdata.Manifest, name string) *manifestdata.Machine {
 		}
 	}
 	return nil
-}
-
-func sshEndpoint(mach *manifestdata.Machine) (host string, port int, user string, err error) {
-	host = strings.TrimSpace(mach.Host)
-	if host == "" {
-		return "", 0, "", fmt.Errorf("machine %q has no host", mach.Name)
-	}
-	port = mach.SSHPort
-	if port == 0 {
-		port = 22
-	}
-	user = strings.TrimSpace(mach.AgentUser)
-	if user == "" {
-		user = strings.TrimSpace(mach.BootstrapUser)
-	}
-	if user == "" {
-		user = "root"
-	}
-	return host, port, user, nil
 }
 
 // waitLocalPort polls 127.0.0.1:port until a TCP connection succeeds, or the

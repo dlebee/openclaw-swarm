@@ -10,6 +10,7 @@ import (
 
 	"github.com/charmbracelet/huh"
 	"github.com/gluwa/openclaw-swarm2/internal/claws/plans/apply/channels"
+	"github.com/gluwa/openclaw-swarm2/internal/cli/cliutil"
 	manifestdata "github.com/gluwa/openclaw-swarm2/internal/manifests/data"
 	manifestsvc "github.com/gluwa/openclaw-swarm2/internal/manifests/service"
 	"github.com/gluwa/openclaw-swarm2/internal/state"
@@ -61,7 +62,11 @@ func cleanChannelsCmd(manifestFile *string, yes *bool) *cobra.Command {
 				addr := net.JoinHostPort(host, strconv.Itoa(port))
 				return store.DialSSH(addr, user)
 			}
-			return runCleanChannels(cmd.Context(), m, dial, cmd, *yes)
+			ctx, resolver, err := cliutil.PrepareEndpoints(cmd.Context(), abs, m)
+			if err != nil {
+				return err
+			}
+			return runCleanChannels(ctx, m, resolver, dial, cmd, *yes)
 		},
 	}
 }
@@ -75,6 +80,7 @@ type orphanChannel struct {
 func runCleanChannels(
 	ctx context.Context,
 	m *manifestdata.Manifest,
+	resolver *cliutil.EndpointResolver,
 	dial func(ctx context.Context, host string, port int, user string) (*xssh.Client, error),
 	cmd *cobra.Command,
 	yes bool,
@@ -98,25 +104,18 @@ func runCleanChannels(
 		if !ok {
 			continue
 		}
-		host := strings.TrimSpace(mach.Host)
-		if host == "" {
+		ep, err := resolver.Resolve(mach)
+		if err != nil {
+			// A gateway whose reference VM isn't running yet isn't an
+			// orphan — it's just not reachable. Warn and move on so the
+			// rest of the manifest still gets cleaned.
+			fmt.Fprintf(cmd.ErrOrStderr(), "warning: skipping gateway %q: %v\n", gw.Name, err)
 			continue
 		}
-		port := mach.SSHPort
-		if port == 0 {
-			port = 22
-		}
-		user := strings.TrimSpace(mach.AgentUser)
-		if user == "" {
-			user = strings.TrimSpace(mach.BootstrapUser)
-		}
-		if user == "" {
-			user = "root"
-		}
 
-		client, err := dial(ctx, host, port, user)
+		client, err := dial(ctx, ep.Host, ep.Port, ep.User)
 		if err != nil {
-			fmt.Fprintf(cmd.ErrOrStderr(), "warning: cannot reach gateway %q (%s): %v\n", gw.Name, host, err)
+			fmt.Fprintf(cmd.ErrOrStderr(), "warning: cannot reach gateway %q (%s): %v\n", gw.Name, ep.Host, err)
 			continue
 		}
 		clients = append(clients, gwClient{client: client, gw: gw})
