@@ -26,10 +26,13 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
 	"github.com/gluwa/openclaw-swarm2/internal/hosting"
+	"github.com/gofrs/flock"
 )
 
 // Provider is the hosting.Provider implementation.
@@ -94,6 +97,38 @@ func (p *Provider) Kind() string { return hosting.KindMultipass }
 // CreateInstance
 // --------------------------------------------------------------------------
 
+// launchLockPath is the file-system semaphore used by acquireLaunchLock.
+// Placing it in os.TempDir() makes it process- and user-scoped on both
+// Unix and Windows, which is the right scope: multipassd runs locally and
+// its DHCP bridge is per-machine.
+var launchLockPath = filepath.Join(os.TempDir(), "openclaw-multipass-launch.lock")
+
+// acquireLaunchLock serializes multipass launch calls across goroutines AND
+// across concurrent go test binary invocations on the same machine.
+//
+// Root cause: multipassd's internal DHCP server has a race when two VMs are
+// created within the same DHCP lease window — both can be assigned the same
+// IPv4 address. This corrupts every downstream SSH operation (wrong host key,
+// wrong authorized_keys) and makes parallel integration tests flaky.
+//
+// Using a file-backed exclusive lock (gofrs/flock) guarantees that only one
+// `multipass launch` runs at a time regardless of how many goroutines or test
+// binaries are active. The lock is held only for the duration of the launch
+// command itself; all subsequent polling / tag-saving is unlocked.
+func acquireLaunchLock(ctx context.Context) (unlock func(), err error) {
+	fl := flock.New(launchLockPath)
+	// TryLockContext respects ctx cancellation so a hung launch doesn't
+	// block the test suite indefinitely.
+	ok, err := fl.TryLockContext(ctx, 500*time.Millisecond)
+	if err != nil {
+		return nil, fmt.Errorf("multipass: acquire launch lock: %w", err)
+	}
+	if !ok {
+		return nil, fmt.Errorf("multipass: acquire launch lock: context cancelled")
+	}
+	return func() { _ = fl.Unlock() }, nil
+}
+
 // CreateInstance launches a Multipass VM named after opts.Label, seeds the
 // supplied authorized keys via cloud-init, and records tags in the sidecar
 // store. On success it returns a running Instance (state = "Running",
@@ -103,6 +138,10 @@ func (p *Provider) Kind() string { return hosting.KindMultipass }
 // We intentionally combine launch + wait here rather than splitting the way
 // Linode does because `multipass launch` already blocks until the VM is up.
 // A separate poll would just be sugar.
+//
+// The launch itself is serialized via a file-based lock (see acquireLaunchLock)
+// to prevent the multipassd DHCP race that assigns the same IPv4 to two VMs
+// created simultaneously. Polling and tag-saving happen outside the lock.
 func (p *Provider) CreateInstance(ctx context.Context, opts hosting.CreateInstanceOpts) (*hosting.Instance, error) {
 	label := strings.TrimSpace(opts.Label)
 	if label == "" {
@@ -130,7 +169,14 @@ func (p *Provider) CreateInstance(ctx context.Context, opts hosting.CreateInstan
 	args = append(args, image)
 
 	seed := buildCloudInit(opts.PublicKeys, opts.BootstrapUser, opts.Hostname)
-	if _, err := p.runner.Run(ctx, strings.NewReader(seed), args...); err != nil {
+
+	unlock, err := acquireLaunchLock(ctx)
+	if err != nil {
+		return nil, err
+	}
+	_, err = p.runner.Run(ctx, strings.NewReader(seed), args...)
+	unlock() // release before polling — no need to hold during WaitRunning
+	if err != nil {
 		return nil, fmt.Errorf("multipass launch %s: %w", label, err)
 	}
 
