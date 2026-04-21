@@ -74,6 +74,11 @@ func BuildPlan(o BuildOptions) (*scaffold.Plan, error) {
 			MachineTargets:      targets,
 			ResolvedEnv:         resolvedEnv,
 			AssumeWillProvision: true,
+			// Inside the apply plan the security phase is always present and
+			// must finish before any non-manual automation probes. The
+			// standalone `claws automations apply` pipeline doesn't build a
+			// security phase, so it leaves this empty.
+			NonManualProbeDependsOn: []string{"security"},
 		}
 		nonManualAutoNames = automations.AddPhases(p, o.Manifest.Automations, autoOpts, false)
 		if o.IncludeManualAutomations {

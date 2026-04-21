@@ -87,6 +87,18 @@ type Options struct {
 	//             `claws automations apply` where provisioning isn't in the
 	//             plan and the machine simply doesn't exist).
 	AssumeWillProvision bool
+
+	// NonManualProbeDependsOn lists phase names that each non-manual
+	// automation phase must wait on before its probe runs. Manual
+	// automations keep their default linear probe chain.
+	//
+	// The caller owns this because automation phases may live inside
+	// different parent plans: when injected into the apply plan the
+	// correct value is []string{"security"} (security runs before any
+	// non-manual automation probe); the standalone `claws automations
+	// apply` plan has no security phase at all and must pass nil to
+	// avoid a dangling probe-depends reference at Build time.
+	NonManualProbeDependsOn []string
 }
 
 // AddPhases appends one scaffold phase per automation to plan. Pass manual=true
@@ -130,11 +142,18 @@ func addAutomationPhase(p *scaffold.Plan, auto manifestdata.Automation, mtByName
 	}
 	ph := p.AddPhase(auto.Name)
 	ph.Concurrency = effectiveConcurrency(auto)
-	// Non-manual automations probe in parallel after security; manual phases
-	// keep the default linear chain (after prior phase) so they run after
-	// injected non-manual automations unless given explicit ProbeDependsOn.
-	if !auto.Manual {
-		ph.ProbeDependsOn = []string{"security"}
+	// Non-manual automations share a probe-dependency set so they can probe
+	// in parallel once the upstream phases are done (e.g. "security" when
+	// injected into the apply plan). Manual phases keep the default linear
+	// chain (after the previous phase) so they run after injected
+	// non-manual automations unless given explicit ProbeDependsOn. The
+	// caller controls the dependency list via Options.NonManualProbeDependsOn
+	// because automations are hosted by different parent plans: the apply
+	// plan has a "security" phase to wait on; the standalone automations
+	// plan does not, and referencing an unknown phase here would break
+	// Plan.Build with "probe-depends on unknown phase".
+	if !auto.Manual && len(opts.NonManualProbeDependsOn) > 0 {
+		ph.ProbeDependsOn = append([]string(nil), opts.NonManualProbeDependsOn...)
 	}
 	ph.AddTargets(targets...)
 	for _, step := range auto.Steps {
