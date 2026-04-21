@@ -2,17 +2,14 @@ package remote
 
 import (
 	"fmt"
-	"net"
-	"os"
 	"path/filepath"
-	"strconv"
 	"strings"
-	"syscall"
 
 	"github.com/charmbracelet/huh"
 	"github.com/gluwa/openclaw-swarm2/internal/cli/cliutil"
 	manifestdata "github.com/gluwa/openclaw-swarm2/internal/manifests/data"
 	manifestsvc "github.com/gluwa/openclaw-swarm2/internal/manifests/service"
+	clawssh "github.com/gluwa/openclaw-swarm2/internal/ssh"
 	"github.com/gluwa/openclaw-swarm2/internal/state"
 	"github.com/spf13/cobra"
 )
@@ -82,7 +79,12 @@ Subcommands:
 				sshUser = ep.User
 			}
 
-			return execSSH(ep.Host, ep.Port, sshUser, id.PrivateKeyPath)
+			keyPath, err := clawssh.ExpandPath(id.PrivateKeyPath)
+			if err != nil {
+				return fmt.Errorf("resolve key path: %w", err)
+			}
+
+			return execSSH(ep.Host, ep.Port, sshUser, keyPath)
 		},
 	}
 	cmd.Flags().StringVar(&name, "name", "", "machine name as declared in the manifest")
@@ -152,37 +154,6 @@ func buildMachineEntries(m *manifestdata.Manifest) []machineEntry {
 		entries = append(entries, machineEntry{Machine: mach, Roles: roles})
 	}
 	return entries
-}
-
-// execSSH replaces the current process with an ssh invocation.
-func execSSH(host string, port int, user, keyPath string) error {
-	sshBin, err := findSSH()
-	if err != nil {
-		return err
-	}
-
-	addr := net.JoinHostPort(host, strconv.Itoa(port))
-	args := []string{
-		"ssh",
-		"-i", keyPath,
-		"-o", "StrictHostKeyChecking=no",
-		"-o", "UserKnownHostsFile=/dev/null",
-		"-p", strconv.Itoa(port),
-		fmt.Sprintf("%s@%s", user, host),
-	}
-
-	fmt.Fprintf(os.Stderr, "→ ssh %s@%s (port %d)\n", user, addr, port)
-	return syscall.Exec(sshBin, args, os.Environ())
-}
-
-func findSSH() (string, error) {
-	for _, dir := range filepath.SplitList(os.Getenv("PATH")) {
-		p := filepath.Join(dir, "ssh")
-		if fi, err := os.Stat(p); err == nil && !fi.IsDir() {
-			return p, nil
-		}
-	}
-	return "", fmt.Errorf("ssh binary not found in PATH")
 }
 
 func resolveManifestPath(manifestFile *string, args []string) (string, error) {
