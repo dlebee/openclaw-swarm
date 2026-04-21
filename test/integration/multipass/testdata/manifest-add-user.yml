@@ -1,0 +1,29 @@
+# Multipass add-user smoke-test manifest.
+#
+# A single multipass machine, sized like the other single-purpose
+# fixtures (1 CPU, 1 GiB RAM). The test runs provisioning + security on
+# it, then exercises the primitive `claws ssh add-user` is built on:
+# SSH in as agent_user with identity A, append identity B's pubkey to
+# authorized_keys, and confirm B can now dial in while proving it could
+# not before.
+#
+# bootstrap_user=root + agent_user=agent mirrors manifest-security.yml:
+# root does the provisioning/security work; the agent user is the
+# ongoing-ops identity every phase past security talks to. The
+# ssh add-user primitive targets agent's authorized_keys, so having a
+# dedicated agent account is essential — otherwise the test degenerates
+# into "append to root", which isn't what the CLI actually does.
+#
+# prefix is overridden by the harness (`m.Prefix = "it-addu-" + rand`)
+# so parallel runs never collide on VM labels.
+
+prefix: claws-it-multipass-addu
+
+machines:
+  - name: gateway-host
+    type: multipass
+    cpus: 1
+    memory: 1G
+    disk: 20G
+    bootstrap_user: root
+    agent_user: agent

@@ -48,7 +48,7 @@ automations:        [Automation]   # custom phases of bash/python/scp steps
 Each entry describes one host. The provisioner uses `type` to pick a
 driver; `sku` / `image` / `region` / `cpus` / `memory` / `disk` apply
 per-driver. SSH identity is **not** embedded — claws uses the key
-registered via `claws ssh auth`.
+registered via `claws auth generate` / `claws auth use`.
 
 ```yaml
 machines:

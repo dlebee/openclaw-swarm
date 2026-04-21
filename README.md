@@ -46,7 +46,7 @@ target machines** by the apply plan.
 
 ```bash
 # 1. Register your SSH key with claws (one-time)
-./claws ssh auth
+./claws auth generate default
 
 # 2. See the plan without touching anything
 ./claws apply -f path/to/your/manifest.yml --dry-run
@@ -68,8 +68,9 @@ target machines** by the apply plan.
 | `claws clean` | Remove local state (cached plan, SSH known-hosts) for a fresh run. |
 | `claws channels …` | Interact with a live gateway's channels config. |
 | `claws gateways …` | Interact with a live gateway (status, pair devices, restart). |
-| `claws remote ssh <machine>` | Open an SSH session to a manifest-declared machine using the same identity `apply` uses. |
-| `claws ssh auth` | Import / generate the SSH key pair `claws` uses for every dial. |
+| `claws ssh` | Open an SSH session to a manifest-declared machine using the same identity `apply` uses. |
+| `claws ssh add-user -f manifest.yml` | Authorize an additional SSH public key on every manifest machine — for both `agent_user` and `bootstrap_user` — so a teammate (or your second laptop) can run `claws` too. Uses your current identity to dial; the new pubkey can come from `--pubkey <file>`, `--pubkey-line`, or an interactive prompt. |
+| `claws auth` | Manage your local SSH identities (`generate`, `use`, `list`, `delete`). |
 | `claws manifest …` | Validate, lint, and inspect a manifest without running anything. |
 | `claws github …` | GitHub integration helpers. |
 
