@@ -22,8 +22,8 @@ refer to your manifest as `path/to/manifest.yml`.
   - `linode` — a Linode API token exported via the env var named in
     `linode_token_env:`.
   - `ssh` — pre-existing hosts reachable over SSH; nothing to install.
-- An SSH key pair. Don't have one? `claws ssh auth` will create one for
-  you.
+- An SSH key pair. Don't have one? `claws auth generate default` will
+  create one for you.
 - Bot tokens for any `channels:` you declared (Telegram/Slack/Discord).
   Leaving the relevant env var empty keeps the binding but the bot won't
   reach its vendor API.
@@ -39,15 +39,16 @@ go build -o claws ./cmd/cli
 ## 2. Register your SSH identity with claws
 
 `claws` uses one SSH key for every dial it makes (provisioning, apt,
-openclaw CLI invocations, SFTP, …). Tell it which key to use:
+openclaw CLI invocations, SFTP, …). Generate or register one:
 
 ```bash
-./claws ssh auth
+./claws auth generate default      # mint a fresh Ed25519 key pair
+./claws auth list                  # see registered identities
+./claws auth use <name>            # switch between identities
 ```
 
-It will either pick up `~/.ssh/id_ed25519` / `~/.ssh/id_rsa` or offer to
-generate a fresh key. Either way the public half ends up on every machine
-`claws` provisions.
+The active identity's public half is installed on every machine `claws`
+provisions (during the `provisioning` phase's `authorize-ssh-key` step).
 
 ## 3. Fill in the env file
 
@@ -136,7 +137,7 @@ written `~/.openclaw/openclaw.json` that the automation then patches):
 
 # Open a shell on any manifest-declared machine using the same identity
 # claws uses for apply
-./claws remote ssh <machine-name>
+./claws -f path/to/manifest.yml ssh --name <machine-name>
 
 # On the gateway itself, tail the daemon and talk to an agent
 systemctl --user status openclaw-gateway
@@ -166,7 +167,47 @@ Typical loops:
 - **Bump the openclaw version** → set `openclaw_version:` on the
   gateway, re-apply; `install-openclaw` runs npm again on every host.
 
-## 9. Tear down
+## 9. Onboard a second laptop or teammate
+
+Once a swarm is applied, the `security` phase locks each machine down to
+SSH-only auth as the `agent_user`. A fresh laptop with a new identity has
+no way in — so someone who's already authorized has to push the new
+operator's public key onto every machine.
+
+On the **new** laptop:
+
+```bash
+./claws auth generate laptop-two
+# prints "Public: <path>"  — cat that file and send it to an authorized operator
+./claws auth list
+```
+
+On an **already-authorized** laptop, with the same manifest:
+
+```bash
+./claws -f path/to/manifest.yml ssh add-user --pubkey ./laptop-two.pub
+# or paste the line directly:
+./claws -f path/to/manifest.yml ssh add-user --pubkey-line "ssh-ed25519 AAAA... laptop-two"
+# or interactively:
+./claws -f path/to/manifest.yml ssh add-user
+# or just preview:
+./claws -f path/to/manifest.yml ssh add-user --pubkey ./laptop-two.pub --dry-run
+```
+
+`ssh add-user` dials each machine with the current identity and
+appends the new pubkey to authorized_keys for **both** `agent_user` and
+`bootstrap_user` (deduped when they are the same account), mirroring
+the pair that `apply` seeds on a fresh machine. Users where the key is
+already present are reported and left alone. It's idempotent —
+re-running is cheap.
+
+There is **no recovery path** for a swarm where nobody holds a
+currently-authorized key. Linode's API can reset the root password and
+rebuild the image, but rebuild wipes the disk (losing the gateway,
+workspaces, and headscale state); `security` has already disabled
+password SSH by then anyway.
+
+## 10. Tear down
 
 ```bash
 ./claws destroy -f path/to/manifest.yml

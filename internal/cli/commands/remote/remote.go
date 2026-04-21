@@ -18,7 +18,8 @@ import (
 )
 
 // SSHCmd returns the `claws ssh` command that opens an interactive SSH
-// session to a manifest machine.
+// session to a manifest machine. It also hosts related remote operations
+// (e.g. `add-user`) as subcommands.
 func SSHCmd(manifestFile *string) *cobra.Command {
 	var name, user string
 	cmd := &cobra.Command{
@@ -27,7 +28,10 @@ func SSHCmd(manifestFile *string) *cobra.Command {
 		Long: strings.TrimSpace(`
 Opens an interactive SSH session to one of the machines declared in the manifest.
 If only one machine exists it is selected automatically; otherwise an interactive
-picker is shown. Use --name to skip the picker.`),
+picker is shown. Use --name to skip the picker.
+
+Subcommands:
+  add-user   Authorize an additional SSH public key on every manifest machine.`),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			path, err := resolveManifestPath(manifestFile, args)
 			if err != nil {
@@ -83,6 +87,7 @@ picker is shown. Use --name to skip the picker.`),
 	}
 	cmd.Flags().StringVar(&name, "name", "", "machine name as declared in the manifest")
 	cmd.Flags().StringVar(&user, "user", "", "SSH user override (default: agent_user, then bootstrap_user, then root)")
+	cmd.AddCommand(AddUserCmd(manifestFile))
 	return cmd
 }
 
