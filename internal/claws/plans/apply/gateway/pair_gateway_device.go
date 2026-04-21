@@ -22,11 +22,16 @@ const (
 //
 // Applicable only when the gateway is already onboarded (config exists).
 type PairGatewayDeviceStep struct {
-	dial SSHDialFunc
+	dial   SSHDialFunc
+	reader common.ConfigReader
 }
 
 func NewPairGatewayDeviceStep(opts Options) *PairGatewayDeviceStep {
-	return &PairGatewayDeviceStep{dial: opts.SSHDial}
+	r := opts.ConfigReader
+	if r == nil {
+		r = common.DefaultConfigReader(common.SSHDialFunc(opts.SSHDial))
+	}
+	return &PairGatewayDeviceStep{dial: opts.SSHDial, reader: r}
 }
 
 func (*PairGatewayDeviceStep) Name() string { return "pair-gateway-device" }
@@ -53,11 +58,12 @@ func (s *PairGatewayDeviceStep) Check(ctx context.Context, t scaffold.Target) (b
 	}
 	defer returnSSH(ctx, key, client)
 
-	dl, err := ListDevices(client)
+	cfgHost := common.MachineConfigHost(m, host)
+	dl, err := s.reader.DeviceList(ctx, client, cfgHost)
 	if err != nil {
 		return false, fmt.Errorf("list devices on %s: %w", m.Name, err)
 	}
-	return HasPairedLocalDevice(dl), nil
+	return common.HasPairedLocalDevice(dl), nil
 }
 
 // Execute triggers a pairing request by calling `openclaw nodes list`
@@ -66,7 +72,8 @@ func (s *PairGatewayDeviceStep) Check(ctx context.Context, t scaffold.Target) (b
 func (s *PairGatewayDeviceStep) Execute(ctx context.Context, t scaffold.Target) error {
 	gt := t.Payload.(*GatewayTarget)
 	m := gt.Machine
-	client, key, err := borrowSSHWithRetry(ctx, s.dial, machineHost(ctx, m), machineSSHPort(m), machineAgentUser(m))
+	host := machineHost(ctx, m)
+	client, key, err := borrowSSHWithRetry(ctx, s.dial, host, machineSSHPort(m), machineAgentUser(m))
 	if err != nil {
 		return fmt.Errorf("pair-gateway-device: %w", err)
 	}
@@ -75,13 +82,14 @@ func (s *PairGatewayDeviceStep) Execute(ctx context.Context, t scaffold.Target) 
 	// Trigger the local device pairing request.
 	_, _ = bash.RunOutput(client, common.OpenclawCLIPreamble()+`openclaw nodes list >/dev/null 2>&1 || true`)
 
+	cfgHost := common.MachineConfigHost(m, host)
 	for attempt := 0; attempt < pairingRetries; attempt++ {
-		dl, err := ListDevices(client)
+		dl, err := s.reader.DeviceList(ctx, client, cfgHost)
 		if err != nil {
 			return fmt.Errorf("pair-gateway-device: list devices: %w", err)
 		}
 
-		if len(dl.Pending) == 0 && HasPairedLocalDevice(dl) {
+		if len(dl.Pending) == 0 && common.HasPairedLocalDevice(dl) {
 			return nil
 		}
 
@@ -109,17 +117,19 @@ func (s *PairGatewayDeviceStep) Execute(ctx context.Context, t scaffold.Target) 
 func (s *PairGatewayDeviceStep) Verify(ctx context.Context, t scaffold.Target) error {
 	gt := t.Payload.(*GatewayTarget)
 	m := gt.Machine
-	client, key, err := borrowSSH(ctx, s.dial, machineHost(ctx, m), machineSSHPort(m), machineAgentUser(m))
+	host := machineHost(ctx, m)
+	client, key, err := borrowSSH(ctx, s.dial, host, machineSSHPort(m), machineAgentUser(m))
 	if err != nil {
 		return fmt.Errorf("pair-gateway-device verify: dial: %w", err)
 	}
 	defer returnSSH(ctx, key, client)
 
-	dl, err := ListDevices(client)
+	cfgHost := common.MachineConfigHost(m, host)
+	dl, err := s.reader.DeviceList(ctx, client, cfgHost)
 	if err != nil {
 		return fmt.Errorf("pair-gateway-device verify: %w", err)
 	}
-	if !HasPairedLocalDevice(dl) {
+	if !common.HasPairedLocalDevice(dl) {
 		return fmt.Errorf("pair-gateway-device verify: no paired device found after approval")
 	}
 	return nil

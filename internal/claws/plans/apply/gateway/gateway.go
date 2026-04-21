@@ -52,10 +52,19 @@ func BuildGatewayTargets(gateways []manifestdata.Gateway, machines []manifestdat
 // Options configures the gateway phase.
 type Options struct {
 	SSHDial SSHDialFunc
+	// ConfigReader is the reader Check/Verify paths use for openclaw
+	// config queries. When left nil, AddPhase wires the default
+	// snapshot-over-CLI reader so every Check in this phase sees the
+	// same per-host openclaw.json / devices snapshot the agents and
+	// channels phases already populate.
+	ConfigReader common.ConfigReader
 }
 
 // AddPhase registers the "gateway" phase with up to 5 concurrent targets.
 func AddPhase(p *scaffold.Plan, targets []scaffold.Target, opts Options) *scaffold.Phase {
+	if opts.ConfigReader == nil {
+		opts.ConfigReader = common.DefaultConfigReader(common.SSHDialFunc(opts.SSHDial))
+	}
 	ph := p.AddPhase("gateway")
 	n := len(targets)
 	if n < 1 {

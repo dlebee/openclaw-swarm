@@ -57,10 +57,19 @@ func BuildAgentTargets(agents []manifestdata.Agent, gateways []manifestdata.Gate
 // Options configures the agents phase.
 type Options struct {
 	SSHDial SSHDialFunc
+	// ConfigReader is consulted by every step's Check to probe gateway
+	// state. When nil, AddPhase installs the default snapshot-over-CLI
+	// reader, which caches a single ~/.openclaw/openclaw.json read per
+	// gateway for the entire probe pass and transparently falls through
+	// to the CLI during Execute. Tests can inject a fake reader here.
+	ConfigReader common.ConfigReader
 }
 
 // AddPhase registers the "agents" phase.
 func AddPhase(p *scaffold.Plan, targets []scaffold.Target, opts Options) *scaffold.Phase {
+	if opts.ConfigReader == nil {
+		opts.ConfigReader = common.DefaultConfigReader(opts.SSHDial)
+	}
 	ph := p.AddPhase("agents")
 	ph.Concurrency = maxAgentConcurrency
 	nProbe := len(targets)

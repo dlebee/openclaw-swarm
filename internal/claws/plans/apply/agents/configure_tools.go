@@ -4,23 +4,22 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"strings"
 
 	"github.com/gluwa/openclaw-swarm2/internal/claws/plans/apply/common"
 	manifestdata "github.com/gluwa/openclaw-swarm2/internal/manifests/data"
 	"github.com/gluwa/openclaw-swarm2/internal/platformutil/bash"
 	"github.com/gluwa/openclaw-swarm2/internal/scaffold"
-	xssh "golang.org/x/crypto/ssh"
 )
 
 // ConfigureToolsStep ensures the agent's per-agent tools config (exec) and
 // global tools.elevated config match the manifest. Uses `openclaw config set`.
 type ConfigureToolsStep struct {
-	dial SSHDialFunc
+	dial   SSHDialFunc
+	reader common.ConfigReader
 }
 
 func NewConfigureToolsStep(opts Options) *ConfigureToolsStep {
-	return &ConfigureToolsStep{dial: opts.SSHDial}
+	return &ConfigureToolsStep{dial: opts.SSHDial, reader: opts.ConfigReader}
 }
 
 func (*ConfigureToolsStep) Name() string { return "configure-tools" }
@@ -49,7 +48,8 @@ func (s *ConfigureToolsStep) Check(ctx context.Context, t scaffold.Target) (bool
 	}
 	defer common.ReturnSSH(ctx, key, client)
 
-	idx, err := AgentConfigIndex(client, at.Spec.ID)
+	ch := common.MachineConfigHost(m, host)
+	idx, err := s.reader.AgentConfigIndex(ctx, client, ch, at.Spec.ID)
 	if err != nil {
 		return false, fmt.Errorf("read agents.list on %s: %w", m.Name, err)
 	}
@@ -57,7 +57,7 @@ func (s *ConfigureToolsStep) Check(ctx context.Context, t scaffold.Target) (bool
 		return false, nil
 	}
 
-	current, err := readToolsConfig(client, idx)
+	current, err := s.reader.AgentTools(ctx, client, ch, idx)
 	if err != nil {
 		return false, fmt.Errorf("read tools config on %s: %w", m.Name, err)
 	}
@@ -66,7 +66,11 @@ func (s *ConfigureToolsStep) Check(ctx context.Context, t scaffold.Target) (bool
 	}
 
 	if at.Spec.Tools.Elevated != nil {
-		if !elevatedMatch(client, at.Spec.Tools.Elevated) {
+		elev, err := s.reader.Elevated(ctx, client, ch)
+		if err != nil {
+			return false, nil
+		}
+		if !elevatedMatch(elev, at.Spec.Tools.Elevated) {
 			return false, nil
 		}
 	}
@@ -85,7 +89,8 @@ func (s *ConfigureToolsStep) Execute(ctx context.Context, t scaffold.Target) err
 	}
 	defer common.ReturnSSH(ctx, key, client)
 
-	idx, err := AgentConfigIndex(client, at.Spec.ID)
+	ch := common.MachineConfigHost(m, common.ResolveMachineHost(ctx, m))
+	idx, err := s.reader.AgentConfigIndex(ctx, client, ch, at.Spec.ID)
 	if err != nil || idx < 0 {
 		return fmt.Errorf("configure-tools: agent %q not found in config", at.Spec.ID)
 	}
@@ -118,18 +123,20 @@ func (s *ConfigureToolsStep) Verify(ctx context.Context, t scaffold.Target) erro
 		return nil
 	}
 	m := at.Machine
-	client, key, err := common.BorrowSSH(ctx, s.dial, common.ResolveMachineHost(ctx, m), common.MachineSSHPort(m), common.MachineAgentUser(m))
+	host := common.ResolveMachineHost(ctx, m)
+	client, key, err := common.BorrowSSH(ctx, s.dial, host, common.MachineSSHPort(m), common.MachineAgentUser(m))
 	if err != nil {
 		return fmt.Errorf("configure-tools verify: dial: %w", err)
 	}
 	defer common.ReturnSSH(ctx, key, client)
 
-	idx, err := AgentConfigIndex(client, at.Spec.ID)
+	ch := common.MachineConfigHost(m, host)
+	idx, err := s.reader.AgentConfigIndex(ctx, client, ch, at.Spec.ID)
 	if err != nil || idx < 0 {
 		return fmt.Errorf("configure-tools verify: agent %q not found", at.Spec.ID)
 	}
 
-	current, err := readToolsConfig(client, idx)
+	current, err := s.reader.AgentTools(ctx, client, ch, idx)
 	if err != nil {
 		return fmt.Errorf("configure-tools verify: %w", err)
 	}
@@ -137,7 +144,11 @@ func (s *ConfigureToolsStep) Verify(ctx context.Context, t scaffold.Target) erro
 		return fmt.Errorf("configure-tools verify: exec config drift")
 	}
 	if at.Spec.Tools.Elevated != nil {
-		if !elevatedMatch(client, at.Spec.Tools.Elevated) {
+		elev, err := s.reader.Elevated(ctx, client, ch)
+		if err != nil {
+			return fmt.Errorf("configure-tools verify: %w", err)
+		}
+		if !elevatedMatch(elev, at.Spec.Tools.Elevated) {
 			return fmt.Errorf("configure-tools verify: elevated config drift")
 		}
 	}
@@ -147,31 +158,6 @@ func (s *ConfigureToolsStep) Verify(ctx context.Context, t scaffold.Target) erro
 // ---------------------------------------------------------------------------
 // helpers — per-agent exec
 // ---------------------------------------------------------------------------
-
-type remoteExecConfig struct {
-	Host     string `json:"host"`
-	Node     string `json:"node"`
-	Security string `json:"security"`
-}
-
-type remoteToolsConfig struct {
-	Exec *remoteExecConfig `json:"exec"`
-}
-
-func readToolsConfig(client *xssh.Client, idx int) (*remoteToolsConfig, error) {
-	key := fmt.Sprintf("agents.list[%d].tools", idx)
-	out, err := bash.RunOutput(client, common.OpenclawCLIPreamble()+fmt.Sprintf(
-		`openclaw config get %s --json 2>/dev/null || echo "{}"`, key))
-	if err != nil {
-		return nil, err
-	}
-	raw := extractJSON(strings.TrimSpace(out), '{')
-	var cfg remoteToolsConfig
-	if err := json.Unmarshal([]byte(raw), &cfg); err != nil {
-		return &remoteToolsConfig{}, nil
-	}
-	return &cfg, nil
-}
 
 type batchEntry struct {
 	Path  string      `json:"path"`
@@ -196,7 +182,7 @@ func buildExecBatch(idx int, tools *manifestdata.AgentTools) []batchEntry {
 	return batch
 }
 
-func execMatch(current *remoteToolsConfig, desired *manifestdata.AgentTools) bool {
+func execMatch(current *common.RemoteToolsConfig, desired *manifestdata.AgentTools) bool {
 	if desired == nil || desired.Exec == nil {
 		return true
 	}
@@ -219,29 +205,6 @@ func execMatch(current *remoteToolsConfig, desired *manifestdata.AgentTools) boo
 // helpers — global tools.elevated
 // ---------------------------------------------------------------------------
 
-type remoteElevatedConfig struct {
-	Enabled   *bool               `json:"enabled,omitempty"`
-	AllowFrom map[string][]string `json:"allowFrom,omitempty"`
-}
-
-func readElevatedConfig(client *xssh.Client) (*remoteElevatedConfig, error) {
-	out, err := bash.RunOutput(client, common.OpenclawCLIPreamble()+
-		`openclaw config get tools.elevated --json 2>/dev/null || echo "null"`)
-	if err != nil {
-		return nil, err
-	}
-	raw := strings.TrimSpace(out)
-	if raw == "null" || raw == "" {
-		return &remoteElevatedConfig{}, nil
-	}
-	raw = extractJSON(raw, '{')
-	var cfg remoteElevatedConfig
-	if err := json.Unmarshal([]byte(raw), &cfg); err != nil {
-		return &remoteElevatedConfig{}, nil
-	}
-	return &cfg, nil
-}
-
 func buildElevatedBatch(elev *manifestdata.AgentElevated) []batchEntry {
 	if elev == nil {
 		return nil
@@ -258,22 +221,19 @@ func buildElevatedBatch(elev *manifestdata.AgentElevated) []batchEntry {
 	return batch
 }
 
-func elevatedMatch(client *xssh.Client, desired *manifestdata.AgentElevated) bool {
+func elevatedMatch(have *common.RemoteElevatedConfig, desired *manifestdata.AgentElevated) bool {
 	if desired == nil {
 		return true
 	}
-	have, err := readElevatedConfig(client)
-	if err != nil {
-		return false
+	if have == nil {
+		have = &common.RemoteElevatedConfig{}
 	}
-
 	if desired.Enabled != nil {
 		haveEnabled := have.Enabled != nil && *have.Enabled
 		if haveEnabled != *desired.Enabled {
 			return false
 		}
 	}
-
 	for ch, wantIDs := range desired.AllowFrom {
 		haveIDs := have.AllowFrom[ch]
 		for _, wid := range wantIDs {

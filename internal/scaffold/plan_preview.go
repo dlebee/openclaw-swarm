@@ -20,6 +20,8 @@ func RunPlanPreview(ctx context.Context, exec *ExecutablePlan, hints PlanDisplay
 		return ProbeSummary{}, fmt.Errorf("scaffold: nil executable plan")
 	}
 	ctx = EnsurePlanCache(ctx)
+	SetProbeActive(ctx, true)
+	defer SetProbeActive(ctx, false)
 	cells, err := annotatePlanCellsWithProbe(ctx, exec.compiled, hints)
 	if err != nil {
 		return ProbeSummary{}, err

@@ -17,11 +17,16 @@ import (
 // (gateway.mode, gateway.bind, insecure WS env in the systemd unit).
 // Not applicable when the gateway has not been bootstrapped yet.
 type ConfigureGatewayStep struct {
-	dial SSHDialFunc
+	dial   SSHDialFunc
+	reader common.ConfigReader
 }
 
 func NewConfigureGatewayStep(opts Options) *ConfigureGatewayStep {
-	return &ConfigureGatewayStep{dial: opts.SSHDial}
+	r := opts.ConfigReader
+	if r == nil {
+		r = common.DefaultConfigReader(common.SSHDialFunc(opts.SSHDial))
+	}
+	return &ConfigureGatewayStep{dial: opts.SSHDial, reader: r}
 }
 
 func (*ConfigureGatewayStep) Name() string { return "configure-gateway" }
@@ -50,17 +55,14 @@ func (s *ConfigureGatewayStep) Check(ctx context.Context, t scaffold.Target) (bo
 	}
 	defer returnSSH(ctx, key, client)
 
-	currentMode, err := ReadConfigValue(client, "gateway.mode")
+	cfgHost := common.MachineConfigHost(m, host)
+	view, err := s.reader.GatewayView(ctx, client, cfgHost)
 	if err != nil {
-		return false, fmt.Errorf("read gateway.mode on %s: %w", m.Name, err)
-	}
-	currentBind, err := ReadConfigValue(client, "gateway.bind")
-	if err != nil {
-		return false, fmt.Errorf("read gateway.bind on %s: %w", m.Name, err)
+		return false, fmt.Errorf("read gateway view on %s: %w", m.Name, err)
 	}
 
 	desiredBind := DesiredBind(gt.Spec)
-	if currentMode != "local" || currentBind != desiredBind {
+	if view.Mode != "local" || view.Bind != desiredBind {
 		return false, nil
 	}
 
@@ -148,28 +150,29 @@ func (s *ConfigureGatewayStep) Execute(ctx context.Context, t scaffold.Target) e
 func (s *ConfigureGatewayStep) Verify(ctx context.Context, t scaffold.Target) error {
 	gt := t.Payload.(*GatewayTarget)
 	m := gt.Machine
-	client, key, err := borrowSSH(ctx, s.dial, machineHost(ctx, m), machineSSHPort(m), machineAgentUser(m))
+	host := machineHost(ctx, m)
+	client, key, err := borrowSSH(ctx, s.dial, host, machineSSHPort(m), machineAgentUser(m))
 	if err != nil {
 		return fmt.Errorf("configure-gateway verify: dial: %w", err)
 	}
 	defer returnSSH(ctx, key, client)
 
-	currentMode, err := ReadConfigValue(client, "gateway.mode")
+	// Verify runs outside the probe phase, so the snapshot reader
+	// transparently delegates to the CLI — we see the writes Execute
+	// just made rather than a stale cached snapshot.
+	cfgHost := common.MachineConfigHost(m, host)
+	view, err := s.reader.GatewayView(ctx, client, cfgHost)
 	if err != nil {
-		return fmt.Errorf("configure-gateway verify: read mode: %w", err)
-	}
-	currentBind, err := ReadConfigValue(client, "gateway.bind")
-	if err != nil {
-		return fmt.Errorf("configure-gateway verify: read bind: %w", err)
+		return fmt.Errorf("configure-gateway verify: read gateway view: %w", err)
 	}
 
 	desiredBind := DesiredBind(gt.Spec)
 	var drifts []string
-	if currentMode != "local" {
-		drifts = append(drifts, fmt.Sprintf("gateway.mode=%q want local", currentMode))
+	if view.Mode != "local" {
+		drifts = append(drifts, fmt.Sprintf("gateway.mode=%q want local", view.Mode))
 	}
-	if currentBind != desiredBind {
-		drifts = append(drifts, fmt.Sprintf("gateway.bind=%q want %q", currentBind, desiredBind))
+	if view.Bind != desiredBind {
+		drifts = append(drifts, fmt.Sprintf("gateway.bind=%q want %q", view.Bind, desiredBind))
 	}
 
 	desiredEnv := gatewayEnv(gt.Spec)

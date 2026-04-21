@@ -118,6 +118,27 @@ func ClosePlanResources(ctx context.Context) {
 	}
 }
 
+// probeActiveKey marks that the scaffold is currently inside its probe
+// (Applicable+Check) phase. Cleared before Execute runs. Plan-scoped
+// consumers (e.g. the openclaw ConfigReader) consult this to decide whether
+// read results may be served from a snapshot cache. When unset, caches
+// must fall through to a live source so Execute sees writes made by
+// earlier steps.
+const probeActiveKey = "SCAFFOLD_PROBE_ACTIVE"
+
+// SetProbeActive sets the plan-scoped probe-active flag. Call with true
+// before running Applicable/Check, false before Execute.
+func SetProbeActive(ctx context.Context, active bool) {
+	PlanCacheSet(ctx, probeActiveKey, active)
+}
+
+// IsProbeActive reports whether the current plan run is inside its probe
+// phase. Returns false if no plan cache is attached to ctx.
+func IsProbeActive(ctx context.Context) bool {
+	b, _ := PlanCacheBool(ctx, probeActiveKey)
+	return b
+}
+
 func planCacheMachineExistsKey(targetID string) string {
 	key := normalizeMachineCacheID(targetID)
 	return fmt.Sprintf("MACHINE_%s_EXISTS", key)

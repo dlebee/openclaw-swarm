@@ -19,6 +19,15 @@ import (
 	xssh "golang.org/x/crypto/ssh"
 )
 
+// Re-exports for callers still referencing the legacy type names.
+// The canonical definitions now live in package common so both the
+// CLI and snapshot ConfigReader implementations can produce them.
+type (
+	DeviceList    = common.DeviceList
+	PendingDevice = common.PendingDevice
+	PairedDevice  = common.PairedDevice
+)
+
 const (
 	gatewayUnit     = "openclaw-gateway"
 	gatewayPort     = 18789
@@ -210,25 +219,6 @@ func ReadConfigValue(client *xssh.Client, key string) (string, error) {
 // ---------------------------------------------------------------------------
 // Device pairing
 // ---------------------------------------------------------------------------
-
-// DeviceList is the JSON structure returned by `openclaw devices list --json`.
-type DeviceList struct {
-	Pending []PendingDevice `json:"pending"`
-	Paired  []PairedDevice  `json:"paired"`
-}
-
-// PendingDevice is a device awaiting approval.
-type PendingDevice struct {
-	RequestID   string `json:"requestId"`
-	DisplayName string `json:"displayName"`
-	Role        string `json:"role"`
-}
-
-// PairedDevice is an approved device.
-type PairedDevice struct {
-	DisplayName string `json:"displayName"`
-	ClientMode  string `json:"clientMode"`
-}
 
 // ListDevices returns the gateway's current pending + paired device
 // view. It prefers `openclaw devices list --json` when that succeeds,
