@@ -101,13 +101,6 @@ func RenderManifest(displayPath string, m *data.Manifest, termWidth int, opts Re
 		b.WriteString("\n")
 	}
 
-	if len(m.KubernetesClusters) > 0 {
-		b.WriteString(sectionStyle.Render(fmt.Sprintf("Kubernetes clusters (%d)", len(m.KubernetesClusters))))
-		b.WriteString("\n")
-		b.WriteString(kubernetesTable(m.KubernetesClusters, tableW))
-		b.WriteString("\n")
-	}
-
 	if len(m.Automations) > 0 {
 		b.WriteString(sectionStyle.Render(fmt.Sprintf("Automations (%d)", len(m.Automations))))
 		b.WriteString("\n")
@@ -289,22 +282,6 @@ func agentsTable(rows []data.Agent, w int) string {
 		Width(w)
 	for _, r := range rows {
 		t.Row(r.ID, r.Gateway, r.Model.Primary, truncate(r.Workspace, 48))
-	}
-	return t.String()
-}
-
-func kubernetesTable(rows []data.KubernetesCluster, w int) string {
-	t := table.New().
-		Border(lipgloss.RoundedBorder()).
-		BorderStyle(lipgloss.NewStyle().Foreground(lipgloss.Color("99"))).
-		Headers("Name", "Cluster", "Kubeconfig").
-		Width(w)
-	for _, r := range rows {
-		kc := r.Kubeconfig
-		if kc == "" {
-			kc = r.KubeconfigEnv
-		}
-		t.Row(r.Name, r.ClusterName, truncate(kc, 40))
 	}
 	return t.String()
 }

@@ -70,7 +70,6 @@ type Manifest struct {
 	NodeMajor          int                 `yaml:"node_major"`
 	LinodeTokenEnv     string              `yaml:"linode_token_env"`
 	Machines           []Machine           `yaml:"machines"`
-	KubernetesClusters []KubernetesCluster `yaml:"kubernetes-clusters"`
 	Gateways           []Gateway           `yaml:"gateways"`
 	Agents             []Agent             `yaml:"agents"`
 	Nodes              []Node              `yaml:"nodes"`
@@ -212,14 +211,6 @@ type Machine struct {
 	Disk   string `yaml:"disk,omitempty"`
 }
 
-// KubernetesCluster references a kubeconfig for optional K8s automation.
-type KubernetesCluster struct {
-	Name          string `yaml:"name"`
-	Kubeconfig    string `yaml:"kubeconfig"`
-	KubeconfigEnv string `yaml:"kubeconfig_env"`
-	ClusterName   string `yaml:"cluster_name"`
-}
-
 // Gateway is an OpenClaw gateway instance bound to a machine reference.
 type Gateway struct {
 	Name            string             `yaml:"name"`
@@ -277,7 +268,6 @@ type Agent struct {
 	Soul      string         `yaml:"soul,omitempty"`
 	AgentsMD  string         `yaml:"agents_md,omitempty"`
 	Identity  *AgentIdentity `yaml:"identity,omitempty"`
-	Bootstrap string         `yaml:"bootstrap,omitempty"`
 	Bindings  []AgentBinding `yaml:"bindings,omitempty"`
 }
 
