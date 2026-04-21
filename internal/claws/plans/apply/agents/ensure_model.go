@@ -13,11 +13,12 @@ import (
 // EnsureModelStep ensures the agent's model config (primary + fallbacks)
 // matches the manifest. Drift-repairs via `openclaw config set --batch-json`.
 type EnsureModelStep struct {
-	dial SSHDialFunc
+	dial   SSHDialFunc
+	reader common.ConfigReader
 }
 
 func NewEnsureModelStep(opts Options) *EnsureModelStep {
-	return &EnsureModelStep{dial: opts.SSHDial}
+	return &EnsureModelStep{dial: opts.SSHDial, reader: opts.ConfigReader}
 }
 
 func (*EnsureModelStep) Name() string { return "ensure-model" }
@@ -40,14 +41,14 @@ func (s *EnsureModelStep) Check(ctx context.Context, t scaffold.Target) (bool, e
 	}
 	defer common.ReturnSSH(ctx, key, client)
 
-	agent, err := FindAgent(client, at.Spec.ID)
+	model, exists, err := s.reader.AgentModel(ctx, client, common.MachineConfigHost(m, host), at.Spec.ID)
 	if err != nil {
 		return false, fmt.Errorf("find agent %q: %w", at.Spec.ID, err)
 	}
-	if agent == nil {
+	if !exists {
 		return false, nil
 	}
-	return agent.Model == at.Spec.Model.Primary, nil
+	return model == at.Spec.Model.Primary, nil
 }
 
 func (s *EnsureModelStep) Execute(ctx context.Context, t scaffold.Target) error {
@@ -59,7 +60,7 @@ func (s *EnsureModelStep) Execute(ctx context.Context, t scaffold.Target) error 
 	}
 	defer common.ReturnSSH(ctx, key, client)
 
-	idx, err := AgentConfigIndex(client, at.Spec.ID)
+	idx, err := s.reader.AgentConfigIndex(ctx, client, common.MachineConfigHost(m, common.ResolveMachineHost(ctx, m)), at.Spec.ID)
 	if err != nil || idx < 0 {
 		return fmt.Errorf("ensure-model: agent %q not found in config", at.Spec.ID)
 	}
@@ -107,21 +108,22 @@ func (s *EnsureModelStep) Execute(ctx context.Context, t scaffold.Target) error 
 func (s *EnsureModelStep) Verify(ctx context.Context, t scaffold.Target) error {
 	at := t.Payload.(*AgentTarget)
 	m := at.Machine
-	client, key, err := common.BorrowSSH(ctx, s.dial, common.ResolveMachineHost(ctx, m), common.MachineSSHPort(m), common.MachineAgentUser(m))
+	host := common.ResolveMachineHost(ctx, m)
+	client, key, err := common.BorrowSSH(ctx, s.dial, host, common.MachineSSHPort(m), common.MachineAgentUser(m))
 	if err != nil {
 		return fmt.Errorf("ensure-model verify: dial: %w", err)
 	}
 	defer common.ReturnSSH(ctx, key, client)
 
-	agent, err := FindAgent(client, at.Spec.ID)
+	model, exists, err := s.reader.AgentModel(ctx, client, common.MachineConfigHost(m, host), at.Spec.ID)
 	if err != nil {
 		return fmt.Errorf("ensure-model verify: %w", err)
 	}
-	if agent == nil {
+	if !exists {
 		return fmt.Errorf("ensure-model verify: agent %q not found", at.Spec.ID)
 	}
-	if agent.Model != at.Spec.Model.Primary {
-		return fmt.Errorf("ensure-model verify: model %q, want %q", agent.Model, at.Spec.Model.Primary)
+	if model != at.Spec.Model.Primary {
+		return fmt.Errorf("ensure-model verify: model %q, want %q", model, at.Spec.Model.Primary)
 	}
 	return nil
 }

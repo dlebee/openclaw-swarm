@@ -24,6 +24,8 @@ func (e *ExecutablePlan) PhaseNames() []string {
 // Describe returns a plain-text outline (no ANSI) after Applicable+Check per cell.
 func (e *ExecutablePlan) Describe(ctx context.Context) (string, error) {
 	ctx = EnsurePlanCache(ctx)
+	SetProbeActive(ctx, true)
+	defer SetProbeActive(ctx, false)
 	return describePlainWithProbe(ctx, e.compiled, PlanDisplayHints{})
 }
 
@@ -54,6 +56,8 @@ func (e *ExecutablePlan) DescribeStyledWithHintsObs(ctx context.Context, width i
 // ExecWithConfirm.
 func (e *ExecutablePlan) ProbeAndRender(ctx context.Context, width int, h PlanDisplayHints, obs ProbeObserver) (string, ProbeSummary, error) {
 	ctx = EnsurePlanCache(ctx)
+	SetProbeActive(ctx, true)
+	defer SetProbeActive(ctx, false)
 	cells, err := annotatePlanCellsWithProbeObs(ctx, e.compiled, h, obs)
 	if err != nil {
 		return "", ProbeSummary{}, err
@@ -74,6 +78,11 @@ func (e *ExecutablePlan) ProbeCellCount(h PlanDisplayHints) int {
 // may rely on regardless of phase filtering.
 func (e *ExecutablePlan) Execute(ctx context.Context, opts ExecuteOptions) error {
 	ctx = EnsurePlanCache(ctx)
+	// Explicitly mark the plan as out of its probe phase before any step
+	// runs. Readers that cached values during Applicable/Check (see
+	// IsProbeActive) will now passthrough to their live source, so Execute
+	// observes writes made by preceding steps rather than a stale snapshot.
+	SetProbeActive(ctx, false)
 	if e.preRun != nil {
 		if err := e.preRun(ctx); err != nil {
 			return err

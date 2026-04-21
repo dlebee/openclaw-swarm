@@ -27,11 +27,12 @@ const defaultAgentID = "main"
 // agents.list[] via `openclaw config set` instead — downstream steps read
 // the raw list via AgentConfigIndex and don't care how the entry got there.
 type AddAgentStep struct {
-	dial SSHDialFunc
+	dial   SSHDialFunc
+	reader common.ConfigReader
 }
 
 func NewAddAgentStep(opts Options) *AddAgentStep {
-	return &AddAgentStep{dial: opts.SSHDial}
+	return &AddAgentStep{dial: opts.SSHDial, reader: opts.ConfigReader}
 }
 
 func (*AddAgentStep) Name() string { return "add-agent" }
@@ -54,10 +55,11 @@ func (s *AddAgentStep) Check(ctx context.Context, t scaffold.Target) (bool, erro
 	}
 	defer common.ReturnSSH(ctx, key, client)
 
-	// Use AgentConfigIndex (raw agents.list read) instead of FindAgent
-	// (which goes through `openclaw agents list` and false-positives on
-	// the phantom default for id="main" on a fresh install).
-	idx, err := AgentConfigIndex(client, at.Spec.ID)
+	// AgentConfigIndex reads the raw agents.list rather than the CLI's
+	// agents-list view, which false-positives on the phantom default for
+	// id="main" on a fresh install. The snapshot reader preserves that
+	// semantic (it parses the same file openclaw reads).
+	idx, err := s.reader.AgentConfigIndex(ctx, client, common.MachineConfigHost(m, host), at.Spec.ID)
 	if err != nil {
 		return false, fmt.Errorf("read agents.list on %s: %w", m.Name, err)
 	}
@@ -140,13 +142,17 @@ func resolveRemoteWorkspace(client *xssh.Client, workspace string) (string, erro
 func (s *AddAgentStep) Verify(ctx context.Context, t scaffold.Target) error {
 	at := t.Payload.(*AgentTarget)
 	m := at.Machine
-	client, key, err := common.BorrowSSH(ctx, s.dial, common.ResolveMachineHost(ctx, m), common.MachineSSHPort(m), common.MachineAgentUser(m))
+	host := common.ResolveMachineHost(ctx, m)
+	client, key, err := common.BorrowSSH(ctx, s.dial, host, common.MachineSSHPort(m), common.MachineAgentUser(m))
 	if err != nil {
 		return fmt.Errorf("add-agent verify: dial: %w", err)
 	}
 	defer common.ReturnSSH(ctx, key, client)
 
-	idx, err := AgentConfigIndex(client, at.Spec.ID)
+	// scaffold.IsProbeActive is false during Verify so the reader is
+	// guaranteed to fetch fresh state rather than serve a probe-phase
+	// snapshot.
+	idx, err := s.reader.AgentConfigIndex(ctx, client, common.MachineConfigHost(m, host), at.Spec.ID)
 	if err != nil {
 		return fmt.Errorf("add-agent verify: %w", err)
 	}

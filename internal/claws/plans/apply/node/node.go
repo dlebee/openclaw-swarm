@@ -112,10 +112,18 @@ func BuildNodeTargets(nodes []manifestdata.Node, machines []manifestdata.Machine
 // Options configures the node phase.
 type Options struct {
 	SSHDial SSHDialFunc
+	// ConfigReader is used by Check/Verify paths that query the gateway
+	// for node-pairing state. Nil defaults to the snapshot-over-CLI
+	// reader so `pair-node` observes the same per-host devices snapshot
+	// as `pair-gateway-device`.
+	ConfigReader common.ConfigReader
 }
 
 // AddPhase registers the "node" phase.
 func AddPhase(p *scaffold.Plan, targets []scaffold.Target, opts Options) *scaffold.Phase {
+	if opts.ConfigReader == nil {
+		opts.ConfigReader = common.DefaultConfigReader(opts.SSHDial)
+	}
 	ph := p.AddPhase("node")
 	n := len(targets)
 	if n < 1 {

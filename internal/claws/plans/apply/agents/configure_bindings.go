@@ -13,11 +13,12 @@ import (
 // ConfigureBindingsStep ensures the agent's channel bindings match the
 // manifest. Adds missing bindings and removes extras.
 type ConfigureBindingsStep struct {
-	dial SSHDialFunc
+	dial   SSHDialFunc
+	reader common.ConfigReader
 }
 
 func NewConfigureBindingsStep(opts Options) *ConfigureBindingsStep {
-	return &ConfigureBindingsStep{dial: opts.SSHDial}
+	return &ConfigureBindingsStep{dial: opts.SSHDial, reader: opts.ConfigReader}
 }
 
 func (*ConfigureBindingsStep) Name() string { return "configure-bindings" }
@@ -46,7 +47,7 @@ func (s *ConfigureBindingsStep) Check(ctx context.Context, t scaffold.Target) (b
 	}
 	defer common.ReturnSSH(ctx, key, client)
 
-	current, err := ListBindings(client, at.Spec.ID)
+	current, err := s.reader.AgentBindings(ctx, client, common.MachineConfigHost(m, host), at.Spec.ID)
 	if err != nil {
 		return false, fmt.Errorf("list bindings on %s: %w", m.Name, err)
 	}
@@ -61,13 +62,14 @@ func (s *ConfigureBindingsStep) Execute(ctx context.Context, t scaffold.Target) 
 		return nil
 	}
 	m := at.Machine
-	client, key, err := common.BorrowSSHWithRetry(ctx, s.dial, common.ResolveMachineHost(ctx, m), common.MachineSSHPort(m), common.MachineAgentUser(m))
+	host := common.ResolveMachineHost(ctx, m)
+	client, key, err := common.BorrowSSHWithRetry(ctx, s.dial, host, common.MachineSSHPort(m), common.MachineAgentUser(m))
 	if err != nil {
 		return fmt.Errorf("configure-bindings: %w", err)
 	}
 	defer common.ReturnSSH(ctx, key, client)
 
-	current, err := ListBindings(client, at.Spec.ID)
+	current, err := s.reader.AgentBindings(ctx, client, common.MachineConfigHost(m, host), at.Spec.ID)
 	if err != nil {
 		return fmt.Errorf("configure-bindings: list: %w", err)
 	}
@@ -99,13 +101,14 @@ func (s *ConfigureBindingsStep) Verify(ctx context.Context, t scaffold.Target) e
 		return nil
 	}
 	m := at.Machine
-	client, key, err := common.BorrowSSH(ctx, s.dial, common.ResolveMachineHost(ctx, m), common.MachineSSHPort(m), common.MachineAgentUser(m))
+	host := common.ResolveMachineHost(ctx, m)
+	client, key, err := common.BorrowSSH(ctx, s.dial, host, common.MachineSSHPort(m), common.MachineAgentUser(m))
 	if err != nil {
 		return fmt.Errorf("configure-bindings verify: dial: %w", err)
 	}
 	defer common.ReturnSSH(ctx, key, client)
 
-	current, err := ListBindings(client, at.Spec.ID)
+	current, err := s.reader.AgentBindings(ctx, client, common.MachineConfigHost(m, host), at.Spec.ID)
 	if err != nil {
 		return fmt.Errorf("configure-bindings verify: %w", err)
 	}
@@ -137,7 +140,7 @@ func bindingKey(channel, account string) string {
 
 // diffBindings returns bindings that need to be added and removed to reach
 // the desired state.
-func diffBindings(current []BindingInfo, desired []manifestdata.AgentBinding) (toAdd []manifestdata.AgentBinding, toRemove []manifestdata.AgentBinding) {
+func diffBindings(current []common.RemoteBinding, desired []manifestdata.AgentBinding) (toAdd []manifestdata.AgentBinding, toRemove []manifestdata.AgentBinding) {
 	currentSet := make(map[string]bool, len(current))
 	for _, b := range current {
 		currentSet[bindingKey(b.Channel, b.Account)] = true

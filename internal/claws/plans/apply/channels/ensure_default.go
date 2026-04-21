@@ -13,11 +13,12 @@ import (
 // kind that has a channel marked `default: true`. If no channel is marked
 // default, the first channel of that kind is used.
 type EnsureDefaultStep struct {
-	dial SSHDialFunc
+	dial   SSHDialFunc
+	reader common.ConfigReader
 }
 
 func NewEnsureDefaultStep(opts Options) *EnsureDefaultStep {
-	return &EnsureDefaultStep{dial: opts.SSHDial}
+	return &EnsureDefaultStep{dial: opts.SSHDial, reader: opts.ConfigReader}
 }
 
 func (*EnsureDefaultStep) Name() string { return "ensure-default-account" }
@@ -67,8 +68,9 @@ func (s *EnsureDefaultStep) Check(ctx context.Context, t scaffold.Target) (bool,
 	}
 	defer common.ReturnSSH(ctx, key, client)
 
+	ch := common.MachineConfigHost(m, host)
 	for kind, wantName := range desiredDefaults(ct.Channels) {
-		current, err := ReadDefaultAccount(client, kind)
+		current, err := s.reader.DefaultAccount(ctx, client, ch, kind)
 		if err != nil {
 			return false, fmt.Errorf("read default account %s on %s: %w", kind, m.Name, err)
 		}
@@ -98,14 +100,16 @@ func (s *EnsureDefaultStep) Execute(ctx context.Context, t scaffold.Target) erro
 func (s *EnsureDefaultStep) Verify(ctx context.Context, t scaffold.Target) error {
 	ct := t.Payload.(*ChannelTarget)
 	m := ct.Machine
-	client, key, err := common.BorrowSSH(ctx, s.dial, common.ResolveMachineHost(ctx, m), common.MachineSSHPort(m), common.MachineAgentUser(m))
+	host := common.ResolveMachineHost(ctx, m)
+	client, key, err := common.BorrowSSH(ctx, s.dial, host, common.MachineSSHPort(m), common.MachineAgentUser(m))
 	if err != nil {
 		return fmt.Errorf("ensure-default-account verify: dial: %w", err)
 	}
 	defer common.ReturnSSH(ctx, key, client)
 
+	ch := common.MachineConfigHost(m, host)
 	for kind, wantName := range desiredDefaults(ct.Channels) {
-		current, err := ReadDefaultAccount(client, kind)
+		current, err := s.reader.DefaultAccount(ctx, client, ch, kind)
 		if err != nil {
 			return fmt.Errorf("ensure-default-account verify: %s: %w", kind, err)
 		}

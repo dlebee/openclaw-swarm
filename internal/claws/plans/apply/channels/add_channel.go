@@ -11,11 +11,12 @@ import (
 // AddChannelStep registers missing channel accounts on the gateway via
 // `openclaw channels add`. Idempotent: skips accounts that already exist.
 type AddChannelStep struct {
-	dial SSHDialFunc
+	dial   SSHDialFunc
+	reader common.ConfigReader
 }
 
 func NewAddChannelStep(opts Options) *AddChannelStep {
-	return &AddChannelStep{dial: opts.SSHDial}
+	return &AddChannelStep{dial: opts.SSHDial, reader: opts.ConfigReader}
 }
 
 func (*AddChannelStep) Name() string { return "add-channels" }
@@ -41,17 +42,28 @@ func (s *AddChannelStep) Check(ctx context.Context, t scaffold.Target) (bool, er
 	}
 	defer common.ReturnSSH(ctx, key, client)
 
-	accounts, err := ListChannelAccounts(client)
+	accounts, err := s.reader.ChannelAccounts(ctx, client, common.MachineConfigHost(m, host))
 	if err != nil {
 		return false, fmt.Errorf("list channel accounts on %s: %w", m.Name, err)
 	}
 
 	for _, ch := range ct.Channels {
-		if !AccountExists(accounts, string(ch.Kind), ch.Name) {
+		if !accountExists(accounts, string(ch.Kind), ch.Name) {
 			return false, nil
 		}
 	}
 	return true, nil
+}
+
+// accountExists reports whether name is registered for the given channel
+// kind in the map returned by [common.ConfigReader.ChannelAccounts].
+func accountExists(accounts map[string][]string, kind, name string) bool {
+	for _, n := range accounts[kind] {
+		if n == name {
+			return true
+		}
+	}
+	return false
 }
 
 func (s *AddChannelStep) Execute(ctx context.Context, t scaffold.Target) error {
@@ -69,15 +81,15 @@ func (s *AddChannelStep) Execute(ctx context.Context, t scaffold.Target) error {
 	if err != nil {
 		return fmt.Errorf("add-channels: %w", err)
 	}
-	accounts, lsErr := ListChannelAccounts(client)
+	accounts, lsErr := s.reader.ChannelAccounts(ctx, client, common.MachineConfigHost(m, host))
 	common.ReturnSSH(ctx, key, client)
 	if lsErr != nil {
-		accounts = ChannelAccounts{}
+		accounts = map[string][]string{}
 	}
 
 	for _, ch := range ct.Channels {
 		kind := string(ch.Kind)
-		if AccountExists(accounts, kind, ch.Name) {
+		if accountExists(accounts, kind, ch.Name) {
 			continue
 		}
 		token := ct.Tokens[ch.TokenEnv]
@@ -99,19 +111,20 @@ func (s *AddChannelStep) Execute(ctx context.Context, t scaffold.Target) error {
 func (s *AddChannelStep) Verify(ctx context.Context, t scaffold.Target) error {
 	ct := t.Payload.(*ChannelTarget)
 	m := ct.Machine
-	client, key, err := common.BorrowSSH(ctx, s.dial, common.ResolveMachineHost(ctx, m), common.MachineSSHPort(m), common.MachineAgentUser(m))
+	host := common.ResolveMachineHost(ctx, m)
+	client, key, err := common.BorrowSSH(ctx, s.dial, host, common.MachineSSHPort(m), common.MachineAgentUser(m))
 	if err != nil {
 		return fmt.Errorf("add-channels verify: dial: %w", err)
 	}
 	defer common.ReturnSSH(ctx, key, client)
 
-	accounts, err := ListChannelAccounts(client)
+	accounts, err := s.reader.ChannelAccounts(ctx, client, common.MachineConfigHost(m, host))
 	if err != nil {
 		return fmt.Errorf("add-channels verify: %w", err)
 	}
 
 	for _, ch := range ct.Channels {
-		if !AccountExists(accounts, string(ch.Kind), ch.Name) {
+		if !accountExists(accounts, string(ch.Kind), ch.Name) {
 			return fmt.Errorf("add-channels verify: %s/%s not found after add", ch.Kind, ch.Name)
 		}
 	}

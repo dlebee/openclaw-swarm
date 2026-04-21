@@ -14,11 +14,16 @@ import (
 // PairNodeStep approves the node's pending device entry on the gateway.
 // This step SSHes into the gateway host to run `openclaw devices approve`.
 type PairNodeStep struct {
-	dial SSHDialFunc
+	dial   SSHDialFunc
+	reader common.ConfigReader
 }
 
 func NewPairNodeStep(opts Options) *PairNodeStep {
-	return &PairNodeStep{dial: opts.SSHDial}
+	r := opts.ConfigReader
+	if r == nil {
+		r = common.DefaultConfigReader(opts.SSHDial)
+	}
+	return &PairNodeStep{dial: opts.SSHDial, reader: r}
 }
 
 func (*PairNodeStep) Name() string { return "pair-node" }
@@ -41,14 +46,18 @@ func (s *PairNodeStep) Check(ctx context.Context, t scaffold.Target) (bool, erro
 	}
 	defer common.ReturnSSH(ctx, key, client)
 
-	dl, err := gwService.ListDevices(client)
+	cfgHost := common.MachineConfigHost(gwMach, host)
+	dl, err := s.reader.DeviceList(ctx, client, cfgHost)
 	if err != nil {
 		return false, fmt.Errorf("list devices on %s: %w", gwMach.Name, err)
 	}
 	return isNodePaired(dl, nt.Spec.Name), nil
 }
 
-func isNodePaired(dl *gwService.DeviceList, displayName string) bool {
+func isNodePaired(dl *common.DeviceList, displayName string) bool {
+	if dl == nil {
+		return false
+	}
 	for _, d := range dl.Paired {
 		if d.DisplayName == displayName && d.ClientMode == "node" {
 			return true
@@ -60,11 +69,13 @@ func isNodePaired(dl *gwService.DeviceList, displayName string) bool {
 func (s *PairNodeStep) Execute(ctx context.Context, t scaffold.Target) error {
 	nt := t.Payload.(*NodeTarget)
 	gwMach := nt.GWMach
-	client, key, err := common.BorrowSSHWithRetry(ctx, s.dial, common.ResolveMachineHost(ctx, gwMach), common.MachineSSHPort(gwMach), common.MachineAgentUser(gwMach))
+	gwHost := common.ResolveMachineHost(ctx, gwMach)
+	client, key, err := common.BorrowSSHWithRetry(ctx, s.dial, gwHost, common.MachineSSHPort(gwMach), common.MachineAgentUser(gwMach))
 	if err != nil {
 		return fmt.Errorf("pair-node: dial gateway: %w", err)
 	}
 	defer common.ReturnSSH(ctx, key, client)
+	cfgHost := common.MachineConfigHost(gwMach, gwHost)
 
 	// Poll for the node's pending device entry and approve it.
 	//
@@ -85,7 +96,7 @@ func (s *PairNodeStep) Execute(ctx context.Context, t scaffold.Target) error {
 	sawPending := false
 	var lastApproveErr error
 	for i := 0; i < maxAttempts; i++ {
-		dl, err := gwService.ListDevices(client)
+		dl, err := s.reader.DeviceList(ctx, client, cfgHost)
 		if err != nil {
 			time.Sleep(2 * time.Second)
 			continue
@@ -140,13 +151,15 @@ func (s *PairNodeStep) Execute(ctx context.Context, t scaffold.Target) error {
 func (s *PairNodeStep) Verify(ctx context.Context, t scaffold.Target) error {
 	nt := t.Payload.(*NodeTarget)
 	gwMach := nt.GWMach
-	client, key, err := common.BorrowSSH(ctx, s.dial, common.ResolveMachineHost(ctx, gwMach), common.MachineSSHPort(gwMach), common.MachineAgentUser(gwMach))
+	gwHost := common.ResolveMachineHost(ctx, gwMach)
+	client, key, err := common.BorrowSSH(ctx, s.dial, gwHost, common.MachineSSHPort(gwMach), common.MachineAgentUser(gwMach))
 	if err != nil {
 		return fmt.Errorf("pair-node verify: dial gateway: %w", err)
 	}
 	defer common.ReturnSSH(ctx, key, client)
 
-	dl, err := gwService.ListDevices(client)
+	cfgHost := common.MachineConfigHost(gwMach, gwHost)
+	dl, err := s.reader.DeviceList(ctx, client, cfgHost)
 	if err != nil {
 		return fmt.Errorf("pair-node verify: list devices: %w", err)
 	}

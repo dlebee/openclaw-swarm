@@ -74,10 +74,19 @@ func BuildChannelTargets(
 // Options configures the channels phase.
 type Options struct {
 	SSHDial SSHDialFunc
+	// ConfigReader is consulted by every step's Check to probe gateway
+	// state. When nil, AddPhase installs the default snapshot-over-CLI
+	// reader (one SFTP read of ~/.openclaw/openclaw.json per gateway
+	// cached across the entire probe pass, transparent passthrough to the
+	// CLI during Execute/Verify). Tests can inject a fake here.
+	ConfigReader common.ConfigReader
 }
 
 // AddPhase registers the "channels" phase.
 func AddPhase(p *scaffold.Plan, targets []scaffold.Target, opts Options) *scaffold.Phase {
+	if opts.ConfigReader == nil {
+		opts.ConfigReader = common.DefaultConfigReader(opts.SSHDial)
+	}
 	ph := p.AddPhase("channels")
 	n := len(targets)
 	if n < 1 {
