@@ -577,6 +577,106 @@ func TestExecWithConfirm_dryRunSkipsConfirmAndExecute(t *testing.T) {
 	}
 }
 
+// TestExecWithConfirm_shortCircuitsWhenFullyConverged pins the behavior
+// that prompted the short-circuit: when the probe reports every cell as
+// satisfied or not-applicable, ExecWithConfirm must NOT prompt and must
+// NOT call Execute/Verify. The step should see exactly one Applicable+
+// Check (the probe) and nothing else.
+func TestExecWithConfirm_shortCircuitsWhenFullyConverged(t *testing.T) {
+	a := &mockStep{name: "A", applicable: true, checkSatisfied: true}
+	p := New()
+	ph := p.AddPhase("p1")
+	ph.AddTargets(Target{ID: "t1"})
+	ph.AddStep(a)
+	var confirmCalls int
+	out := &strings.Builder{}
+	err := ExecWithConfirm(context.Background(), p, PipelineOptions{
+		Confirm: func() (bool, error) { confirmCalls++; return true, nil },
+		Out:     out,
+		Width:   80,
+		ExecuteOptions: ExecuteOptions{
+			Progress: progress.Noop{},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if confirmCalls != 0 {
+		t.Fatalf("confirm should be skipped when plan is converged, got %d calls", confirmCalls)
+	}
+	got := strings.Join(a.calls, ",")
+	want := "applicable,check"
+	if got != want {
+		t.Fatalf("converged plan should probe once and stop, want %q got %q", want, got)
+	}
+	if !strings.Contains(out.String(), "Nothing to apply") {
+		t.Fatalf("expected converged banner in output, got %q", out.String())
+	}
+}
+
+// TestExecWithConfirm_shortCircuitsWhenNotApplicable covers the other
+// fully-converged shape: the single step isn't applicable for this target,
+// which also means no work. Applicable returns false → Check never runs →
+// no Execute and no confirm prompt.
+func TestExecWithConfirm_shortCircuitsWhenNotApplicable(t *testing.T) {
+	a := &mockStep{name: "A", applicable: false}
+	p := New()
+	ph := p.AddPhase("p1")
+	ph.AddTargets(Target{ID: "t1"})
+	ph.AddStep(a)
+	var confirmCalls int
+	err := ExecWithConfirm(context.Background(), p, PipelineOptions{
+		Confirm: func() (bool, error) { confirmCalls++; return true, nil },
+		Out:     io.Discard,
+		Width:   80,
+		ExecuteOptions: ExecuteOptions{
+			Progress: progress.Noop{},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if confirmCalls != 0 {
+		t.Fatalf("confirm should be skipped when no cell is applicable, got %d", confirmCalls)
+	}
+	if got := strings.Join(a.calls, ","); got != "applicable" {
+		t.Fatalf("want probe-only Applicable call, got %q", got)
+	}
+}
+
+// TestExecWithConfirm_forceDisablesShortCircuit ensures --force bypasses
+// the converged short-circuit: the user has explicitly asked Execute to
+// run regardless of Check, so we must still prompt and Execute. Under
+// Force the probe skips Check entirely and marks cells will-execute, so
+// the summary-based guard naturally does the right thing, but the
+// explicit !o.Force condition in ExecWithConfirm documents intent.
+func TestExecWithConfirm_forceDisablesShortCircuit(t *testing.T) {
+	a := &mockStep{name: "A", applicable: true, checkSatisfied: true}
+	p := New()
+	ph := p.AddPhase("p1")
+	ph.AddTargets(Target{ID: "t1"})
+	ph.AddStep(a)
+	var confirmCalls int
+	err := ExecWithConfirm(context.Background(), p, PipelineOptions{
+		Confirm: func() (bool, error) { confirmCalls++; return true, nil },
+		Out:     io.Discard,
+		Width:   80,
+		ExecuteOptions: ExecuteOptions{
+			Progress: progress.Noop{},
+			Force:    true,
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if confirmCalls != 1 {
+		t.Fatalf("force should still prompt, got %d confirm calls", confirmCalls)
+	}
+	if !strings.Contains(strings.Join(a.calls, ","), "execute") {
+		t.Fatalf("force should still execute, got %v", a.calls)
+	}
+}
+
 func TestExecWithConfirm_fullPipeline(t *testing.T) {
 	a := &mockStep{name: "A", applicable: true}
 	p := New()

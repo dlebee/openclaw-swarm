@@ -298,10 +298,12 @@ mDNS proves flaky in CI.
    Seeds SSH keys via cloud-init. Records LAN IPs into the plan cache.
 2. **common phase** — `install_openclaw.go`, agent user setup, etc. Runs
    identically to Linode.
-3. **mesh phase** — `resolve-control-url` caches
-   `http://army-local-gateway-host.local:8080`. `install-caddy.Applicable`
-   sees the HTTP URL and returns false → **step skipped**.
-   `install-headscale` binds `:8080` directly. `install-tailscale` dials
+3. **mesh phase** — `install-caddy.Applicable` derives the scheme from
+   the manifest (`ExpectedControlURLIsHTTP`) and returns false → **step
+   skipped** for `http://…:8080`. `install-headscale` calls the on-demand
+   `getOrResolveControlURL` helper (memoised on the plan cache) and
+   binds `:8080` directly. `install-tailscale` pulls the control URL +
+   preauth key via the same on-demand helpers and dials
    `--login-server=http://...:8080 --authkey=<preauth>`.
 4. **channels phase** — Telegram bots, no networking changes.
 5. **gateway phase** — `openclaw-gateway.service` written and enabled via

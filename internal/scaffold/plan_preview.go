@@ -11,24 +11,29 @@ import (
 
 var planPreviewHelp = lipgloss.NewStyle().Foreground(lipgloss.Color("241"))
 
-// RunPlanPreview shows the probed plan in an alternate-screen Bubble Tea viewport.
-// Quit with q, esc, or ctrl+c.
-func RunPlanPreview(ctx context.Context, exec *ExecutablePlan, hints PlanDisplayHints) error {
+// RunPlanPreview shows the probed plan in an alternate-screen Bubble Tea
+// viewport. Quit with q, esc, or ctrl+c. Returns a ProbeSummary aggregating
+// the cell verdicts so the caller (ExecWithConfirm) can short-circuit the
+// confirm + Execute phase when nothing needs to run.
+func RunPlanPreview(ctx context.Context, exec *ExecutablePlan, hints PlanDisplayHints) (ProbeSummary, error) {
 	if exec == nil {
-		return fmt.Errorf("scaffold: nil executable plan")
+		return ProbeSummary{}, fmt.Errorf("scaffold: nil executable plan")
 	}
 	ctx = EnsurePlanCache(ctx)
 	cells, err := annotatePlanCellsWithProbe(ctx, exec.compiled, hints)
 	if err != nil {
-		return err
+		return ProbeSummary{}, err
 	}
+	summary := summariseCells(cells)
 	p := tea.NewProgram(
 		newPlanPreviewModel(hints, cells),
 		tea.WithAltScreen(),
 		tea.WithMouseCellMotion(),
 	)
-	_, err = p.Run()
-	return err
+	if _, err := p.Run(); err != nil {
+		return summary, err
+	}
+	return summary, nil
 }
 
 type planPreviewModel struct {

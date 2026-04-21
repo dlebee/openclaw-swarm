@@ -19,6 +19,8 @@ Any cache — in-memory map, plan cache, context-scoped store, sync.Map, singlef
 
 5. **Errors are not cache misses**. If the underlying source fails, propagate the error. Do not return a zero value that callers will misread as "definitely absent".
 
+6. **No plan steps that only populate a cache**. A `scaffold.Step` exists to do real work toward the user's goal. A step whose `Execute` only writes to the plan cache will render "will execute" every run even on a fully-converged system — that's noise. Put the memoisation behind an on-demand `getOrResolve*()` helper and call it from the step that actually consumes the value.
+
 ## Reference
 
 - `internal/claws/plans/apply/mesh/control_url.go:getOrResolveControlURL` — correct shape.

@@ -42,10 +42,10 @@
 #   sense with a public IP, which Multipass doesn't have.
 #
 # preauth_key_source: file with a path that doesn't exist yet tells
-# resolve-preauth-key to auto-generate a key via the headscale CLI on
-# the gateway (see createPreauthKeyOnGateway in
-# internal/claws/plans/apply/mesh/preauth_key.go). No secrets in the
-# fixture, nothing to wire up in CI.
+# the on-demand getOrResolvePreauthKey helper to auto-generate a key
+# via the headscale CLI on the gateway (see createPreauthKeyOnGateway
+# in internal/claws/plans/apply/mesh/preauth_key.go). No secrets in
+# the fixture, nothing to wire up in CI.
 #
 # Why no `exec_policy:` on the node:
 #

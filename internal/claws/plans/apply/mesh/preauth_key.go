@@ -15,56 +15,41 @@ import (
 
 const headscalePreauthUserID = "1"
 
-// ResolvePreauthKeyStep resolves the Tailscale preauth key and stores it in
-// the plan cache. Supports sources: env, file, auto.
-type ResolvePreauthKeyStep struct {
-	dial SSHDialFunc
-}
-
-func NewResolvePreauthKeyStep(opts Options) *ResolvePreauthKeyStep {
-	return &ResolvePreauthKeyStep{dial: opts.SSHDial}
-}
-
-func (*ResolvePreauthKeyStep) Name() string { return "resolve-preauth-key" }
-
-func (*ResolvePreauthKeyStep) Applicable(_ context.Context, t scaffold.Target) (bool, error) {
-	mt, ok := t.Payload.(*MeshTarget)
-	return ok && mt.IsGatewayHost && mt.Gateway != nil, nil
-}
-
-// Check implements scaffold.Step as a pure cache-read: the step's job
-// is to resolve the preauth key and populate the plan cache, so Check
-// asks exactly that question — "is CacheKeyPreauthKey already set?".
+// getOrResolvePreauthKey returns the Tailscale preauth key for this plan
+// run. The value is memoised on the plan cache so the first caller pays
+// for the resolution (env var read, SFTP of the key file, or headscale
+// CLI mint) and the rest hit the in-memory cache.
 //
-// We intentionally do NOT consult env vars or SFTP the gateway disk
-// inside Check. Doing that made the probe UI render "satisfied" on a
-// brand-new cold-start apply where OPENCLAW_HEADSCALE_PREAUTH_KEY
-// happened to be exported, even though the gateway VM didn't exist
-// yet and no other step had run. The user's mental model is "every
-// step with work to do shows 'will execute' on first run"; a
-// cache-read Check preserves that.
+// Resolution is an on-demand helper rather than a dedicated plan step:
+// a step whose only job is to populate an in-memory cache would always
+// render "will execute" in the plan tree even on a fully-converged
+// system, which is noise. Supported sources (from gw.Networking):
+// "env", "file", "auto" (env then file).
 //
-// On idempotent re-runs where the cache is empty (new process) the
-// step shows "will execute"; Execute is cheap — it reads env or
-// SFTPs the key file, or mints a new one via the headscale CLI —
-// and writes the value back to the cache. Downstream consumers
-// (install-tailscale.Execute via getOrResolvePreauthKey) still
-// read-through the cache on miss, so cold-start `--only mesh-join`
-// against an already-converged gateway keeps working.
-func (s *ResolvePreauthKeyStep) Check(ctx context.Context, _ scaffold.Target) (bool, error) {
-	v, ok := scaffold.PlanCacheGet(ctx, CacheKeyPreauthKey)
-	if !ok {
-		return false, nil
+// gwMT must describe the headscale gateway host (IsGatewayHost==true,
+// Gateway!=nil). Callers on non-gateway targets synthesise one via
+// InstallTailscaleStep.lookupGatewayMeshTarget.
+func getOrResolvePreauthKey(ctx context.Context, dial SSHDialFunc, gwMT *MeshTarget) (string, error) {
+	if v, ok := scaffold.PlanCacheGet(ctx, CacheKeyPreauthKey); ok {
+		if s, _ := v.(string); s != "" {
+			return s, nil
+		}
 	}
-	key, _ := v.(string)
-	return key != "", nil
+	key, err := resolvePreauthKey(ctx, dial, gwMT)
+	if err != nil {
+		return "", err
+	}
+	if key == "" {
+		return "", fmt.Errorf("resolve preauth key: empty after resolution")
+	}
+	scaffold.PlanCacheSet(ctx, CacheKeyPreauthKey, key)
+	return key, nil
 }
 
-func (s *ResolvePreauthKeyStep) Execute(ctx context.Context, t scaffold.Target) error {
-	mt := t.Payload.(*MeshTarget)
+func resolvePreauthKey(ctx context.Context, dial SSHDialFunc, mt *MeshTarget) (string, error) {
 	gw := mt.Gateway
-	if gw.Networking == nil {
-		return fmt.Errorf("resolve-preauth-key: gateway %q has no networking block", gw.Name)
+	if gw == nil || gw.Networking == nil {
+		return "", fmt.Errorf("resolve preauth key: gateway has no networking block")
 	}
 
 	src := strings.ToLower(strings.TrimSpace(gw.Networking.PreauthKeySource))
@@ -86,7 +71,7 @@ func (s *ResolvePreauthKeyStep) Execute(ctx context.Context, t scaffold.Target) 
 			return "", fmt.Errorf("preauth_key_file is empty")
 		}
 		m := mt.Machine
-		client, key, err := common.BorrowSSHWithRetry(ctx, s.dial, common.ResolveMachineHost(ctx, m), common.MachineSSHPort(m), common.MachineAgentUser(m))
+		client, key, err := common.BorrowSSHWithRetry(ctx, dial, common.ResolveMachineHost(ctx, m), common.MachineSSHPort(m), common.MachineAgentUser(m))
 		if err != nil {
 			return "", fmt.Errorf("dial gateway for preauth key: %w", err)
 		}
@@ -101,82 +86,23 @@ func (s *ResolvePreauthKeyStep) Execute(ctx context.Context, t scaffold.Target) 
 		return createPreauthKeyOnGateway(client, filePath)
 	}
 
-	var preauthKey string
-	var err error
-
 	switch src {
 	case "env":
 		v := tryEnv()
 		if v == "" {
-			return fmt.Errorf("resolve-preauth-key: env var %s is not set", envName)
+			return "", fmt.Errorf("resolve preauth key: env var %s is not set", envName)
 		}
-		preauthKey = v
+		return v, nil
 	case "file":
-		preauthKey, err = tryFile()
+		return tryFile()
 	case "auto":
 		if v := tryEnv(); v != "" {
-			preauthKey = v
-		} else {
-			preauthKey, err = tryFile()
+			return v, nil
 		}
+		return tryFile()
 	default:
-		return fmt.Errorf("resolve-preauth-key: unknown preauth_key_source %q", src)
+		return "", fmt.Errorf("resolve preauth key: unknown preauth_key_source %q", src)
 	}
-
-	if err != nil {
-		return fmt.Errorf("resolve-preauth-key: %w", err)
-	}
-	if preauthKey == "" {
-		return fmt.Errorf("resolve-preauth-key: preauth key is empty after resolution")
-	}
-
-	scaffold.PlanCacheSet(ctx, CacheKeyPreauthKey, preauthKey)
-	return nil
-}
-
-func (*ResolvePreauthKeyStep) Verify(ctx context.Context, _ scaffold.Target) error {
-	v, ok := scaffold.PlanCacheGet(ctx, CacheKeyPreauthKey)
-	if !ok {
-		return fmt.Errorf("resolve-preauth-key verify: key not in cache")
-	}
-	if v.(string) == "" {
-		return fmt.Errorf("resolve-preauth-key verify: key is empty")
-	}
-	return nil
-}
-
-// getOrResolvePreauthKey returns the tailscale preauth key for this plan run,
-// preferring the plan-cache entry seeded by resolve-preauth-key. On a cold
-// start (`claws apply --only mesh-join` without the mesh-gateway phase
-// running in this process) the cache is empty; we then re-derive the key
-// by re-running the manifest's preauth_key_source logic against the live
-// gateway VM (env → file → auto; file reads from disk, otherwise create a
-// fresh key via the headscale CLI). This makes mesh-join idempotent across
-// separate CLI invocations without requiring the gateway phase to run in
-// the same process.
-//
-// gwMT must describe the headscale gateway host (IsGatewayHost==true,
-// Gateway!=nil). Callers on non-gateway targets synthesise one via
-// InstallTailscaleStep.lookupGatewayMeshTarget.
-func getOrResolvePreauthKey(ctx context.Context, dial SSHDialFunc, gwMT *MeshTarget) (string, error) {
-	if v, ok := scaffold.PlanCacheGet(ctx, CacheKeyPreauthKey); ok {
-		if s, _ := v.(string); s != "" {
-			return s, nil
-		}
-	}
-	step := &ResolvePreauthKeyStep{dial: dial}
-	if err := step.Execute(ctx, scaffold.Target{ID: gwMT.Machine.Name, Payload: gwMT}); err != nil {
-		return "", err
-	}
-	v, ok := scaffold.PlanCacheGet(ctx, CacheKeyPreauthKey)
-	if !ok {
-		return "", fmt.Errorf("preauth key not in cache after resolve")
-	}
-	s, _ := v.(string)
-	if s == "" {
-		return "", fmt.Errorf("preauth key resolved to empty string")
-	}
-	return s, nil
 }
 
 // createPreauthKeyOnGateway uses the headscale CLI on the gateway to create

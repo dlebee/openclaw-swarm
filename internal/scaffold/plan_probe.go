@@ -37,6 +37,59 @@ func (ProbeNoop) OnProbeStart(string, string, string) {}
 // OnProbeEnd implements ProbeObserver.
 func (ProbeNoop) OnProbeEnd(string, string, string, cellStatusKind) {}
 
+// ProbeSummary aggregates cell verdicts from a completed probe. Callers use
+// it to decide whether there is any real work for the Execute pass — a
+// fully-converged plan (no will-execute cells and no probe errors) should
+// short-circuit confirm + Execute so users don't re-probe an already-
+// converged system.
+type ProbeSummary struct {
+	PhaseSkipped  int
+	NotApplicable int
+	Satisfied     int
+	WillExecute   int
+	WouldExecute  int
+	ApplicableErr int
+	CheckErr      int
+}
+
+// NothingToDo reports whether the probe verdicts show no remaining work
+// AND no errors. When true, ExecWithConfirm skips the confirm prompt and
+// does not call Execute: there is nothing to run and nothing to verify
+// (Verify only runs after a non-trivial Execute). Any probe error disables
+// the short-circuit so the user sees and decides on the failure.
+//
+// WouldExecute is ignored here because it only appears under DryRun, and
+// DryRun returns from ExecWithConfirm before the short-circuit is
+// evaluated.
+func (s ProbeSummary) NothingToDo() bool {
+	return s.WillExecute == 0 && s.ApplicableErr == 0 && s.CheckErr == 0
+}
+
+// summariseCells tallies the terminal cell statuses from an annotated
+// probe result.
+func summariseCells(cells []annotatedCell) ProbeSummary {
+	var s ProbeSummary
+	for _, c := range cells {
+		switch c.kind {
+		case cellStatusPhaseSkipped:
+			s.PhaseSkipped++
+		case cellStatusNotApplicable:
+			s.NotApplicable++
+		case cellStatusSatisfied:
+			s.Satisfied++
+		case cellStatusWillExecute:
+			s.WillExecute++
+		case cellStatusWouldExecute:
+			s.WouldExecute++
+		case cellStatusApplicableErr:
+			s.ApplicableErr++
+		case cellStatusCheckErr:
+			s.CheckErr++
+		}
+	}
+	return s
+}
+
 // annotatePlanCellsWithProbe walks the compiled plan, runs Applicable then Check
 // for each (target, step) pair, and builds rows for the prepared-plan tree.
 // Execute and Verify are not called.

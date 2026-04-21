@@ -51,8 +51,8 @@ func IsHTTPControlURL(controlURL string) bool {
 
 // ExpectedControlURLIsHTTP reports whether the control URL derived from the
 // manifest's networking.public_hostname would use plain HTTP. Used by steps
-// like install-caddy to decide applicability during dry-run, before
-// resolve-control-url has executed and populated the plan cache.
+// like install-caddy to decide applicability during dry-run, before the
+// on-demand getOrResolveControlURL helper has populated the plan cache.
 //   - sslip strategy always produces an https://…sslip.io URL.
 //   - custom strategy is https unless the host is explicitly prefixed http://.
 func ExpectedControlURLIsHTTP(gw *manifestdata.Gateway) bool {

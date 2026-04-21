@@ -1,5 +1,7 @@
 // Package mesh is the mesh-networking phase of the apply plan.
-// Steps install Headscale, Caddy, resolve preauth keys, and join Tailscale.
+// Steps install Headscale, Caddy, and join Tailscale. Control-URL and
+// preauth-key resolution are on-demand helpers (not plan steps) consumed
+// by the install-* steps.
 package mesh
 
 import (
@@ -112,11 +114,17 @@ func BuildMeshTargets(machines []manifestdata.Machine, gateways []manifestdata.G
 }
 
 // AddPhase registers the mesh phases. Two phases are used so that gateway
-// setup (resolve URL, install headscale/caddy, resolve preauth key) always
-// completes before install-tailscale runs on any target:
+// setup (install headscale/caddy) always completes before install-tailscale
+// runs on any target:
 //
 //   - "mesh-gateway": gateway target only; runs control-plane setup steps.
 //   - "mesh-join":    all mesh targets; joins every machine to the mesh.
+//
+// Control-URL and preauth-key resolution are NOT plan steps — they are
+// on-demand helpers (getOrResolveControlURL, getOrResolvePreauthKey) called
+// from install-headscale / install-caddy / install-tailscale. A plan step
+// that only populates an in-memory cache would always render "will execute"
+// even on a fully-converged system, polluting the plan tree.
 //
 // If no headscale targets exist, a single noop "configure-mesh" phase is
 // added so the phase slot still appears in the plan.
@@ -153,10 +161,8 @@ func AddPhase(p *scaffold.Plan, machineTargets []scaffold.Target, opts Options) 
 		phGW.ProbeDependsOn = append([]string(nil), opts.GatewayProbeDependsOn...)
 	}
 	phGW.AddTargets(gatewayTargets...)
-	phGW.AddStep(NewResolveControlURLStep(opts))
 	phGW.AddStep(NewInstallHeadscaleStep(opts))
 	phGW.AddStep(NewInstallCaddyStep(opts))
-	phGW.AddStep(NewResolvePreauthKeyStep(opts))
 
 	// Phase 2: join all mesh targets (gateway + nodes).
 	phJoin := p.AddPhase("mesh-join")

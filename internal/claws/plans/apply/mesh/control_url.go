@@ -22,91 +22,17 @@ import (
 // without dialing the VM.
 var errGatewayNotProvisioned = errors.New("gateway machine not provisioned yet")
 
-// ResolveControlURLStep derives the Headscale control URL from the manifest's
-// public_hostname strategy and stores it in the plan cache.
-// Only applicable for the gateway host machine.
-type ResolveControlURLStep struct {
-	dial SSHDialFunc
-}
-
-func NewResolveControlURLStep(opts Options) *ResolveControlURLStep {
-	return &ResolveControlURLStep{dial: opts.SSHDial}
-}
-
-func (*ResolveControlURLStep) Name() string { return "resolve-control-url" }
-
-func (*ResolveControlURLStep) Applicable(_ context.Context, t scaffold.Target) (bool, error) {
-	mt, ok := t.Payload.(*MeshTarget)
-	return ok && mt.IsGatewayHost && mt.Gateway != nil, nil
-}
-
-// Check implements scaffold.Step as a pure cache-read: the step's job
-// is to derive the control URL and populate the plan cache, so Check
-// asks exactly that question — "is CacheKeyControlURL already set?".
+// getOrResolveControlURL returns the control URL for this plan run. The
+// value is memoised on the plan cache so the first caller in a run pays
+// for the resolution and the rest hit the in-memory cache; callers are
+// install-headscale, install-caddy, and install-tailscale.
 //
-// We intentionally do NOT re-derive the URL from the manifest inside
-// Check (even though strategy=custom could answer "yes" without any
-// SSH). Doing that made the probe UI render "satisfied" on a brand-new
-// cold-start apply where the gateway VM doesn't even exist yet, which
-// is confusing: the user sees
-//
-//	Target gateway-host
-//	  create machine       will execute
-//	  ...
-//	  resolve control url  satisfied        <-- wrong
-//
-// The downside of the pure-read approach is that on an idempotent
-// re-run (gateway already converged, cache empty because it's a new
-// process) resolve-control-url shows "will execute" instead of
-// "satisfied". Execute is cheap and idempotent — it just recomputes
-// the URL and writes it back to the cache — so that UX cost is small.
-//
-// Every caller that consumes the URL (install-headscale,
-// install-tailscale, install-caddy) still uses getOrResolveControlURL
-// from Execute, which read-throughs the cache on miss. So cold-start
-// `--only mesh-join` runs keep working.
-func (s *ResolveControlURLStep) Check(ctx context.Context, _ scaffold.Target) (bool, error) {
-	v, ok := scaffold.PlanCacheGet(ctx, CacheKeyControlURL)
-	if !ok {
-		return false, nil
-	}
-	url, _ := v.(string)
-	return url != "", nil
-}
-
-func (s *ResolveControlURLStep) Execute(ctx context.Context, t scaffold.Target) error {
-	mt := t.Payload.(*MeshTarget)
-	gw := mt.Gateway
-
-	url, err := resolveControlURL(ctx, s.dial, mt, gw)
-	if err != nil {
-		return fmt.Errorf("resolve-control-url: %w", err)
-	}
-	scaffold.PlanCacheSet(ctx, CacheKeyControlURL, url)
-	return nil
-}
-
-func (s *ResolveControlURLStep) Verify(ctx context.Context, _ scaffold.Target) error {
-	v, ok := scaffold.PlanCacheGet(ctx, CacheKeyControlURL)
-	if !ok {
-		return fmt.Errorf("resolve-control-url verify: control URL not in cache")
-	}
-	if v.(string) == "" {
-		return fmt.Errorf("resolve-control-url verify: control URL is empty")
-	}
-	return nil
-}
-
-// getOrResolveControlURL returns the control URL for this plan run, preferring
-// the plan-cache entry seeded by resolve-control-url. On a cold start
-// (`claws apply --only mesh-gateway` / `--only mesh-join` without resolve-
-// control-url having run in this process) the cache is empty; we then
-// re-derive the URL from the manifest's networking.public_hostname — a pure
-// function of the gateway spec for strategy=custom, and an SSH "curl
-// icanhazip" probe against the gateway VM for strategy=sslip. The
-// re-derived value is written back to the cache so follow-up calls in the
-// same run (install-headscale → install-caddy → install-tailscale) share
-// one resolution instead of three.
+// Resolution is an on-demand helper rather than a dedicated plan step:
+// a step whose only job is to populate an in-memory cache would always
+// render "will execute" in the plan tree even on a fully-converged
+// system, which is noise. The derivation itself is a pure function of
+// the gateway spec for strategy=custom, and an SSH "curl icanhazip"
+// probe against the gateway VM for strategy=sslip.
 func getOrResolveControlURL(ctx context.Context, dial SSHDialFunc, mt *MeshTarget) (string, error) {
 	if v, ok := scaffold.PlanCacheGet(ctx, CacheKeyControlURL); ok {
 		if s, _ := v.(string); s != "" {

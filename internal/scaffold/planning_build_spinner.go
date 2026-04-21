@@ -46,10 +46,12 @@ type probeCellEndMsg struct {
 
 // probeFinishedMsg delivers the probe's final result back to the Tea event
 // loop so we can exit cleanly and hand the rendered tree (or error) back to
-// the caller.
+// the caller. summary aggregates cell verdicts so ExecWithConfirm can
+// short-circuit when every cell is satisfied/not-applicable.
 type probeFinishedMsg struct {
-	tree string
-	err  error
+	tree    string
+	summary ProbeSummary
+	err     error
 }
 
 // spinnerProbeObserver forwards probe lifecycle events to a Tea program.
@@ -88,14 +90,15 @@ func probeKey(phase, targetID, step string) string {
 }
 
 type planProbeModel struct {
-	spinner     spinner.Model
-	total       int
-	completed   int
-	inflight    map[string]probeInflight
-	treeOutput  string
-	probeErr    error
-	done        bool
-	cancelProbe context.CancelFunc // stops Applicable+Check (key or shared ctx)
+	spinner      spinner.Model
+	total        int
+	completed    int
+	inflight     map[string]probeInflight
+	treeOutput   string
+	probeSummary ProbeSummary
+	probeErr     error
+	done         bool
+	cancelProbe  context.CancelFunc // stops Applicable+Check (key or shared ctx)
 }
 
 func newPlanProbeModel(total int, cancelProbe context.CancelFunc) *planProbeModel {
@@ -128,6 +131,7 @@ func (m *planProbeModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case probeFinishedMsg:
 		m.done = true
 		m.treeOutput = msg.tree
+		m.probeSummary = msg.summary
 		m.probeErr = msg.err
 		if m.total > 0 {
 			m.completed = m.total
@@ -229,14 +233,15 @@ func sortedInflight(m map[string]probeInflight) []probeInflight {
 	return out
 }
 
-// runPlanProbeWithSpinner runs exec.DescribeStyledWithHintsObs inside a Tea
-// program, rendering "Probing plan.... N/total (K in flight)" + per-cell
-// breadcrumbs on stderr while cells probe in parallel. Returns the rendered
-// plan tree (or the probe error). When stderr isn't a TTY we fall back to a
-// plain synchronous probe with no UI.
-func runPlanProbeWithSpinner(ctx context.Context, exec *ExecutablePlan, width int, h PlanDisplayHints) (string, error) {
+// runPlanProbeWithSpinner runs exec.ProbeAndRender inside a Tea program,
+// rendering "Probing plan.... N/total (K in flight)" + per-cell breadcrumbs
+// on stderr while cells probe in parallel. Returns the rendered plan tree,
+// an aggregate ProbeSummary of cell verdicts (so the caller can short-
+// circuit when nothing needs to run), and the probe error if any. When
+// stderr isn't a TTY we fall back to a plain synchronous probe with no UI.
+func runPlanProbeWithSpinner(ctx context.Context, exec *ExecutablePlan, width int, h PlanDisplayHints) (string, ProbeSummary, error) {
 	if !term.IsTerminal(int(os.Stderr.Fd())) {
-		return exec.DescribeStyledWithHints(ctx, width, h)
+		return exec.ProbeAndRender(ctx, width, h, ProbeNoop{})
 	}
 
 	probeCtx, probeCancel := context.WithCancel(ctx)
@@ -250,18 +255,18 @@ func runPlanProbeWithSpinner(ctx context.Context, exec *ExecutablePlan, width in
 
 	go func() {
 		obs := &spinnerProbeObserver{send: prog.Send}
-		tree, err := exec.DescribeStyledWithHintsObs(probeCtx, width, h, obs)
-		prog.Send(probeFinishedMsg{tree: tree, err: err})
+		tree, summary, err := exec.ProbeAndRender(probeCtx, width, h, obs)
+		prog.Send(probeFinishedMsg{tree: tree, summary: summary, err: err})
 	}()
 
 	final, err := prog.Run()
 	if err != nil {
-		return "", err
+		return "", ProbeSummary{}, err
 	}
 	fm, ok := final.(*planProbeModel)
 	if !ok {
-		return "", fmt.Errorf("scaffold: unexpected probe spinner model type %T", final)
+		return "", ProbeSummary{}, fmt.Errorf("scaffold: unexpected probe spinner model type %T", final)
 	}
 	_, _ = fmt.Fprintln(os.Stderr)
-	return fm.treeOutput, fm.probeErr
+	return fm.treeOutput, fm.probeSummary, fm.probeErr
 }

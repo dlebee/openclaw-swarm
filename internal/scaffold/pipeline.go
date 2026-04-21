@@ -31,8 +31,19 @@ type PipelineOptions struct {
 
 var styleBuildBanner = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("214"))
 
+var styleConvergedBanner = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("42"))
+
 // ExecWithConfirm builds the plan, shows it, prompts, then executes.
 // When DryRun is true, build + probed plan outline run (Applicable/Check per cell); no confirm, no Execute, no Verify.
+//
+// When the probe reports no remaining work (every cell is satisfied,
+// not-applicable, or phase-skipped, and no probe errors), we skip the
+// confirm prompt and the Execute pass entirely — there's nothing to run
+// and nothing to verify (Verify only runs after a non-trivial Execute).
+// This avoids a second round of Applicable+Check against already-converged
+// infrastructure, which for mesh cells in particular means real SSH round
+// trips per target. Force disables the short-circuit: a --force caller is
+// explicitly asking Execute to run regardless of Check.
 func ExecWithConfirm(ctx context.Context, p *Plan, o PipelineOptions) error {
 	ctx = EnsurePlanCache(ctx)
 	if o.Out == nil {
@@ -53,32 +64,46 @@ func ExecWithConfirm(ctx context.Context, p *Plan, o PipelineOptions) error {
 		SkipPhases: o.SkipPhases,
 		Force:      o.Force,
 	}
+	var summary ProbeSummary
 	if o.PrettyPlan {
 		if f, ok := o.Out.(*os.File); ok && term.IsTerminal(int(f.Fd())) {
 			// PlanPreview owns the probe internally (it needs the full
 			// cell list for the viewport). We just hand it the plan.
-			if err := RunPlanPreview(ctx, exec, hints); err != nil {
-				return err
-			}
-		} else {
-			treeOut, err := runPlanProbeWithSpinner(ctx, exec, o.Width, hints)
+			s, err := RunPlanPreview(ctx, exec, hints)
 			if err != nil {
 				return err
 			}
+			summary = s
+		} else {
+			treeOut, s, err := runPlanProbeWithSpinner(ctx, exec, o.Width, hints)
+			if err != nil {
+				return err
+			}
+			summary = s
 			_, _ = fmt.Fprintln(o.Out)
 			_, _ = fmt.Fprintln(o.Out, treeOut)
 		}
 	} else {
-		treeOut, err := runPlanProbeWithSpinner(ctx, exec, o.Width, hints)
+		treeOut, s, err := runPlanProbeWithSpinner(ctx, exec, o.Width, hints)
 		if err != nil {
 			return err
 		}
+		summary = s
 		_, _ = fmt.Fprintln(o.Out)
 		_, _ = fmt.Fprintln(o.Out, treeOut)
 	}
 	_, _ = fmt.Fprintln(o.Out)
 
 	if o.DryRun {
+		return nil
+	}
+
+	// Short-circuit when the probe shows no work. --force is treated as
+	// "I want Execute to run"; the summary will naturally show WillExecute
+	// cells so we never hit this branch under Force, but the explicit
+	// guard documents the intent.
+	if !o.Force && summary.NothingToDo() {
+		_, _ = fmt.Fprintln(o.Out, styleConvergedBanner.Render("Nothing to apply — plan is fully converged."))
 		return nil
 	}
 

@@ -34,11 +34,11 @@
 #       name. Tests that randomize m.Prefix at load time rewrite the
 #       URL below in lockstep via rewriteMeshHost.
 #
-# preauth_key_source: file + a path that doesn't exist yet tells
-# resolve-preauth-key to auto-create a key via the headscale CLI
-# on the gateway (see createPreauthKeyOnGateway in
-# internal/claws/plans/apply/mesh/preauth_key.go). No secrets in
-# the fixture, no env vars to wire up in CI.
+# preauth_key_source: file + a path that doesn't exist yet tells the
+# on-demand getOrResolvePreauthKey helper to auto-create a key via the
+# headscale CLI on the gateway (see createPreauthKeyOnGateway in
+# internal/claws/plans/apply/mesh/preauth_key.go). No secrets in the
+# fixture, no env vars to wire up in CI.
 
 prefix: claws-it-multipass-mesh
 

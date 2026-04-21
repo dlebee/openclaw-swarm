@@ -49,6 +49,6 @@ func getOrResolveControlURL(ctx context.Context, dial SSHDialFunc, mt *MeshTarge
 - `create_machine.go:Check` writing `mt.Instance`, `RecordPlanMachineExists`, `RecordPlanMachineHost` — makes probe ordering-dependent.
 - `install_tailscale.go:Check` writing `RecordPlanMachineMeshIP` — same problem.
 - `wait_cloud_init.go:Check` returning `false, nil` on every error path — hides SSH failures as "will execute".
-- Check methods that only read a cache their own Execute populates (e.g. `resolve_control_url.Check`, `resolve_preauth_key.Check`) — always misreport "will execute" on cold runs.
+- A `scaffold.Step` whose entire purpose is to populate the plan cache (Execute does only `PlanCacheSet`) — will always render "will execute" on cold runs even when the cluster is fully converged. Turn it into an on-demand `getOrResolve*()` helper called from the step that consumes the value.
 
 Prefer resolving the actual underlying state every time, cached for cheapness.

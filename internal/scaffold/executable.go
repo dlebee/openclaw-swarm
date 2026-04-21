@@ -43,12 +43,22 @@ func (e *ExecutablePlan) DescribeStyledWithHints(ctx context.Context, width int,
 // can render "N/total · phase > target > step" while a slow probe is in
 // flight. Pass ProbeNoop{} to opt out.
 func (e *ExecutablePlan) DescribeStyledWithHintsObs(ctx context.Context, width int, h PlanDisplayHints, obs ProbeObserver) (string, error) {
+	tree, _, err := e.ProbeAndRender(ctx, width, h, obs)
+	return tree, err
+}
+
+// ProbeAndRender runs the Applicable+Check probe, renders the prepared-plan
+// tree, and returns both alongside a ProbeSummary aggregating cell
+// verdicts. Callers can then decide, e.g., to short-circuit the confirm
+// prompt and Execute pass when summary.NothingToDo() is true — see
+// ExecWithConfirm.
+func (e *ExecutablePlan) ProbeAndRender(ctx context.Context, width int, h PlanDisplayHints, obs ProbeObserver) (string, ProbeSummary, error) {
 	ctx = EnsurePlanCache(ctx)
 	cells, err := annotatePlanCellsWithProbeObs(ctx, e.compiled, h, obs)
 	if err != nil {
-		return "", err
+		return "", ProbeSummary{}, err
 	}
-	return renderPreparedPlanTree(cells, width, h), nil
+	return renderPreparedPlanTree(cells, width, h), summariseCells(cells), nil
 }
 
 // ProbeCellCount reports how many (target, step) probes DescribeStyledWithHints
