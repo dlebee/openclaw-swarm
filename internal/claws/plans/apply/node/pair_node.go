@@ -14,8 +14,9 @@ import (
 // PairNodeStep approves the node's pending device entry on the gateway.
 // This step SSHes into the gateway host to run `openclaw devices approve`.
 type PairNodeStep struct {
-	dial   SSHDialFunc
-	reader common.ConfigReader
+	dial         SSHDialFunc
+	reader       common.ConfigReader
+	hostResolver common.HostResolverFn
 }
 
 func NewPairNodeStep(opts Options) *PairNodeStep {
@@ -23,7 +24,7 @@ func NewPairNodeStep(opts Options) *PairNodeStep {
 	if r == nil {
 		r = common.DefaultConfigReader(opts.SSHDial)
 	}
-	return &PairNodeStep{dial: opts.SSHDial, reader: r}
+	return &PairNodeStep{dial: opts.SSHDial, reader: r, hostResolver: opts.HostResolver}
 }
 
 func (*PairNodeStep) Name() string { return "pair-node" }
@@ -36,7 +37,7 @@ func (s *PairNodeStep) Applicable(_ context.Context, t scaffold.Target) (bool, e
 func (s *PairNodeStep) Check(ctx context.Context, t scaffold.Target) (bool, error) {
 	nt := t.Payload.(*NodeTarget)
 	gwMach := nt.GWMach
-	host, ok := common.HostKnown(ctx, gwMach)
+	host, ok := common.HostKnown(ctx, gwMach, s.hostResolver)
 	if !ok {
 		return false, nil
 	}

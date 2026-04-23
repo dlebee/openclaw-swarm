@@ -46,11 +46,12 @@ WantedBy=default.target
 // it) or the real openclaw-node.service exists (bootstrap has already
 // succeeded, so the stub is no longer on the critical path).
 type StubGatewayUnitStep struct {
-	dial SSHDialFunc
+	dial         SSHDialFunc
+	hostResolver common.HostResolverFn
 }
 
 func NewStubGatewayUnitStep(opts Options) *StubGatewayUnitStep {
-	return &StubGatewayUnitStep{dial: opts.SSHDial}
+	return &StubGatewayUnitStep{dial: opts.SSHDial, hostResolver: opts.HostResolver}
 }
 
 func (*StubGatewayUnitStep) Name() string { return "stub-gateway-unit" }
@@ -63,7 +64,7 @@ func (s *StubGatewayUnitStep) Applicable(_ context.Context, t scaffold.Target) (
 func (s *StubGatewayUnitStep) Check(ctx context.Context, t scaffold.Target) (bool, error) {
 	nt := t.Payload.(*NodeTarget)
 	m := nt.Machine
-	host, ok := common.HostKnown(ctx, m)
+	host, ok := common.HostKnown(ctx, m, s.hostResolver)
 	if !ok {
 		return false, nil
 	}

@@ -31,7 +31,8 @@ type MachineProvider interface {
 
 // Options configures shared steps.
 type Options struct {
-	SSHDial SSHDialFunc
+	SSHDial      SSHDialFunc
+	HostResolver HostResolverFn
 }
 
 // ---------------------------------------------------------------------------
@@ -137,9 +138,22 @@ func ResolveMachineHost(ctx context.Context, m manifestdata.Machine) string {
 // an empty host (provisioning always runs before the caller in a real
 // plan); if they do, it's a programmer error and the caller should
 // surface the ResolveMachineHost="" explicitly.
-func HostKnown(ctx context.Context, m manifestdata.Machine) (string, bool) {
+func HostKnown(ctx context.Context, m manifestdata.Machine, resolvers ...HostResolverFn) (string, bool) {
 	host := ResolveMachineHost(ctx, m)
-	return host, host != ""
+	if host != "" {
+		return host, true
+	}
+	for _, fn := range resolvers {
+		if fn == nil {
+			continue
+		}
+		if h, ok, err := fn(ctx, m.Name); err == nil && ok && strings.TrimSpace(h) != "" {
+			h = strings.TrimSpace(h)
+			scaffold.RecordPlanMachineHost(ctx, m.Name, h)
+			return h, true
+		}
+	}
+	return "", false
 }
 
 func MachineSSHPort(m manifestdata.Machine) int {

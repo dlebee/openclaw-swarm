@@ -15,11 +15,12 @@ import (
 // `openclaw exec-policy set`. This is the node-side gate that controls whether
 // exec tool calls are accepted at all, independent of the gateway config.
 type ExecPolicyStep struct {
-	dial SSHDialFunc
+	dial         SSHDialFunc
+	hostResolver common.HostResolverFn
 }
 
 func NewExecPolicyStep(opts Options) *ExecPolicyStep {
-	return &ExecPolicyStep{dial: opts.SSHDial}
+	return &ExecPolicyStep{dial: opts.SSHDial, hostResolver: opts.HostResolver}
 }
 
 func (*ExecPolicyStep) Name() string { return "exec-policy" }
@@ -38,7 +39,7 @@ func (s *ExecPolicyStep) Check(ctx context.Context, t scaffold.Target) (bool, er
 		return true, nil
 	}
 	m := nt.Machine
-	host, ok := common.HostKnown(ctx, m)
+	host, ok := common.HostKnown(ctx, m, s.hostResolver)
 	if !ok {
 		return false, nil
 	}

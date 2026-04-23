@@ -12,11 +12,12 @@ import (
 
 // InstallNodejsStep checks that Node.js is installed on the target machine.
 type InstallNodejsStep struct {
-	dial SSHDialFunc
+	dial         SSHDialFunc
+	hostResolver HostResolverFn
 }
 
 func NewInstallNodejsStep(opts Options) *InstallNodejsStep {
-	return &InstallNodejsStep{dial: opts.SSHDial}
+	return &InstallNodejsStep{dial: opts.SSHDial, hostResolver: opts.HostResolver}
 }
 
 func (*InstallNodejsStep) Name() string { return "install-nodejs" }
@@ -35,7 +36,7 @@ func (s *InstallNodejsStep) Check(ctx context.Context, t scaffold.Target) (bool,
 		return false, nil
 	}
 	m := mp.GetMachine()
-	host, known := HostKnown(ctx, m)
+	host, known := HostKnown(ctx, m, s.hostResolver)
 	if !known {
 		return false, nil
 	}

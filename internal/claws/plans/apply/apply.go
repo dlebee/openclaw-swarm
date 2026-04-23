@@ -119,10 +119,43 @@ func BuildPlan(o BuildOptions) (*scaffold.Plan, error) {
 			chPh.ProbeDependsOn = []string{"gateway"}
 		}
 	}
+	// hostResolver queries the hosting provider to discover machine IPs
+	// when they aren't in the plan cache yet. Shared between PreRun
+	// (registers on the cache for Execute-time ResolveMachineHost) and
+	// phase Options (steps call it directly during probe so a cold
+	// --phases run produces accurate verdicts).
+	var hostResolver common.HostResolverFn
+	if o.Provider != nil {
+		provider := o.Provider
+		prefix := o.Manifest.Prefix
+		machines := o.Manifest.Machines
+		hostResolver = func(ctx context.Context, machineName string) (string, bool, error) {
+			if h, ok := scaffold.LookupPlanMachineHost(ctx, machineName); ok && h != "" {
+				return h, true, nil
+			}
+			if _, done := scaffold.PlanCacheGet(ctx, "APPLY_HOST_RESOLVER_DONE"); !done {
+				targets := provisioning.BuildMachineTargets(machines)
+				if err := provisioning.ResolveHostedInstances(ctx, provider, prefix, targets); err != nil {
+					return "", false, err
+				}
+				scaffold.PlanCacheSet(ctx, "APPLY_HOST_RESOLVER_DONE", true)
+			}
+			if h, ok := scaffold.LookupPlanMachineHost(ctx, machineName); ok && h != "" {
+				return h, true, nil
+			}
+			return "", false, nil
+		}
+		p.PreRun = func(ctx context.Context) error {
+			common.RegisterHostResolver(ctx, hostResolver)
+			return nil
+		}
+	}
+
 	if len(o.Manifest.Nodes) > 0 {
 		nodeTargets := node.BuildNodeTargets(o.Manifest.Nodes, o.Manifest.Machines, o.Manifest.Gateways)
 		nodePh := node.AddPhase(p, nodeTargets, node.Options{
-			SSHDial: node.SSHDialFunc(o.SSHDial),
+			SSHDial:      node.SSHDialFunc(o.SSHDial),
+			HostResolver: hostResolver,
 		})
 		if len(o.Manifest.Gateways) > 0 {
 			nodePh.ProbeDependsOn = []string{"gateway"}
@@ -133,45 +166,8 @@ func BuildPlan(o BuildOptions) (*scaffold.Plan, error) {
 		agPh := agents.AddPhase(p, agentTargets, agents.Options{
 			SSHDial: agents.SSHDialFunc(o.SSHDial),
 		})
-		// Probe only: channels, node, and agents may run Applicable+Check in
-		// parallel after gateway. Execute order remains plan append order.
 		if len(o.Manifest.Gateways) > 0 {
 			agPh.ProbeDependsOn = []string{"gateway"}
-		}
-	}
-
-	// PreRun installs a host resolver that every non-provisioning phase
-	// consults via common.ResolveMachineHost when the per-machine host
-	// isn't in the plan cache yet. On a hot run (full apply pipeline)
-	// provisioning.create-machine writes the entries first and this
-	// resolver is never hit. On a cold `--only <phase>` run — or any
-	// run where an earlier phase was skipped — the resolver lazily
-	// re-hydrates from the provider, so phases don't need to couple
-	// their correctness to an earlier phase's in-memory state. One-shot
-	// guarded by a plan-cache flag so a run doesn't re-ListByTag for
-	// every machine lookup.
-	if o.Provider != nil {
-		provider := o.Provider
-		prefix := o.Manifest.Prefix
-		machines := o.Manifest.Machines
-		p.PreRun = func(ctx context.Context) error {
-			common.RegisterHostResolver(ctx, func(ctx context.Context, machineName string) (string, bool, error) {
-				if h, ok := scaffold.LookupPlanMachineHost(ctx, machineName); ok && h != "" {
-					return h, true, nil
-				}
-				if _, done := scaffold.PlanCacheGet(ctx, "APPLY_HOST_RESOLVER_DONE"); !done {
-					targets := provisioning.BuildMachineTargets(machines)
-					if err := provisioning.ResolveHostedInstances(ctx, provider, prefix, targets); err != nil {
-						return "", false, err
-					}
-					scaffold.PlanCacheSet(ctx, "APPLY_HOST_RESOLVER_DONE", true)
-				}
-				if h, ok := scaffold.LookupPlanMachineHost(ctx, machineName); ok && h != "" {
-					return h, true, nil
-				}
-				return "", false, nil
-			})
-			return nil
 		}
 	}
 	return p, nil

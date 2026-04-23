@@ -11,11 +11,12 @@ import (
 
 // InstallOpenclawStep checks that openclaw is installed on the target machine.
 type InstallOpenclawStep struct {
-	dial SSHDialFunc
+	dial         SSHDialFunc
+	hostResolver HostResolverFn
 }
 
 func NewInstallOpenclawStep(opts Options) *InstallOpenclawStep {
-	return &InstallOpenclawStep{dial: opts.SSHDial}
+	return &InstallOpenclawStep{dial: opts.SSHDial, hostResolver: opts.HostResolver}
 }
 
 func (*InstallOpenclawStep) Name() string { return "install-openclaw" }
@@ -34,7 +35,7 @@ func (s *InstallOpenclawStep) Check(ctx context.Context, t scaffold.Target) (boo
 		return false, nil
 	}
 	m := mp.GetMachine()
-	host, known := HostKnown(ctx, m)
+	host, known := HostKnown(ctx, m, s.hostResolver)
 	if !known {
 		return false, nil
 	}

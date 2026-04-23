@@ -16,6 +16,7 @@ import (
 	gatewayscmd "github.com/gluwa/openclaw-swarm2/internal/cli/commands/gateways"
 	githubcmd "github.com/gluwa/openclaw-swarm2/internal/cli/commands/github"
 	manifestcmd "github.com/gluwa/openclaw-swarm2/internal/cli/commands/manifest"
+	nodescmd "github.com/gluwa/openclaw-swarm2/internal/cli/commands/nodes"
 	remotecmd "github.com/gluwa/openclaw-swarm2/internal/cli/commands/remote"
 	sshauth "github.com/gluwa/openclaw-swarm2/internal/cli/commands/ssh"
 	"github.com/gluwa/openclaw-swarm2/internal/perflog"
@@ -54,6 +55,7 @@ func main() {
 	root.AddCommand(channelscmd.ChannelsCmd(&manifestFile))
 	root.AddCommand(gatewayscmd.GatewaysCmd(&manifestFile))
 	root.AddCommand(githubcmd.GitHubCmd(&manifestFile))
+	root.AddCommand(nodescmd.NodesCmd(&manifestFile))
 	root.AddCommand(remotecmd.SSHCmd(&manifestFile))
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)

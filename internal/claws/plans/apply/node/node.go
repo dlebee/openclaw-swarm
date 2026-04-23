@@ -117,6 +117,11 @@ type Options struct {
 	// reader so `pair-node` observes the same per-host devices snapshot
 	// as `pair-gateway-device`.
 	ConfigReader common.ConfigReader
+	// HostResolver resolves machine IPs from the hosting provider when
+	// the plan cache is empty. Steps use it so the probe produces
+	// accurate verdicts even on a cold --phases node run where
+	// provisioning never populated the cache.
+	HostResolver common.HostResolverFn
 }
 
 // AddPhase registers the "node" phase.
@@ -134,8 +139,9 @@ func AddPhase(p *scaffold.Plan, targets []scaffold.Target, opts Options) *scaffo
 	}
 	ph.Concurrency = n
 	ph.AddTargets(targets...)
-	ph.AddStep(common.NewInstallNodejsStep(common.Options{SSHDial: opts.SSHDial}))
-	ph.AddStep(common.NewInstallOpenclawStep(common.Options{SSHDial: opts.SSHDial}))
+	commonOpts := common.Options{SSHDial: opts.SSHDial, HostResolver: opts.HostResolver}
+	ph.AddStep(common.NewInstallNodejsStep(commonOpts))
+	ph.AddStep(common.NewInstallOpenclawStep(commonOpts))
 	ph.AddStep(NewStubGatewayUnitStep(opts))
 	ph.AddStep(NewBootstrapNodeStep(opts))
 	ph.AddStep(NewConfigureNodeStep(opts))

@@ -15,11 +15,12 @@ import (
 // BootstrapNodeStep runs `openclaw node install` for first-time node setup.
 // Not applicable when the systemd unit already exists (node already installed).
 type BootstrapNodeStep struct {
-	dial SSHDialFunc
+	dial         SSHDialFunc
+	hostResolver common.HostResolverFn
 }
 
 func NewBootstrapNodeStep(opts Options) *BootstrapNodeStep {
-	return &BootstrapNodeStep{dial: opts.SSHDial}
+	return &BootstrapNodeStep{dial: opts.SSHDial, hostResolver: opts.HostResolver}
 }
 
 func (*BootstrapNodeStep) Name() string { return "bootstrap-node" }
@@ -33,13 +34,8 @@ func (s *BootstrapNodeStep) Applicable(ctx context.Context, t scaffold.Target) (
 		return false, nil
 	}
 	m := nt.Machine
-	host, ok := common.HostKnown(ctx, m)
+	host, ok := common.HostKnown(ctx, m, s.hostResolver)
 	if !ok {
-		// Machine not yet provisioned: we don't know whether the
-		// systemd unit exists, but the bootstrap WILL apply once
-		// provisioning creates the VM. Returning true here surfaces
-		// "will execute" in the probe UI instead of "applicable:
-		// dial :22: connection refused".
 		return true, nil
 	}
 	client, key, err := common.BorrowSSH(ctx, s.dial, host, common.MachineSSHPort(m), common.MachineAgentUser(m))
@@ -61,7 +57,7 @@ func (s *BootstrapNodeStep) Applicable(ctx context.Context, t scaffold.Target) (
 func (s *BootstrapNodeStep) Check(ctx context.Context, t scaffold.Target) (bool, error) {
 	nt := t.Payload.(*NodeTarget)
 	m := nt.Machine
-	host, ok := common.HostKnown(ctx, m)
+	host, ok := common.HostKnown(ctx, m, s.hostResolver)
 	if !ok {
 		return false, nil
 	}

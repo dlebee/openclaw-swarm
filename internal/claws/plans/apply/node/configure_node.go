@@ -21,11 +21,12 @@ const nodeUnit = "openclaw-node"
 // like OPENCLAW_ALLOW_INSECURE_PRIVATE_WS that the upstream install doesn't
 // capture.
 type ConfigureNodeStep struct {
-	dial SSHDialFunc
+	dial         SSHDialFunc
+	hostResolver common.HostResolverFn
 }
 
 func NewConfigureNodeStep(opts Options) *ConfigureNodeStep {
-	return &ConfigureNodeStep{dial: opts.SSHDial}
+	return &ConfigureNodeStep{dial: opts.SSHDial, hostResolver: opts.HostResolver}
 }
 
 func (*ConfigureNodeStep) Name() string { return "configure-node" }
@@ -38,7 +39,7 @@ func (s *ConfigureNodeStep) Applicable(_ context.Context, t scaffold.Target) (bo
 func (s *ConfigureNodeStep) Check(ctx context.Context, t scaffold.Target) (bool, error) {
 	nt := t.Payload.(*NodeTarget)
 	m := nt.Machine
-	host, ok := common.HostKnown(ctx, m)
+	host, ok := common.HostKnown(ctx, m, s.hostResolver)
 	if !ok {
 		return false, nil
 	}
