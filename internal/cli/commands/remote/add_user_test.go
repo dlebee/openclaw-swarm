@@ -142,9 +142,9 @@ func TestTargetUsersForMachine(t *testing.T) {
 			want: []string{"agent", "root"},
 		},
 		{
-			name: "agent only → just agent",
+			name: "agent only → agent + root fallback for bootstrap",
 			m:    manifestdata.Machine{AgentUser: "agent"},
-			want: []string{"agent"},
+			want: []string{"agent", "root"},
 		},
 		{
 			name: "bootstrap only → just bootstrap",

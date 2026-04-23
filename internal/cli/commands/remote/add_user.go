@@ -211,18 +211,20 @@ func authorizeForUser(store *state.Store, addr, user, line string, dryRun bool) 
 // When both fields are empty the conservative default is a single "root"
 // entry — the same final fallback preferredUser uses for interactive ssh.
 func targetUsersForMachine(m manifestdata.Machine) []string {
+	agent := strings.TrimSpace(m.AgentUser)
+	bootstrap := strings.TrimSpace(m.BootstrapUser)
+	if bootstrap == "" {
+		bootstrap = "root"
+	}
+
 	seen := make(map[string]bool, 2)
 	out := make([]string, 0, 2)
-	for _, u := range []string{m.AgentUser, m.BootstrapUser} {
-		u = strings.TrimSpace(u)
+	for _, u := range []string{agent, bootstrap} {
 		if u == "" || seen[u] {
 			continue
 		}
 		seen[u] = true
 		out = append(out, u)
-	}
-	if len(out) == 0 {
-		return []string{"root"}
 	}
 	return out
 }
