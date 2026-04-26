@@ -18,8 +18,11 @@ const nodeUnit = "openclaw-node"
 //
 // The gateway token is baked into the unit's Environment= by `openclaw node
 // install`, so we don't manage it here. This step only manages extra env vars
-// like OPENCLAW_ALLOW_INSECURE_PRIVATE_WS that the upstream install doesn't
-// capture.
+// like NODE_COMPILE_CACHE that the upstream install doesn't capture.
+//
+// Note: OPENCLAW_ALLOW_INSECURE_PRIVATE_WS is now captured by upstream
+// `openclaw node install` when set in the install environment, so we no
+// longer need to manage it here.
 type ConfigureNodeStep struct {
 	dial         SSHDialFunc
 	hostResolver common.HostResolverFn
@@ -73,11 +76,11 @@ func (s *ConfigureNodeStep) Check(ctx context.Context, t scaffold.Target) (bool,
 // short-lived workers per tool invocation, so a persistent V8 compile cache
 // materially cuts exec latency.
 func nodeEnv(nt *NodeTarget) map[string]string {
-	env := gwService.StartupOptimEnv()
-	if gwService.NeedsInsecureWS(nt.Gateway) {
-		env["OPENCLAW_ALLOW_INSECURE_PRIVATE_WS"] = "1"
-	}
-	return env
+	// OPENCLAW_ALLOW_INSECURE_PRIVATE_WS is now captured by upstream
+	// `openclaw node install` when set in the install environment
+	// (bootstrap_node.go sets it via envPrefix), so we only need the
+	// startup optimization env vars here.
+	return gwService.StartupOptimEnv()
 }
 
 func (s *ConfigureNodeStep) Execute(ctx context.Context, t scaffold.Target) error {
