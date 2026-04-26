@@ -1,0 +1,121 @@
+name: Integration Tests (Linode)
+
+on:
+  push:
+    tags:
+      - 'test-*'  # Trigger on test-* tags (e.g., test-v0.1.0, test-node)
+  workflow_dispatch:
+    inputs:
+      test_filter:
+        description: 'Test filter (e.g., TestNodeSmoke, TestGatewaySmoke, or empty for all)'
+        required: false
+        type: string
+        default: ''
+
+permissions:
+  contents: read
+
+env:
+  LINODE_TOKEN: ${{ secrets.LINODE_TOKEN }}
+
+jobs:
+  integration:
+    name: Linode Integration
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Build CLI
+        run: go build -o /tmp/claws ./cmd/cli
+
+      - name: Generate unique prefix
+        id: prefix
+        run: |
+          # Use run ID + attempt for unique prefix to avoid collisions
+          PREFIX="ci-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          echo "prefix=$PREFIX" >> $GITHUB_OUTPUT
+          echo "Using prefix: $PREFIX"
+
+      - name: Run integration tests
+        id: tests
+        run: |
+          TEST_FILTER="${{ inputs.test_filter }}"
+          if [ -n "$TEST_FILTER" ]; then
+            go test -v -tags=integration_linode -timeout 40m \
+              -run "$TEST_FILTER" \
+              ./test/integration/linode/...
+          else
+            go test -v -tags=integration_linode -timeout 40m \
+              ./test/integration/linode/...
+          fi
+
+      # Always cleanup Linode instances, even if tests fail or are cancelled
+      - name: Cleanup Linode instances
+        if: always()
+        run: |
+          echo "=== Cleaning up any leaked Linode instances ==="
+          
+          # Install linode-cli if not present
+          pip install linode-cli --quiet
+          
+          # The tests tag Linode instances with "claws/<prefix>" where prefix
+          # is like "it-lin-node-abc123". We look for any instances tagged
+          # with the "claws/it-lin-*" pattern from integration tests.
+          #
+          # Note: Tests should clean up after themselves, but this catches
+          # leaked instances from crashes, timeouts, or cancellations.
+          
+          echo "Listing all Linode instances..."
+          ALL_INSTANCES=$(linode-cli linodes list --json 2>/dev/null || echo "[]")
+          
+          # Find instances with integration test tags (claws/it-lin-*)
+          INSTANCES=$(echo "$ALL_INSTANCES" | jq -r '
+            .[] | 
+            select(.tags | any(startswith("claws/it-lin-"))) | 
+            "\(.id) \(.label) [\(.tags | join(", "))]"' || true)
+          
+          if [ -n "$INSTANCES" ]; then
+            echo "Found integration test instances:"
+            echo "$INSTANCES"
+            echo ""
+            
+            # Extract just the IDs and delete
+            IDS=$(echo "$ALL_INSTANCES" | jq -r '
+              .[] | 
+              select(.tags | any(startswith("claws/it-lin-"))) | 
+              .id' || true)
+            
+            for ID in $IDS; do
+              echo "Deleting instance $ID..."
+              linode-cli linodes delete "$ID" || true
+            done
+            echo "Cleanup complete"
+          else
+            echo "No leaked integration test instances found"
+          fi
+
+      - name: Summary
+        if: always()
+        run: |
+          echo "## Integration Test Results" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          if [ "${{ steps.tests.outcome }}" == "success" ]; then
+            echo "✅ Tests passed" >> $GITHUB_STEP_SUMMARY
+          else
+            echo "❌ Tests failed or were cancelled" >> $GITHUB_STEP_SUMMARY
+          fi
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "- Run ID: ${{ github.run_id }}" >> $GITHUB_STEP_SUMMARY
+          echo "- Trigger: ${{ github.event_name }}" >> $GITHUB_STEP_SUMMARY
+          if [ -n "${{ inputs.test_filter }}" ]; then
+            echo "- Filter: ${{ inputs.test_filter }}" >> $GITHUB_STEP_SUMMARY
+          fi
