@@ -81,10 +81,7 @@ func TestAgentModelSwap(t *testing.T) {
 
 	// --- provider + SSH dialer ---------------------------------------------
 
-	prov, err := linode.NewProvider(linode.Options{Token: tok})
-	if err != nil {
-		t.Fatalf("new linode provider: %v", err)
-	}
+	prov := linode.NewProvider(tok)
 	dial := sshDialFunc(signer)
 
 	t.Cleanup(func() {
