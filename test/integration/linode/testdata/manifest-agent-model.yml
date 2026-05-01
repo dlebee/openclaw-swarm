@@ -1,0 +1,61 @@
+# Linode agent model swap integration test manifest.
+#
+# Mirror of the Multipass tier's manifest-agent-model.yml with Linode
+# specifics (sku / image / region).
+#
+# This manifest tests that the ensure-model step correctly detects
+# and repairs drift in both primary model AND fallbacks.
+#
+# The test will:
+#  1. Apply with model=opus, fallbacks=[sonnet]
+#  2. Swap to model=sonnet, fallbacks=[opus]
+#  3. Re-apply agents phase only
+#  4. Verify the swap was applied
+#
+# This catches the bug where Check only compared primary model,
+# ignoring fallbacks, causing the step to skip when only fallbacks
+# changed.
+
+prefix: claws-it-linode-agent-model
+
+machines:
+  - name: gateway-host
+    type: linode
+    sku: g6-standard-1
+    image: linode/ubuntu24.04
+    region: us-east
+    bootstrap_user: root
+    agent_user: agent
+
+gateways:
+  - name: gateway
+    reference: gateway-host
+    channels:
+      - kind: telegram
+        name: telegram-main
+        token_env: TELEGRAM_MAIN_BOT_TOKEN
+        default: true
+
+agents:
+  - id: main
+    gateway: gateway
+    workspace: ~/.openclaw/workspace
+    model:
+      primary: "anthropic/claude-opus-4-5"
+      fallbacks:
+        - "anthropic/claude-sonnet-4-5"
+    tools:
+      elevated:
+        enabled: true
+        allow_from:
+          telegram: ["6609699762"]
+    soul: |
+      You are the model-swap test agent.
+    agents_md: |
+      You are the main agent in a model-swap test.
+    identity:
+      name: Main
+      emoji: "🔄"
+    bindings:
+      - channel: telegram
+        account: telegram-main
