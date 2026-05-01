@@ -218,6 +218,34 @@ func extractModelPrimary(raw json.RawMessage) string {
 	return ""
 }
 
+// extractModelFallbacks decodes openclaw's two-shape model field into the
+// fallbacks slice. Accepts:
+//
+//   - bare string:   "anthropic-claude-4"            → nil
+//   - object form:   {"primary":"x","fallbacks":[…]} → fallbacks slice
+//   - unset/null:    ""                              → nil
+//
+// Returns nil (not empty slice) when there are no fallbacks.
+func extractModelFallbacks(raw json.RawMessage) []string {
+	s := strings.TrimSpace(string(raw))
+	if s == "" || s == "null" {
+		return nil
+	}
+	// Bare string form has no fallbacks
+	var asString string
+	if err := json.Unmarshal(raw, &asString); err == nil {
+		return nil
+	}
+	// Object form may have fallbacks
+	var asObject struct {
+		Fallbacks []string `json:"fallbacks"`
+	}
+	if err := json.Unmarshal(raw, &asObject); err == nil {
+		return asObject.Fallbacks
+	}
+	return nil
+}
+
 // normalizeAgentID matches openclaw's normaliseAgentId: trim + case-fold.
 // Kept private because callers shouldn't need to know; the snapshot
 // reader applies it on both sides of every ID comparison.
@@ -266,6 +294,30 @@ func (r *snapshotConfigReader) AgentModel(ctx context.Context, client *xssh.Clie
 		return m, true, nil
 	}
 	return "", false, nil
+}
+
+func (r *snapshotConfigReader) AgentModelFull(ctx context.Context, client *xssh.Client, h ConfigHost, agentID string) (string, []string, bool, error) {
+	snap, err := r.loadSnapshot(ctx, client, h)
+	if err != nil {
+		return "", nil, false, err
+	}
+	if snap == nil {
+		return r.fallback.AgentModelFull(ctx, client, h, agentID)
+	}
+	target := normalizeAgentID(agentID)
+	for _, a := range snap.Agents.List {
+		if normalizeAgentID(a.ID) != target {
+			continue
+		}
+		m := extractModelPrimary(a.Model)
+		f := extractModelFallbacks(a.Model)
+		if m == "" {
+			m = extractModelPrimary(snap.Agents.Defaults.Model)
+			// Note: we don't inherit fallbacks from defaults, matching openclaw CLI behavior
+		}
+		return m, f, true, nil
+	}
+	return "", nil, false, nil
 }
 
 func (r *snapshotConfigReader) AgentTools(ctx context.Context, client *xssh.Client, h ConfigHost, idx int) (*RemoteToolsConfig, error) {

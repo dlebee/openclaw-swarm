@@ -41,14 +41,36 @@ func (s *EnsureModelStep) Check(ctx context.Context, t scaffold.Target) (bool, e
 	}
 	defer common.ReturnSSH(ctx, key, client)
 
-	model, exists, err := s.reader.AgentModel(ctx, client, common.MachineConfigHost(m, host), at.Spec.ID)
+	primary, fallbacks, exists, err := s.reader.AgentModelFull(ctx, client, common.MachineConfigHost(m, host), at.Spec.ID)
 	if err != nil {
 		return false, fmt.Errorf("find agent %q: %w", at.Spec.ID, err)
 	}
 	if !exists {
 		return false, nil
 	}
-	return model == at.Spec.Model.Primary, nil
+	// Check primary model
+	if primary != at.Spec.Model.Primary {
+		return false, nil
+	}
+	// Check fallbacks match
+	if !stringSlicesEqual(fallbacks, at.Spec.Model.Fallbacks) {
+		return false, nil
+	}
+	return true, nil
+}
+
+// stringSlicesEqual compares two string slices for equality.
+// nil and empty slice are considered equal.
+func stringSlicesEqual(a, b []string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
 }
 
 func (s *EnsureModelStep) Execute(ctx context.Context, t scaffold.Target) error {
@@ -115,15 +137,18 @@ func (s *EnsureModelStep) Verify(ctx context.Context, t scaffold.Target) error {
 	}
 	defer common.ReturnSSH(ctx, key, client)
 
-	model, exists, err := s.reader.AgentModel(ctx, client, common.MachineConfigHost(m, host), at.Spec.ID)
+	primary, fallbacks, exists, err := s.reader.AgentModelFull(ctx, client, common.MachineConfigHost(m, host), at.Spec.ID)
 	if err != nil {
 		return fmt.Errorf("ensure-model verify: %w", err)
 	}
 	if !exists {
 		return fmt.Errorf("ensure-model verify: agent %q not found", at.Spec.ID)
 	}
-	if model != at.Spec.Model.Primary {
-		return fmt.Errorf("ensure-model verify: model %q, want %q", model, at.Spec.Model.Primary)
+	if primary != at.Spec.Model.Primary {
+		return fmt.Errorf("ensure-model verify: primary model %q, want %q", primary, at.Spec.Model.Primary)
+	}
+	if !stringSlicesEqual(fallbacks, at.Spec.Model.Fallbacks) {
+		return fmt.Errorf("ensure-model verify: fallbacks %v, want %v", fallbacks, at.Spec.Model.Fallbacks)
 	}
 	return nil
 }

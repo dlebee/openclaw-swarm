@@ -97,6 +97,51 @@ func (r *cliConfigReader) AgentModel(ctx context.Context, client *xssh.Client, h
 	return model, exists, err
 }
 
+func (r *cliConfigReader) AgentModelFull(ctx context.Context, client *xssh.Client, h ConfigHost, agentID string) (string, []string, bool, error) {
+	var model string
+	var fallbacks []string
+	var exists bool
+	err := r.withClient(ctx, client, h, func(c *xssh.Client) error {
+		// Read from config directly to get the full model object including fallbacks
+		raw, err := r.runJSON(c, `openclaw config get agents.list --json 2>/dev/null || echo "[]"`, '[')
+		if err != nil {
+			return fmt.Errorf("agents list: %w", err)
+		}
+		var agents []struct {
+			ID    string          `json:"id"`
+			Model json.RawMessage `json:"model"`
+		}
+		if err := json.Unmarshal([]byte(raw), &agents); err != nil {
+			return fmt.Errorf("agents list: parse %q: %w", raw, err)
+		}
+		for _, a := range agents {
+			if a.ID == agentID {
+				exists = true
+				// Try object form first
+				var modelObj struct {
+					Primary   string   `json:"primary"`
+					Fallbacks []string `json:"fallbacks"`
+				}
+				if err := json.Unmarshal(a.Model, &modelObj); err == nil && modelObj.Primary != "" {
+					model = modelObj.Primary
+					fallbacks = modelObj.Fallbacks
+					return nil
+				}
+				// Try string form
+				var modelStr string
+				if err := json.Unmarshal(a.Model, &modelStr); err == nil {
+					model = modelStr
+					fallbacks = nil
+					return nil
+				}
+				return nil
+			}
+		}
+		return nil
+	})
+	return model, fallbacks, exists, err
+}
+
 func (r *cliConfigReader) AgentTools(ctx context.Context, client *xssh.Client, h ConfigHost, idx int) (*RemoteToolsConfig, error) {
 	cfg := &RemoteToolsConfig{}
 	err := r.withClient(ctx, client, h, func(c *xssh.Client) error {
