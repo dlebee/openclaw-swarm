@@ -166,8 +166,11 @@ type PendingDevice struct {
 // "node" (an execution node) from "cli" (a local CLI session that
 // approved itself via pair-gateway-device).
 type PairedDevice struct {
-	DisplayName string `json:"displayName"`
-	ClientMode  string `json:"clientMode"`
+	DeviceID    string   `json:"deviceId"`
+	DisplayName string   `json:"displayName"`
+	ClientID    string   `json:"clientId"`
+	ClientMode  string   `json:"clientMode"`
+	Scopes      []string `json:"scopes"`
 }
 
 // HasPairedLocalDevice reports whether any CLI device is paired — the

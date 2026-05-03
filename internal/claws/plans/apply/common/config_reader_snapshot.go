@@ -519,14 +519,19 @@ func fetchDevicesSnapshot(ctx context.Context, client *xssh.Client, h ConfigHost
 
 	if raw, err := sshfile.ReadFile(client, remotePairedDevicesPath); err == nil {
 		var m map[string]struct {
-			DisplayName string `json:"displayName"`
-			ClientMode  string `json:"clientMode"`
+			DisplayName string   `json:"displayName"`
+			ClientID    string   `json:"clientId"`
+			ClientMode  string   `json:"clientMode"`
+			Scopes      []string `json:"scopes"`
 		}
 		if err := json.Unmarshal(raw, &m); err == nil {
-			for _, v := range m {
+			for deviceID, v := range m {
 				dl.Paired = append(dl.Paired, PairedDevice{
+					DeviceID:    deviceID,
 					DisplayName: v.DisplayName,
+					ClientID:    v.ClientID,
 					ClientMode:  v.ClientMode,
+					Scopes:      v.Scopes,
 				})
 			}
 		}
