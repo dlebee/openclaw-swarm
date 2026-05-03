@@ -594,6 +594,7 @@ openclaw cron add `+
 			`--no-deliver`,
 		gatewayToken, linodeCronJobName, linodeCronAgentID, prompt, linodeCronInterval,
 	)
+
 	out, err := sshRunAsGatewayAgent(t, dial, host, mc, script)
 	if err != nil {
 		t.Fatalf("[%s] cron add: %v\n%s", mc.Name, err, out)

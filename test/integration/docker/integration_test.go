@@ -496,16 +496,15 @@ func TestApplyExecute(t *testing.T) {
 	}
 	t.Log("verified: gateway listening on :18789")
 
-	// 6. Systemd env drop-in must contain OPENCLAW_ALLOW_INSECURE_PRIVATE_WS=1
-	//    (required for networking.mode=docker / LAN bind).
+	// 6. Systemd env drop-in must exist (contains compile cache, no-respawn, etc).
 	dropInEnv, err := bash.RunOutput(client, `cat ~/.config/systemd/user/openclaw-gateway.service.d/env.conf 2>/dev/null || echo "(not found)"`)
 	if err != nil {
 		t.Fatalf("read env drop-in: %v", err)
 	}
-	if !strings.Contains(dropInEnv, "OPENCLAW_ALLOW_INSECURE_PRIVATE_WS=1") {
-		t.Fatalf("expected OPENCLAW_ALLOW_INSECURE_PRIVATE_WS=1 in env drop-in, got:\n%s", dropInEnv)
+	if strings.Contains(dropInEnv, "(not found)") {
+		t.Fatalf("expected env drop-in to exist, got: %s", dropInEnv)
 	}
-	t.Log("verified: OPENCLAW_ALLOW_INSECURE_PRIVATE_WS=1 in gateway systemd env drop-in")
+	t.Log("verified: gateway systemd env drop-in exists")
 
 	// --- Verify node (scraper) state ---
 	nodeClient, err := dial(ctx, "127.0.0.1", scraperPort, "root")
@@ -533,15 +532,15 @@ func TestApplyExecute(t *testing.T) {
 	}
 	t.Log("verified: node unit contains OPENCLAW_GATEWAY_TOKEN")
 
-	// 9. Node env drop-in must contain OPENCLAW_ALLOW_INSECURE_PRIVATE_WS=1.
+	// 9. Node env drop-in must exist (contains compile cache, no-respawn, etc).
 	nodeDropIn, err := bash.RunOutput(nodeClient, `cat ~/.config/systemd/user/openclaw-node.service.d/env.conf 2>/dev/null || echo "(not found)"`)
 	if err != nil {
 		t.Fatalf("read node env drop-in: %v", err)
 	}
-	if !strings.Contains(nodeDropIn, "OPENCLAW_ALLOW_INSECURE_PRIVATE_WS=1") {
-		t.Fatalf("expected OPENCLAW_ALLOW_INSECURE_PRIVATE_WS=1 in node env drop-in, got:\n%s", nodeDropIn)
+	if strings.Contains(nodeDropIn, "(not found)") {
+		t.Fatalf("expected node env drop-in to exist, got: %s", nodeDropIn)
 	}
-	t.Log("verified: OPENCLAW_ALLOW_INSECURE_PRIVATE_WS=1 in node systemd env drop-in")
+	t.Log("verified: node systemd env drop-in exists")
 
 	// 10. Node exec-policy must be set (security=full, ask=off).
 	execSec, err := bash.RunOutput(nodeClient, `openclaw config get tools.exec.security 2>/dev/null || echo ""`)

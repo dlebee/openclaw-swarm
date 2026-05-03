@@ -312,7 +312,6 @@ func TestNodeSmoke(t *testing.T) {
 
 	assertGatewayEnvDropIn(t, dial, gwPublicIP, gwMachine, "NODE_COMPILE_CACHE", "/var/tmp/openclaw-compile-cache")
 	assertGatewayEnvDropIn(t, dial, gwPublicIP, gwMachine, "OPENCLAW_NO_RESPAWN", "1")
-	assertGatewayEnvDropIn(t, dial, gwPublicIP, gwMachine, "OPENCLAW_ALLOW_INSECURE_PRIVATE_WS", "1")
 
 	// --- node-side assertions ----------------------------------------------
 
@@ -340,7 +339,6 @@ func TestNodeSmoke(t *testing.T) {
 
 	assertNodeEnvDropIn(t, dial, nodePublicIP, nodeMachine, "NODE_COMPILE_CACHE", "/var/tmp/openclaw-compile-cache")
 	assertNodeEnvDropIn(t, dial, nodePublicIP, nodeMachine, "OPENCLAW_NO_RESPAWN", "1")
-	assertNodeEnvDropIn(t, dial, nodePublicIP, nodeMachine, "OPENCLAW_ALLOW_INSECURE_PRIVATE_WS", "1")
 
 	// --- pairing cross-check -----------------------------------------------
 

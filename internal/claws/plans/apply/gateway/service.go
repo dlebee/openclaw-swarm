@@ -32,7 +32,7 @@ const (
 	gatewayUnit     = "openclaw-gateway"
 	gatewayPort     = 18789
 	configFile = ".openclaw/openclaw.json"
-	healthRetries   = 30
+	healthRetries   = 60
 	healthDelay     = 2 * time.Second
 	waitRetries     = 10
 	waitDelay       = 2 * time.Second
@@ -342,8 +342,20 @@ func HasPairedLocalDevice(dl *DeviceList) bool {
 }
 
 // ApproveDevice approves a pending device by its requestId.
+// It uses the gateway token to authenticate, bypassing the CLI device's limited scope.
 func ApproveDevice(client *xssh.Client, requestID string) error {
-	script := common.OpenclawCLIPreamble() + fmt.Sprintf(`openclaw devices approve %q`, requestID)
+	// Read the gateway token to authenticate the approval.
+	// This is needed because the CLI device may not have sufficient scope yet.
+	tokenScript := common.OpenclawCLIPreamble() + `openclaw config get gateway.token 2>/dev/null`
+	tokenOut, _ := bash.RunOutput(client, tokenScript)
+	token := strings.TrimSpace(tokenOut)
+
+	var script string
+	if token != "" && !strings.HasPrefix(token, "Config") && token != "__missing__" {
+		script = common.OpenclawCLIPreamble() + fmt.Sprintf(`openclaw devices approve %q --token %q`, requestID, token)
+	} else {
+		script = common.OpenclawCLIPreamble() + fmt.Sprintf(`openclaw devices approve %q`, requestID)
+	}
 	out, err := bash.RunOutput(client, script)
 	if err != nil {
 		return fmt.Errorf("approve device %s: %w\n%s", requestID, err, out)

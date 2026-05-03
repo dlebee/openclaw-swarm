@@ -36,6 +36,11 @@ type ConfigReader interface {
 	// model is unset inherit cfg.agents.defaults.model.
 	AgentModel(ctx context.Context, client *xssh.Client, h ConfigHost, agentID string) (model string, exists bool, err error)
 
+	// AgentModelFull returns the full model configuration (primary + fallbacks)
+	// for agentID. Returns exists=false if the agent is not in agents.list[].
+	// Fallbacks is nil (not empty) when no fallbacks are configured.
+	AgentModelFull(ctx context.Context, client *xssh.Client, h ConfigHost, agentID string) (primary string, fallbacks []string, exists bool, err error)
+
 	// AgentTools returns the tools.exec portion of
 	// cfg.agents.list[idx].tools. Returns a zero-value struct when the
 	// path is absent, never nil unless an error is returned.
@@ -161,8 +166,11 @@ type PendingDevice struct {
 // "node" (an execution node) from "cli" (a local CLI session that
 // approved itself via pair-gateway-device).
 type PairedDevice struct {
-	DisplayName string `json:"displayName"`
-	ClientMode  string `json:"clientMode"`
+	DeviceID    string   `json:"deviceId"`
+	DisplayName string   `json:"displayName"`
+	ClientID    string   `json:"clientId"`
+	ClientMode  string   `json:"clientMode"`
+	Scopes      []string `json:"scopes"`
 }
 
 // HasPairedLocalDevice reports whether any CLI device is paired — the

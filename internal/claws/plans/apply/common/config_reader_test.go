@@ -37,6 +37,30 @@ func TestExtractModelPrimary(t *testing.T) {
 	}
 }
 
+func TestExtractModelFallbacks(t *testing.T) {
+	cases := []struct {
+		name string
+		raw  string
+		want []string
+	}{
+		{"bare string", `"sonnet-4"`, nil},
+		{"object form with fallbacks", `{"primary":"sonnet-4","fallbacks":["opus","haiku"]}`, []string{"opus", "haiku"}},
+		{"object form without fallbacks", `{"primary":"opus-3"}`, nil},
+		{"object form empty fallbacks", `{"primary":"opus-3","fallbacks":[]}`, []string{}},
+		{"null", `null`, nil},
+		{"empty", ``, nil},
+		{"number (invalid) falls through", `42`, nil},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			got := extractModelFallbacks(json.RawMessage(c.raw))
+			if !reflect.DeepEqual(got, c.want) {
+				t.Fatalf("extractModelFallbacks(%q) = %v, want %v", c.raw, got, c.want)
+			}
+		})
+	}
+}
+
 func TestNormalizeAgentID(t *testing.T) {
 	cases := map[string]string{
 		"":              "",
@@ -116,6 +140,10 @@ func (c *countingReader) AgentModel(ctx context.Context, _ *xssh.Client, h Confi
 	c.calls++
 	return "", false, nil
 }
+func (c *countingReader) AgentModelFull(ctx context.Context, _ *xssh.Client, h ConfigHost, id string) (string, []string, bool, error) {
+	c.calls++
+	return "", nil, false, nil
+}
 func (c *countingReader) AgentTools(ctx context.Context, _ *xssh.Client, h ConfigHost, idx int) (*RemoteToolsConfig, error) {
 	c.calls++
 	return &RemoteToolsConfig{}, nil
@@ -193,6 +221,47 @@ func TestSnapshotReader_AgentModel_stringAndObjectForms(t *testing.T) {
 	}
 	// absent
 	_, exists, _ = r.AgentModel(ctx, nil, host, "nope")
+	if exists {
+		t.Fatalf("absent agent: exists = true, want false")
+	}
+}
+
+func TestSnapshotReader_AgentModelFull_stringAndObjectForms(t *testing.T) {
+	host := ConfigHost{Addr: "h", Port: 22, User: "u"}
+	snap := sampleSnapshot(t)
+	ctx := cachingProbeCtx(t, host, snap)
+	r := NewSnapshotConfigReader(&countingReader{}).(*snapshotConfigReader)
+
+	// string form - no fallbacks
+	m, fb, exists, err := r.AgentModelFull(ctx, nil, host, "main")
+	if err != nil || !exists || m != "sonnet-4" {
+		t.Fatalf("main: got (%q, %v, %v, %v), want (sonnet-4, nil, true, nil)", m, fb, exists, err)
+	}
+	if fb != nil {
+		t.Fatalf("main fallbacks: got %v, want nil", fb)
+	}
+
+	// object form with fallbacks
+	m, fb, exists, _ = r.AgentModelFull(ctx, nil, host, "second")
+	if !exists || m != "opus-3" {
+		t.Fatalf("second: got (%q, %v), want (opus-3, true)", m, exists)
+	}
+	wantFb := []string{"sonnet-4"}
+	if !reflect.DeepEqual(fb, wantFb) {
+		t.Fatalf("second fallbacks: got %v, want %v", fb, wantFb)
+	}
+
+	// unset model → falls back to agents.defaults.model, no fallbacks
+	m, fb, exists, _ = r.AgentModelFull(ctx, nil, host, "third")
+	if !exists || m != "default-model" {
+		t.Fatalf("third: got (%q, %v), want (default-model, true)", m, exists)
+	}
+	if fb != nil {
+		t.Fatalf("third fallbacks: got %v, want nil (defaults don't inherit fallbacks)", fb)
+	}
+
+	// absent
+	_, _, exists, _ = r.AgentModelFull(ctx, nil, host, "nope")
 	if exists {
 		t.Fatalf("absent agent: exists = true, want false")
 	}

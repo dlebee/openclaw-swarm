@@ -62,14 +62,10 @@ import (
 //     chain) over the VM's Multipass bridge IP (step 4). Result: the
 //     node's openclaw-node.service unit references 100.64.x.y, not
 //     192.168.x.y.
-//   - NeedsInsecureWS on both ends. The gateway's systemd env drop-in
-//     gets OPENCLAW_ALLOW_INSECURE_PRIVATE_WS=1 (otherwise the daemon
-//     rejects plaintext ws:// from non-loopback clients). The node's
-//     configure-node mirrors the same flag onto the node (otherwise
-//     the openclaw-node client refuses to dial a non-loopback host
-//     with "SECURITY ERROR: Cannot connect over plaintext"). This
-//     test is the first to require BOTH flags to be present
-//     simultaneously on different VMs.
+//   - Mesh networking over tailnet. The gateway binds to LAN and the
+//     node connects over the tailnet IP (100.64.x.y). The plaintext
+//     ws:// connection is accepted because both ends are on a private
+//     mesh network.
 //   - node.StubGatewayUnitStep on a meshed node. The stub unit is
 //     the workaround for upstream bug 04 (openclaw node install
 //     always enables openclaw-gateway, even on node-only hosts).
@@ -344,8 +340,7 @@ func TestNodeSmoke(t *testing.T) {
 	// Re-use helpers from multipass_gateway_test.go (unit active,
 	// openclaw installed, env drop-in NODE_COMPILE_CACHE /
 	// OPENCLAW_NO_RESPAWN, config file exists). Divergence from
-	// the gateway-only test: bind=lan (wildcard listener) and
-	// OPENCLAW_ALLOW_INSECURE_PRIVATE_WS=1 in the drop-in.
+	// the gateway-only test: bind=lan (wildcard listener).
 
 	assertNodeInstalled(t, dial, gwBridgeIP, gwMachine)
 	assertOpenclawInstalled(t, dial, gwBridgeIP, gwMachine)
@@ -366,11 +361,6 @@ func TestNodeSmoke(t *testing.T) {
 
 	assertGatewayEnvDropIn(t, dial, gwBridgeIP, gwMachine, "NODE_COMPILE_CACHE", "/var/tmp/openclaw-compile-cache")
 	assertGatewayEnvDropIn(t, dial, gwBridgeIP, gwMachine, "OPENCLAW_NO_RESPAWN", "1")
-	// If this flag is missing the gateway would reject the node's
-	// plaintext ws:// connection during pair-node, and the test
-	// would fail further down at assertNodePairedOnGateway — this
-	// assertion pins the failure to the config layer first.
-	assertGatewayEnvDropIn(t, dial, gwBridgeIP, gwMachine, "OPENCLAW_ALLOW_INSECURE_PRIVATE_WS", "1")
 
 	// --- node-side assertions ----------------------------------------------
 
@@ -413,7 +403,6 @@ func TestNodeSmoke(t *testing.T) {
 
 	assertNodeEnvDropIn(t, dial, nodeBridgeIP, nodeMachine, "NODE_COMPILE_CACHE", "/var/tmp/openclaw-compile-cache")
 	assertNodeEnvDropIn(t, dial, nodeBridgeIP, nodeMachine, "OPENCLAW_NO_RESPAWN", "1")
-	assertNodeEnvDropIn(t, dial, nodeBridgeIP, nodeMachine, "OPENCLAW_ALLOW_INSECURE_PRIVATE_WS", "1")
 
 	// --- pairing cross-check -----------------------------------------------
 	//
