@@ -32,7 +32,7 @@ const (
 	gatewayUnit     = "openclaw-gateway"
 	gatewayPort     = 18789
 	configFile = ".openclaw/openclaw.json"
-	healthRetries   = 30
+	healthRetries   = 60
 	healthDelay     = 2 * time.Second
 	waitRetries     = 10
 	waitDelay       = 2 * time.Second
