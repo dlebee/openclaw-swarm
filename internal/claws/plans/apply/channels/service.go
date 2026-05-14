@@ -12,9 +12,17 @@ import (
 	xssh "golang.org/x/crypto/ssh"
 )
 
-// ChannelAccounts is the JSON structure returned by `openclaw channels list --json`.
+// ChannelAccounts is a map of channel kind -> account names.
 // Keys are channel kinds (telegram, slack, discord); values are account name slices.
 type ChannelAccounts map[string][]string
+
+// channelEntry is the new JSON structure for each channel in `openclaw channels list --json`.
+// The format changed from map[string][]string to map[string]{ accounts: []string, ... }.
+type channelEntry struct {
+	Accounts  []string `json:"accounts"`
+	Installed bool     `json:"installed"`
+	Origin    string   `json:"origin"`
+}
 
 // ListChannelAccounts runs `openclaw channels list --json` and returns
 // a map of kind -> []accountName.
@@ -25,16 +33,29 @@ func ListChannelAccounts(client *xssh.Client) (ChannelAccounts, error) {
 	}
 	raw := extractJSON(strings.TrimSpace(out), '{')
 
-	var payload struct {
+	// New format: { "chat": { "telegram": { "accounts": [...], "installed": true, "origin": "configured" } } }
+	var newPayload struct {
+		Chat map[string]channelEntry `json:"chat"`
+	}
+	if err := json.Unmarshal([]byte(raw), &newPayload); err == nil && newPayload.Chat != nil {
+		result := make(ChannelAccounts)
+		for kind, entry := range newPayload.Chat {
+			result[kind] = entry.Accounts
+		}
+		return result, nil
+	}
+
+	// Legacy format fallback: { "chat": { "telegram": ["account1", "account2"] } }
+	var legacyPayload struct {
 		Chat ChannelAccounts `json:"chat"`
 	}
-	if err := json.Unmarshal([]byte(raw), &payload); err != nil {
+	if err := json.Unmarshal([]byte(raw), &legacyPayload); err != nil {
 		return ChannelAccounts{}, nil
 	}
-	if payload.Chat == nil {
+	if legacyPayload.Chat == nil {
 		return ChannelAccounts{}, nil
 	}
-	return payload.Chat, nil
+	return legacyPayload.Chat, nil
 }
 
 // AccountExists reports whether accountName is already registered for the given kind.

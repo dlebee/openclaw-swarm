@@ -358,6 +358,14 @@ func TestChannelsSmoke(t *testing.T) {
 // gateway + channels config tree lives under ~agent, not ~root.
 // ---------------------------------------------------------------------------
 
+// channelEntry is the new JSON structure for each channel in `openclaw channels list --json`.
+// The format changed from map[string][]string to map[string]{ accounts: []string, ... }.
+type channelEntry struct {
+	Accounts  []string `json:"accounts"`
+	Installed bool     `json:"installed"`
+	Origin    string   `json:"origin"`
+}
+
 // assertChannelAccountRegistered parses `openclaw channels list --json`
 // and confirms the (kind, name) tuple is present under `chat.<kind>`.
 // Matches the shape ListChannelAccounts expects in service.go (kind
@@ -387,14 +395,28 @@ func assertChannelAccountRegistered(t *testing.T, dial provisioning.SSHDialFunc,
 		return
 	}
 	raw := out[idx:]
-	var payload struct {
-		Chat map[string][]string `json:"chat"`
+
+	// Try new format first: { "chat": { "telegram": { "accounts": [...], ... } } }
+	var newPayload struct {
+		Chat map[string]channelEntry `json:"chat"`
 	}
-	if err := json.Unmarshal([]byte(raw), &payload); err != nil {
-		t.Errorf("[%s] parse channels list: %v\nraw:\n%s", mc.Name, err, raw)
-		return
+	var accounts []string
+	if err := json.Unmarshal([]byte(raw), &newPayload); err == nil && newPayload.Chat != nil {
+		if entry, ok := newPayload.Chat[kind]; ok {
+			accounts = entry.Accounts
+		}
+	} else {
+		// Legacy format fallback: { "chat": { "telegram": ["account1", ...] } }
+		var legacyPayload struct {
+			Chat map[string][]string `json:"chat"`
+		}
+		if err := json.Unmarshal([]byte(raw), &legacyPayload); err != nil {
+			t.Errorf("[%s] parse channels list: %v\nraw:\n%s", mc.Name, err, raw)
+			return
+		}
+		accounts = legacyPayload.Chat[kind]
 	}
-	accounts := payload.Chat[kind]
+
 	for _, got := range accounts {
 		if got == name {
 			t.Logf("[%s] channels list: %s/%s registered", mc.Name, kind, name)

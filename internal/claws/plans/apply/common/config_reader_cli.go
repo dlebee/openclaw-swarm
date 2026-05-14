@@ -212,6 +212,14 @@ func (r *cliConfigReader) AgentBindings(ctx context.Context, client *xssh.Client
 	return out, err
 }
 
+// channelEntry is the new JSON structure for each channel in `openclaw channels list --json`.
+// The format changed from map[string][]string to map[string]{ accounts: []string, ... }.
+type channelEntry struct {
+	Accounts  []string `json:"accounts"`
+	Installed bool     `json:"installed"`
+	Origin    string   `json:"origin"`
+}
+
 func (r *cliConfigReader) ChannelAccounts(ctx context.Context, client *xssh.Client, h ConfigHost) (map[string][]string, error) {
 	out := map[string][]string{}
 	err := r.withClient(ctx, client, h, func(c *xssh.Client) error {
@@ -219,14 +227,27 @@ func (r *cliConfigReader) ChannelAccounts(ctx context.Context, client *xssh.Clie
 		if err != nil {
 			return nil // matches prior behavior: soft-fail to empty
 		}
-		var payload struct {
-			Chat map[string][]string `json:"chat"`
+
+		// New format: { "chat": { "telegram": { "accounts": [...], "installed": true, "origin": "configured" } } }
+		var newPayload struct {
+			Chat map[string]channelEntry `json:"chat"`
 		}
-		if err := json.Unmarshal([]byte(raw), &payload); err != nil {
+		if err := json.Unmarshal([]byte(raw), &newPayload); err == nil && newPayload.Chat != nil {
+			for kind, entry := range newPayload.Chat {
+				out[kind] = entry.Accounts
+			}
 			return nil
 		}
-		if payload.Chat != nil {
-			out = payload.Chat
+
+		// Legacy format fallback: { "chat": { "telegram": ["account1", "account2"] } }
+		var legacyPayload struct {
+			Chat map[string][]string `json:"chat"`
+		}
+		if err := json.Unmarshal([]byte(raw), &legacyPayload); err != nil {
+			return nil
+		}
+		if legacyPayload.Chat != nil {
+			out = legacyPayload.Chat
 		}
 		return nil
 	})
