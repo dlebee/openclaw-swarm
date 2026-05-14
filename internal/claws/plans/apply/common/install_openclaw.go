@@ -9,6 +9,17 @@ import (
 	"github.com/gluwa/openclaw-swarm2/internal/scaffold"
 )
 
+// OpenclawVersionProvider is optionally implemented by target payloads that
+// pin a specific openclaw npm version. When the payload does not implement
+// this interface (or returns an empty string), the latest published version
+// is installed. The version is only applied during the initial install —
+// Check only probes for presence, not the installed version, so subsequent
+// applies against an already-installed host are always no-ops regardless of
+// what the manifest says.
+type OpenclawVersionProvider interface {
+	GetOpenclawVersion() string
+}
+
 // InstallOpenclawStep checks that openclaw is installed on the target machine.
 type InstallOpenclawStep struct {
 	dial         SSHDialFunc
@@ -63,9 +74,13 @@ func (s *InstallOpenclawStep) Execute(ctx context.Context, t scaffold.Target) er
 	m := mp.GetMachine()
 	host, port, user := ResolveMachineHost(ctx, m), MachineSSHPort(m), MachineAgentUser(m)
 
-	script := `set -euo pipefail
-sudo npm install -g openclaw --quiet
-`
+	pkg := "openclaw"
+	if vp, ok := t.Payload.(OpenclawVersionProvider); ok {
+		if v := strings.TrimSpace(vp.GetOpenclawVersion()); v != "" {
+			pkg = "openclaw@" + v
+		}
+	}
+	script := fmt.Sprintf("set -euo pipefail\nsudo npm install -g %s --quiet\n", pkg)
 	if err := RunBashWithRetry(ctx, s.dial, host, port, user, script); err != nil {
 		return fmt.Errorf("install-openclaw: %w", err)
 	}
