@@ -6,6 +6,11 @@ import (
 	"strings"
 )
 
+// reservedMainAgentID is the openclaw default agent id. Its workspace is
+// bootstrapped by the gateway phase before the agents phase runs, so
+// overriding it via the manifest produces an incomplete second workspace.
+const reservedMainAgentID = "main"
+
 // Validate runs a best-effort static check of the manifest that the YAML
 // parser can't enforce on its own. It's intentionally narrow — we only gate
 // the things that are genuinely unsafe to discover at execute time:
@@ -17,6 +22,10 @@ import (
 //     target).
 //   - Unknown step kinds (easier to catch here than at dispatch time with
 //     "no matching case" silently skipping work).
+//   - A workspace override on the reserved "main" agent (the gateway phase
+//     bootstraps the default workspace before the agents phase runs; setting
+//     a different path here produces an incomplete second workspace while the
+//     bootstrap files remain in the original location).
 //
 // Everything else (machine references in automations, duplicate names, etc.)
 // is left to the phase builders, which already emit clear errors and whose
@@ -30,6 +39,19 @@ func ValidateManifest(m *Manifest) error {
 	for _, mach := range m.Machines {
 		if strings.EqualFold(strings.TrimSpace(mach.Name), SelfMachineName) {
 			return fmt.Errorf("machine name %q is reserved for the local-execution target; rename the machine", mach.Name)
+		}
+	}
+
+	for _, agent := range m.Agents {
+		if strings.EqualFold(strings.TrimSpace(agent.ID), reservedMainAgentID) &&
+			strings.TrimSpace(agent.Workspace) != "" {
+			return fmt.Errorf(
+				"agent %q: workspace override is not supported for the reserved \"main\" agent — "+
+					"the gateway bootstrap creates the default workspace before the agents phase runs, "+
+					"so setting a custom path here produces an incomplete second workspace; "+
+					"remove the workspace field to use the openclaw default (~/.openclaw/workspace)",
+				agent.ID,
+			)
 		}
 	}
 
