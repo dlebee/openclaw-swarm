@@ -1,5 +1,47 @@
 package data
 
+import (
+	"fmt"
+	"strings"
+
+	"gopkg.in/yaml.v3"
+)
+
+// AgentsMDValue holds the value of an agent's agents_md field.
+// It unmarshals from either a plain YAML string or a YAML sequence of strings.
+// When a sequence is given, the entries are joined with a double newline so
+// operators can compose a shared base section (via a YAML anchor) with
+// agent-specific content without repeating the shared text:
+//
+//	x-team: &team |
+//	  ## Team & Project
+//	  ...
+//
+//	agents:
+//	  - id: dev
+//	    agents_md:
+//	      - |
+//	          You are the dev agent...
+//	      - *team
+type AgentsMDValue string
+
+func (a *AgentsMDValue) UnmarshalYAML(value *yaml.Node) error {
+	switch value.Kind {
+	case yaml.ScalarNode:
+		*a = AgentsMDValue(value.Value)
+		return nil
+	case yaml.SequenceNode:
+		var parts []string
+		if err := value.Decode(&parts); err != nil {
+			return fmt.Errorf("agents_md: %w", err)
+		}
+		*a = AgentsMDValue(strings.Join(parts, "\n\n"))
+		return nil
+	default:
+		return fmt.Errorf("agents_md: expected string or sequence of strings, got %s", value.Tag)
+	}
+}
+
 // MachineType identifies how a machine is provisioned or reached.
 type MachineType string
 
@@ -266,7 +308,7 @@ type Agent struct {
 	Model     AgentModel     `yaml:"model"`
 	Tools     *AgentTools    `yaml:"tools,omitempty"`
 	Soul      string         `yaml:"soul,omitempty"`
-	AgentsMD  string         `yaml:"agents_md,omitempty"`
+	AgentsMD  AgentsMDValue  `yaml:"agents_md,omitempty"`
 	Identity  *AgentIdentity `yaml:"identity,omitempty"`
 	Bindings  []AgentBinding `yaml:"bindings,omitempty"`
 }
