@@ -56,6 +56,9 @@ func AddPhase(p *scaffold.Plan, targets []scaffold.Target, opts Options) *scaffo
 	// Disabled: dry-run noise / operator preference; re-enable if apt or
 	// useradd races on fresh images become a problem.
 	// ph.AddStep(NewWaitCloudInitStep(opts))
+	if opts.UnsetTMOUT {
+		ph.AddStep(NewUnsetTMOUTStep(opts))
+	}
 	ph.AddStep(NewEnsureAgentUserStep(opts))
 
 	return ph

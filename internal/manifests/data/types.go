@@ -103,6 +103,16 @@ const (
 	ChannelKindDiscord  ChannelKind = "discord"
 )
 
+// ManifestOptions holds optional behaviour toggles for the apply pipeline.
+type ManifestOptions struct {
+	// UnsetTMOUT adds an unset-tmout provisioning step that removes the TMOUT
+	// environment variable from the bootstrap user's shell profiles. Useful for
+	// hosting providers (e.g. OVH) that ship images with TMOUT set system-wide,
+	// which causes SSH sessions to be killed mid-script with exit status 142
+	// (SIGALRM). The step is idempotent and runs once during provisioning.
+	UnsetTMOUT bool `yaml:"unset_tmout,omitempty"`
+}
+
 // Manifest is the top-level manifest document (YAML). SSH identity is stored
 // separately (auth config / state), not embedded in the manifest, so the same
 // manifest can be shared across users.
@@ -111,6 +121,7 @@ type Manifest struct {
 	EnvFile            string              `yaml:"env_file"`
 	NodeMajor          int                 `yaml:"node_major"`
 	LinodeTokenEnv     string              `yaml:"linode_token_env"`
+	Options            *ManifestOptions    `yaml:"options,omitempty"`
 	Machines           []Machine           `yaml:"machines"`
 	Gateways           []Gateway           `yaml:"gateways"`
 	Agents             []Agent             `yaml:"agents"`

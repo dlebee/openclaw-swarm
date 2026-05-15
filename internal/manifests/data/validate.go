@@ -53,11 +53,42 @@ func ValidateManifest(m *Manifest) error {
 				agent.ID,
 			)
 		}
+
+	if err := validateNodeGatewayColocation(m); err != nil {
+		return err
 	}
 
 	for _, auto := range m.Automations {
 		if err := validateAutomation(auto, m.AllowSelf); err != nil {
 			return fmt.Errorf("automation %q: %w", auto.Name, err)
+		}
+	}
+	return nil
+}
+
+// validateNodeGatewayColocation rejects any node whose reference machine is
+// the same as its gateway's reference machine. Colocating a node and gateway
+// on the same host creates a circular dependency in the pairing protocol:
+// the node registers with the gateway over the local network, but the gateway
+// process is not yet paired and ready when the node first starts. Keep them
+// on separate machines, or remove the node entry entirely if exec is not needed.
+func validateNodeGatewayColocation(m *Manifest) error {
+	gwRefByName := make(map[string]string, len(m.Gateways))
+	for _, gw := range m.Gateways {
+		gwRefByName[gw.Name] = strings.TrimSpace(gw.Reference)
+	}
+	for _, n := range m.Nodes {
+		nodeRef := strings.TrimSpace(n.Reference)
+		gwRef, ok := gwRefByName[strings.TrimSpace(n.Gateway)]
+		if !ok {
+			continue // unknown gateway reference — let the phase builder catch it
+		}
+		if nodeRef != "" && nodeRef == gwRef {
+			return fmt.Errorf(
+				"node %q and its gateway %q both reference machine %q; "+
+					"nodes and gateways must run on separate machines",
+				n.Name, n.Gateway, nodeRef,
+			)
 		}
 	}
 	return nil

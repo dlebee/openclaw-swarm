@@ -32,13 +32,25 @@ fi
 pub_key=$(cat "$pub_key_path")
 home_dir=$([ "$vm_user" = "root" ] && echo "/root" || echo "/home/$vm_user")
 
-echo "Adding key from $pub_key_path to ${vm_user}@${vm_name} ..."
+echo "Checking sudo access for ${vm_user}@${vm_name} ..."
+if ! multipass exec "$vm_name" -- sudo -n true 2>/dev/null; then
+    echo "Error: ${vm_user} does not have passwordless sudo on ${vm_name}. Grant it first." >&2
+    exit 1
+fi
+echo "Sudo OK."
+
+echo "Adding key from $pub_key_path to ${vm_user}@${vm_name} (and root) ..."
 
 multipass exec "$vm_name" -- bash -c "
+    set -euo pipefail
     mkdir -p ${home_dir}/.ssh
     chmod 700 ${home_dir}/.ssh
     grep -qxF '${pub_key}' ${home_dir}/.ssh/authorized_keys 2>/dev/null || echo '${pub_key}' >> ${home_dir}/.ssh/authorized_keys
     chmod 600 ${home_dir}/.ssh/authorized_keys
+    sudo mkdir -p /root/.ssh
+    sudo chmod 700 /root/.ssh
+    sudo grep -qxF '${pub_key}' /root/.ssh/authorized_keys 2>/dev/null || echo '${pub_key}' | sudo tee -a /root/.ssh/authorized_keys >/dev/null
+    sudo chmod 600 /root/.ssh/authorized_keys
 "
 
 vm_ip=$(multipass info "$vm_name" --format json | python3 -c "import sys,json; d=json.load(sys.stdin); print(d['info']['${vm_name}']['ipv4'][0])" 2>/dev/null || true)

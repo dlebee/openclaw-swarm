@@ -37,13 +37,26 @@ if (-not (Test-Path $privKeyPath)) {
 $pubKey  = (Get-Content $pubKeyPath -Raw).Trim()
 $homeDir = if ($vmUser -eq "root") { "/root" } else { "/home/$vmUser" }
 
-Write-Host "Adding key from $pubKeyPath to $vmUser@$vmName ..."
+Write-Host "Checking sudo access for $vmUser@$vmName ..."
+$sudoCheck = multipass exec $vmName -- sudo -n true 2>&1
+if ($LASTEXITCODE -ne 0) {
+    Write-Error "$vmUser does not have passwordless sudo on $vmName. Grant it first (e.g. add to sudoers)."
+    exit 1
+}
+Write-Host "Sudo OK."
+
+Write-Host "Adding key from $pubKeyPath to $vmUser@$vmName (and root) ..."
 
 $script = @"
+set -euo pipefail
 mkdir -p $homeDir/.ssh
 chmod 700 $homeDir/.ssh
 grep -qxF '$pubKey' $homeDir/.ssh/authorized_keys 2>/dev/null || echo '$pubKey' >> $homeDir/.ssh/authorized_keys
 chmod 600 $homeDir/.ssh/authorized_keys
+sudo mkdir -p /root/.ssh
+sudo chmod 700 /root/.ssh
+sudo grep -qxF '$pubKey' /root/.ssh/authorized_keys 2>/dev/null || echo '$pubKey' | sudo tee -a /root/.ssh/authorized_keys >/dev/null
+sudo chmod 600 /root/.ssh/authorized_keys
 "@ -replace "`r", ""
 
 multipass exec $vmName -- bash -c $script

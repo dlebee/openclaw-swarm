@@ -53,11 +53,16 @@ func BuildPlan(o BuildOptions) (*scaffold.Plan, error) {
 	targets := provisioning.BuildMachineTargets(o.Manifest.Machines)
 
 	p := scaffold.New()
+	var manifestOpts manifestdata.ManifestOptions
+	if o.Manifest.Options != nil {
+		manifestOpts = *o.Manifest.Options
+	}
 	provisioning.AddPhase(p, targets, provisioning.Options{
-		Provider:  o.Provider,
-		Prefix:    o.Manifest.Prefix,
-		SSHPubKey: o.SSHPubKey,
-		SSHDial:   o.SSHDial,
+		Provider:   o.Provider,
+		Prefix:     o.Manifest.Prefix,
+		SSHPubKey:  o.SSHPubKey,
+		SSHDial:    o.SSHDial,
+		UnsetTMOUT: manifestOpts.UnsetTMOUT,
 	})
 	security.AddPhase(p, targets, security.Options{
 		SSHDial: security.SSHDialFunc(o.SSHDial),
