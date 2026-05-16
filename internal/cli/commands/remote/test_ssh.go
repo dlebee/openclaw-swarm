@@ -1,6 +1,8 @@
 package remote
 
 import (
+	"context"
+	"errors"
 	"fmt"
 	"net"
 	"path/filepath"
@@ -14,6 +16,7 @@ import (
 	"github.com/gluwa/openclaw-swarm2/internal/platformutil/tmout"
 	"github.com/gluwa/openclaw-swarm2/internal/state"
 	"github.com/spf13/cobra"
+	xssh "golang.org/x/crypto/ssh"
 )
 
 // TestSSHCmd returns `claws ssh test`, a quick connectivity probe that dials
@@ -76,6 +79,7 @@ before running claws apply.`),
 			fmt.Fprintf(out, "Host:     %s\n", addr)
 			fmt.Fprintln(out)
 
+			ctx := cmd.Context()
 			anyFailed := false
 			bootstrapUser := strings.TrimSpace(mach.BootstrapUser)
 			if bootstrapUser == "" {
@@ -83,9 +87,18 @@ before running claws apply.`),
 			}
 
 			for _, u := range testSSHUsers(*mach) {
+				if ctx.Err() != nil {
+					fmt.Fprintln(out, "Cancelled.")
+					return ctx.Err()
+				}
+
 				start := time.Now()
-				whoami, testErr := sshWhoami(store, addr, u)
+				whoami, testErr := sshWhoamiCtx(ctx, store, addr, u)
 				elapsed := time.Since(start).Round(time.Millisecond)
+				if errors.Is(testErr, context.Canceled) || errors.Is(testErr, context.DeadlineExceeded) {
+					fmt.Fprintf(out, "  •  %-20s  (%s)  cancelled\n", u, elapsed)
+					return testErr
+				}
 				if testErr != nil {
 					fmt.Fprintf(out, "  ✗  %-20s  (%s)  %v\n", u, elapsed, testErr)
 					anyFailed = true
@@ -96,18 +109,21 @@ before running claws apply.`),
 				// After a successful bootstrap connection, check whether TMOUT
 				// is set — it can kill long-running claws apply steps mid-flight.
 				if u == bootstrapUser {
-					client, dialErr := store.DialSSH(addr, u)
-					if dialErr == nil {
-						tmoutSet, tmoutErr := tmout.IsSet(client)
-						client.Close()
-						switch {
-						case tmoutErr != nil:
-							fmt.Fprintf(out, "  ?  %-20s  TMOUT check failed: %v\n", "tmout", tmoutErr)
-						case tmoutSet:
-							fmt.Fprintf(out, "  ⚠  %-20s  TMOUT is set — add 'options: unset_tmout: true' to your manifest\n", "tmout")
-						default:
-							fmt.Fprintf(out, "  ✓  %-20s  TMOUT not set\n", "tmout")
-						}
+					if ctx.Err() != nil {
+						fmt.Fprintln(out, "Cancelled.")
+						return ctx.Err()
+					}
+					tmoutSet, tmoutErr := tmoutCheckCtx(ctx, store, addr, u)
+					switch {
+					case errors.Is(tmoutErr, context.Canceled), errors.Is(tmoutErr, context.DeadlineExceeded):
+						fmt.Fprintln(out, "Cancelled.")
+						return tmoutErr
+					case tmoutErr != nil:
+						fmt.Fprintf(out, "  ?  %-20s  TMOUT check failed: %v\n", "tmout", tmoutErr)
+					case tmoutSet:
+						fmt.Fprintf(out, "  ⚠  %-20s  TMOUT is set — add 'options: unset_tmout: true' to your manifest\n", "tmout")
+					default:
+						fmt.Fprintf(out, "  ✓  %-20s  TMOUT not set\n", "tmout")
 					}
 				}
 			}
@@ -144,30 +160,101 @@ func testSSHUsers(m manifestdata.Machine) []string {
 	return out
 }
 
-// sshWhoami dials addr as user using the active claws identity, runs "whoami",
-// and returns the trimmed output.
-func sshWhoami(store *state.Store, addr, user string) (string, error) {
-	client, err := store.DialSSH(addr, user)
-	if err != nil {
-		return "", err
-	}
-	defer client.Close()
-
-	sess, err := client.NewSession()
-	if err != nil {
-		return "", fmt.Errorf("new session: %w", err)
-	}
-	defer sess.Close()
-
-	var stdout, stderr strings.Builder
-	sess.Stdout = &stdout
-	sess.Stderr = &stderr
-
-	if err := sess.Run("whoami"); err != nil {
-		if msg := strings.TrimSpace(stderr.String()); msg != "" {
-			return "", fmt.Errorf("%w: %s", err, msg)
+// sshWhoamiCtx dials addr as user using the active claws identity, runs
+// "whoami", and returns the trimmed output. It honours ctx cancellation:
+// if ctx fires while we're blocked on the dial or on Run, a watcher
+// goroutine closes the underlying client which unblocks the call with an
+// error and we return ctx.Err() instead.
+func sshWhoamiCtx(ctx context.Context, store *state.Store, addr, user string) (string, error) {
+	return runWithSSHCtx(ctx, store, addr, user, func(client *xssh.Client) (string, error) {
+		sess, err := client.NewSession()
+		if err != nil {
+			return "", fmt.Errorf("new session: %w", err)
 		}
-		return "", err
+		defer sess.Close()
+
+		var stdout, stderr strings.Builder
+		sess.Stdout = &stdout
+		sess.Stderr = &stderr
+
+		if err := sess.Run("whoami"); err != nil {
+			if msg := strings.TrimSpace(stderr.String()); msg != "" {
+				return "", fmt.Errorf("%w: %s", err, msg)
+			}
+			return "", err
+		}
+		return strings.TrimSpace(stdout.String()), nil
+	})
+}
+
+// tmoutCheckCtx is a context-aware variant of tmout.IsSet that returns
+// (set, err). Cancellation closes the client to unblock the SSH session.
+func tmoutCheckCtx(ctx context.Context, store *state.Store, addr, user string) (bool, error) {
+	out, err := runWithSSHCtx(ctx, store, addr, user, func(client *xssh.Client) (string, error) {
+		set, err := tmout.IsSet(client)
+		if err != nil {
+			return "", err
+		}
+		if set {
+			return "1", nil
+		}
+		return "0", nil
+	})
+	if err != nil {
+		return false, err
 	}
-	return strings.TrimSpace(stdout.String()), nil
+	return out == "1", nil
+}
+
+// runWithSSHCtx opens an SSH client to addr as user and invokes fn with it.
+// A watcher goroutine waits on ctx.Done; if ctx is cancelled while fn is
+// blocked (typical for slow dials or hung Run calls) it closes the client,
+// which unblocks the operation with an error. The returned error is
+// ctx.Err() when cancellation won the race, fn's error otherwise.
+//
+// Note: store.DialSSH itself doesn't accept a context, so cancellation
+// before the dial returns can't actually abort the TCP/SSH handshake — but
+// once the client exists the watcher reliably interrupts subsequent Run
+// calls. For dial-stage cancellation the goroutine will exit naturally
+// after the dial times out (typically 10–30s); from the user's POV the
+// CLI returns immediately because we select on ctx in the caller.
+func runWithSSHCtx[T any](ctx context.Context, store *state.Store, addr, user string, fn func(*xssh.Client) (T, error)) (T, error) {
+	var zero T
+	type result struct {
+		v   T
+		err error
+	}
+	ch := make(chan result, 1)
+
+	go func() {
+		client, err := store.DialSSH(addr, user)
+		if err != nil {
+			ch <- result{zero, err}
+			return
+		}
+		defer client.Close()
+
+		// Watcher: if ctx fires while fn is blocked, close the client to
+		// unblock it. The done channel guarantees the goroutine exits when
+		// fn completes normally (avoiding a leak).
+		done := make(chan struct{})
+		defer close(done)
+		go func() {
+			select {
+			case <-ctx.Done():
+				_ = client.Close()
+			case <-done:
+			}
+		}()
+
+		v, err := fn(client)
+		ch <- result{v, err}
+	}()
+
+	select {
+	case <-ctx.Done():
+		return zero, ctx.Err()
+	case r := <-ch:
+		return r.v, r.err
+	}
 }
