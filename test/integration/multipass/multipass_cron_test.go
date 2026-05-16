@@ -442,6 +442,15 @@ func TestCronAgentWithNodeExec(t *testing.T) {
 			i+1, r.Status, r.Error, r.Summary)
 	}
 	if failed > 0 {
+		// Capture diagnostic logs
+		t.Log("--- DIAGNOSTIC: gateway journal (last 100 lines) ---")
+		gwJournal, _ := sshRunAsAgent(t, dial, gwBridgeIP, gwMachine, `journalctl --user -u openclaw-gateway --no-pager -n 100 2>&1 || true`)
+		t.Logf("%s", gwJournal)
+
+		t.Log("--- DIAGNOSTIC: node journal (last 100 lines) ---")
+		nodeJournal, _ := sshRunAsAgent(t, dial, nodeBridgeIP, nodeMachine, `journalctl --user -u openclaw-node --no-pager -n 100 2>&1 || true`)
+		t.Logf("%s", nodeJournal)
+
 		t.Fatalf("%d/%d cron runs failed", failed, len(runs))
 	}
 
