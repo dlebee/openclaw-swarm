@@ -5,6 +5,7 @@ import (
 	"io"
 	"os"
 	unixpath "path"
+
 	"github.com/pkg/sftp"
 	xssh "golang.org/x/crypto/ssh"
 )
@@ -56,11 +57,7 @@ func WriteFile(client *xssh.Client, remotePath string, data []byte) error {
 	}
 	defer sc.Close()
 
-<<<<<<< HEAD
-	dir := unixpath.Dir(path)
-=======
-	dir := path.Dir(remotePath)
->>>>>>> 93763e9 (fix mkdir with wrong order of slashes)
+	dir := unixpath.Dir(remotePath)
 	if err := sc.MkdirAll(dir); err != nil {
 		return fmt.Errorf("sshfile: mkdir %s: %w", dir, err)
 	}
