@@ -53,6 +53,7 @@ func ValidateManifest(m *Manifest) error {
 				agent.ID,
 			)
 		}
+	}
 
 	if err := validateNodeGatewayColocation(m); err != nil {
 		return err
