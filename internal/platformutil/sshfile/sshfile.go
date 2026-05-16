@@ -5,14 +5,14 @@ import (
 	"io"
 	"os"
 	unixpath "path"
-
 	"github.com/pkg/sftp"
 	xssh "golang.org/x/crypto/ssh"
 )
 
-// ReadFile reads the entire contents of path on the remote host via SFTP.
-// Returns os.ErrNotExist when the file does not exist.
-func ReadFile(client *xssh.Client, path string) ([]byte, error) {
+// ReadFile reads the entire contents of remotePath on the remote host via SFTP.
+// Returns os.ErrNotExist when the file does not exist. remotePath MUST be a
+// POSIX path (forward slashes) — see WriteFile for why.
+func ReadFile(client *xssh.Client, remotePath string) ([]byte, error) {
 	if client == nil {
 		return nil, fmt.Errorf("sshfile: client is nil")
 	}
@@ -22,25 +22,31 @@ func ReadFile(client *xssh.Client, path string) ([]byte, error) {
 	}
 	defer sc.Close()
 
-	f, err := sc.Open(path)
+	f, err := sc.Open(remotePath)
 	if err != nil {
 		if os.IsNotExist(err) {
 			return nil, os.ErrNotExist
 		}
-		return nil, fmt.Errorf("sshfile: open %s: %w", path, err)
+		return nil, fmt.Errorf("sshfile: open %s: %w", remotePath, err)
 	}
 	defer f.Close()
 
 	data, err := io.ReadAll(f)
 	if err != nil {
-		return nil, fmt.Errorf("sshfile: read %s: %w", path, err)
+		return nil, fmt.Errorf("sshfile: read %s: %w", remotePath, err)
 	}
 	return data, nil
 }
 
-// WriteFile writes data to path on the remote host via SFTP, creating parent
-// directories as needed. The file is created with mode 0644.
-func WriteFile(client *xssh.Client, path string, data []byte) error {
+// WriteFile writes data to remotePath on the remote host via SFTP, creating
+// parent directories as needed. The file is created with mode 0644.
+//
+// remotePath MUST be a POSIX path (forward slashes). We use path.Dir — not
+// filepath.Dir — because filepath uses the host OS separator, which means a
+// Windows-side caller producing /home/x/y/z would get \home\x\y\z back from
+// filepath.Dir and SFTP would happily MkdirAll a single literal-backslash
+// directory on the Linux remote. Always use path.* for remote paths.
+func WriteFile(client *xssh.Client, remotePath string, data []byte) error {
 	if client == nil {
 		return fmt.Errorf("sshfile: client is nil")
 	}
@@ -50,19 +56,23 @@ func WriteFile(client *xssh.Client, path string, data []byte) error {
 	}
 	defer sc.Close()
 
+<<<<<<< HEAD
 	dir := unixpath.Dir(path)
+=======
+	dir := path.Dir(remotePath)
+>>>>>>> 93763e9 (fix mkdir with wrong order of slashes)
 	if err := sc.MkdirAll(dir); err != nil {
 		return fmt.Errorf("sshfile: mkdir %s: %w", dir, err)
 	}
 
-	f, err := sc.Create(path)
+	f, err := sc.Create(remotePath)
 	if err != nil {
-		return fmt.Errorf("sshfile: create %s: %w", path, err)
+		return fmt.Errorf("sshfile: create %s: %w", remotePath, err)
 	}
 	defer f.Close()
 
 	if _, err := f.Write(data); err != nil {
-		return fmt.Errorf("sshfile: write %s: %w", path, err)
+		return fmt.Errorf("sshfile: write %s: %w", remotePath, err)
 	}
 	return nil
 }
