@@ -312,6 +312,20 @@ func TestCronAgentWithNodeExec(t *testing.T) {
 	assertGatewayUnitActive(t, dial, gwPublicIP, gwMachine)
 	assertGatewayPortListeningOnLAN(t, dial, gwPublicIP, gwMachine)
 	assertNodeUnitActive(t, dial, nodePublicIP, nodeMachine)
+
+	// Debug: check Tailscale status on node before asserting node is paired
+	t.Log("--- DEBUG: Tailscale status on node ---")
+	tsStatus, _ := sshRunAsGatewayAgent(t, dial, nodePublicIP, nodeMachine, `tailscale status 2>&1 || true`)
+	t.Logf("%s", tsStatus)
+
+	t.Log("--- DEBUG: Node service status ---")
+	nodeStatus, _ := sshRunAsGatewayAgent(t, dial, nodePublicIP, nodeMachine, `systemctl --user status openclaw-node 2>&1 || true`)
+	t.Logf("%s", nodeStatus)
+
+	t.Log("--- DEBUG: Node journal (last 30 lines) ---")
+	nodeJournal, _ := sshRunAsGatewayAgent(t, dial, nodePublicIP, nodeMachine, `journalctl --user -u openclaw-node --no-pager -n 30 2>&1 || true`)
+	t.Logf("%s", nodeJournal)
+
 	assertNodePairedOnGateway(t, dial, gwPublicIP, gwMachine, nd.Name)
 
 	// --- Fake Ollama stub on the gateway VM --------------------------------
