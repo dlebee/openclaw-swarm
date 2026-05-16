@@ -299,10 +299,11 @@ type Channel struct {
 
 // Node is a remote execution node paired with a gateway.
 type Node struct {
-	Name       string          `yaml:"name"`
-	Gateway    string          `yaml:"gateway"`
-	Reference  string          `yaml:"reference"`
-	ExecPolicy *NodeExecPolicy `yaml:"exec_policy,omitempty"`
+	Name            string          `yaml:"name"`
+	Gateway         string          `yaml:"gateway"`
+	Reference       string          `yaml:"reference"`
+	OpenclawVersion string          `yaml:"openclaw_version,omitempty"`
+	ExecPolicy      *NodeExecPolicy `yaml:"exec_policy,omitempty"`
 }
 
 // NodeExecPolicy constrains exec and approval behavior on a node.

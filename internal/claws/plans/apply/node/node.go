@@ -28,6 +28,9 @@ type NodeTarget struct {
 // GetMachine implements common.MachineProvider.
 func (nt *NodeTarget) GetMachine() manifestdata.Machine { return nt.Machine }
 
+// GetOpenclawVersion implements common.OpenclawVersionProvider.
+func (nt *NodeTarget) GetOpenclawVersion() string { return nt.Spec.OpenclawVersion }
+
 // GatewayInternalHost returns the address the node should use to connect to
 // the gateway. Precedence:
 //
