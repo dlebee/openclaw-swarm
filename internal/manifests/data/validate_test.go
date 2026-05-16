@@ -217,6 +217,64 @@ func TestValidateManifest_SCPSteps(t *testing.T) {
 	})
 }
 
+func TestValidateManifest_MainAgentWorkspace(t *testing.T) {
+	t.Parallel()
+
+	t.Run("rejects workspace override for main", func(t *testing.T) {
+		t.Parallel()
+		m := &Manifest{
+			Agents: []Agent{{
+				ID:        "main",
+				Workspace: "~/.openclaw/workspace-custom",
+			}},
+		}
+		err := ValidateManifest(m)
+		if err == nil || !strings.Contains(err.Error(), "workspace override") {
+			t.Fatalf("want workspace-override error, got %v", err)
+		}
+	})
+
+	t.Run("rejects workspace override for Main (case-insensitive)", func(t *testing.T) {
+		t.Parallel()
+		m := &Manifest{
+			Agents: []Agent{{
+				ID:        "Main",
+				Workspace: "~/.openclaw/workspace-custom",
+			}},
+		}
+		err := ValidateManifest(m)
+		if err == nil || !strings.Contains(err.Error(), "workspace override") {
+			t.Fatalf("want workspace-override error, got %v", err)
+		}
+	})
+
+	t.Run("accepts main without workspace override", func(t *testing.T) {
+		t.Parallel()
+		m := &Manifest{
+			Agents: []Agent{{
+				ID: "main",
+			}},
+		}
+		if err := ValidateManifest(m); err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+	})
+
+	t.Run("accepts non-main agent with workspace", func(t *testing.T) {
+		t.Parallel()
+		m := &Manifest{
+			Agents: []Agent{{
+				ID:        "dev",
+				Workspace: "~/.openclaw/workspace-dev",
+			}},
+		}
+		if err := ValidateManifest(m); err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+	})
+}
+
+
 func TestValidateStep_UnknownKind(t *testing.T) {
 	t.Parallel()
 	m := &Manifest{
@@ -230,6 +288,49 @@ func TestValidateStep_UnknownKind(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), "unknown kind") {
 		t.Fatalf("want unknown-kind error, got %v", err)
 	}
+}
+
+func TestValidateNodeGatewayColocation(t *testing.T) {
+	t.Parallel()
+
+	t.Run("rejects node on same machine as its gateway", func(t *testing.T) {
+		t.Parallel()
+		m := &Manifest{
+			Machines: []Machine{{Name: "main-host", Type: MachineTypeSSH}},
+			Gateways: []Gateway{{Name: "gateway", Reference: "main-host"}},
+			Nodes:    []Node{{Name: "exec-node", Gateway: "gateway", Reference: "main-host"}},
+		}
+		err := ValidateManifest(m)
+		if err == nil || !strings.Contains(err.Error(), "separate machines") {
+			t.Fatalf("want colocation error, got %v", err)
+		}
+	})
+
+	t.Run("accepts node on different machine from gateway", func(t *testing.T) {
+		t.Parallel()
+		m := &Manifest{
+			Machines: []Machine{
+				{Name: "gw-host", Type: MachineTypeSSH},
+				{Name: "node-host", Type: MachineTypeSSH},
+			},
+			Gateways: []Gateway{{Name: "gateway", Reference: "gw-host"}},
+			Nodes:    []Node{{Name: "exec-node", Gateway: "gateway", Reference: "node-host"}},
+		}
+		if err := ValidateManifest(m); err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+	})
+
+	t.Run("accepts manifest with no nodes", func(t *testing.T) {
+		t.Parallel()
+		m := &Manifest{
+			Machines: []Machine{{Name: "main-host", Type: MachineTypeSSH}},
+			Gateways: []Gateway{{Name: "gateway", Reference: "main-host"}},
+		}
+		if err := ValidateManifest(m); err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+	})
 }
 
 func TestParseMode(t *testing.T) {

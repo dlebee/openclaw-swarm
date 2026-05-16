@@ -6,6 +6,11 @@ import (
 	"strings"
 )
 
+// reservedMainAgentID is the openclaw default agent id. Its workspace is
+// bootstrapped by the gateway phase before the agents phase runs, so
+// overriding it via the manifest produces an incomplete second workspace.
+const reservedMainAgentID = "main"
+
 // Validate runs a best-effort static check of the manifest that the YAML
 // parser can't enforce on its own. It's intentionally narrow — we only gate
 // the things that are genuinely unsafe to discover at execute time:
@@ -17,6 +22,10 @@ import (
 //     target).
 //   - Unknown step kinds (easier to catch here than at dispatch time with
 //     "no matching case" silently skipping work).
+//   - A workspace override on the reserved "main" agent (the gateway phase
+//     bootstraps the default workspace before the agents phase runs; setting
+//     a different path here produces an incomplete second workspace while the
+//     bootstrap files remain in the original location).
 //
 // Everything else (machine references in automations, duplicate names, etc.)
 // is left to the phase builders, which already emit clear errors and whose
@@ -33,9 +42,54 @@ func ValidateManifest(m *Manifest) error {
 		}
 	}
 
+	for _, agent := range m.Agents {
+		if strings.EqualFold(strings.TrimSpace(agent.ID), reservedMainAgentID) &&
+			strings.TrimSpace(agent.Workspace) != "" {
+			return fmt.Errorf(
+				"agent %q: workspace override is not supported for the reserved \"main\" agent — "+
+					"the gateway bootstrap creates the default workspace before the agents phase runs, "+
+					"so setting a custom path here produces an incomplete second workspace; "+
+					"remove the workspace field to use the openclaw default (~/.openclaw/workspace)",
+				agent.ID,
+			)
+		}
+	}
+
+	if err := validateNodeGatewayColocation(m); err != nil {
+		return err
+	}
+
 	for _, auto := range m.Automations {
 		if err := validateAutomation(auto, m.AllowSelf); err != nil {
 			return fmt.Errorf("automation %q: %w", auto.Name, err)
+		}
+	}
+	return nil
+}
+
+// validateNodeGatewayColocation rejects any node whose reference machine is
+// the same as its gateway's reference machine. Colocating a node and gateway
+// on the same host creates a circular dependency in the pairing protocol:
+// the node registers with the gateway over the local network, but the gateway
+// process is not yet paired and ready when the node first starts. Keep them
+// on separate machines, or remove the node entry entirely if exec is not needed.
+func validateNodeGatewayColocation(m *Manifest) error {
+	gwRefByName := make(map[string]string, len(m.Gateways))
+	for _, gw := range m.Gateways {
+		gwRefByName[gw.Name] = strings.TrimSpace(gw.Reference)
+	}
+	for _, n := range m.Nodes {
+		nodeRef := strings.TrimSpace(n.Reference)
+		gwRef, ok := gwRefByName[strings.TrimSpace(n.Gateway)]
+		if !ok {
+			continue // unknown gateway reference — let the phase builder catch it
+		}
+		if nodeRef != "" && nodeRef == gwRef {
+			return fmt.Errorf(
+				"node %q and its gateway %q both reference machine %q; "+
+					"nodes and gateways must run on separate machines",
+				n.Name, n.Gateway, nodeRef,
+			)
 		}
 	}
 	return nil

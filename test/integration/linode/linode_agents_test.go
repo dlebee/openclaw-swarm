@@ -399,7 +399,7 @@ func TestAgentsSmoke(t *testing.T) {
 	//    feature (soul-drift detector, identity rotator, etc.)
 	//    will — "bytes on disk match manifest" is the contract.
 	assertWorkspaceManagedFile(t, dial, host, mc, ag.Workspace, "SOUL.md", ag.Soul)
-	assertWorkspaceManagedFile(t, dial, host, mc, ag.Workspace, "AGENTS.md", ag.AgentsMD)
+	assertWorkspaceManagedFile(t, dial, host, mc, ag.Workspace, "AGENTS.md", string(ag.AgentsMD))
 	// IDENTITY.md body is synthesized by buildIdentityMD (configure_
 	// workspace.go:63); assert on the name: / emoji: lines rather
 	// than the full body so a cosmetic header change in that

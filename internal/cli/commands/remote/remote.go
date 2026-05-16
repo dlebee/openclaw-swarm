@@ -90,6 +90,7 @@ Subcommands:
 	cmd.Flags().StringVar(&name, "name", "", "machine name as declared in the manifest")
 	cmd.Flags().StringVar(&user, "user", "", "SSH user override (default: agent_user, then bootstrap_user, then root)")
 	cmd.AddCommand(AddUserCmd(manifestFile))
+	cmd.AddCommand(TestSSHCmd(manifestFile))
 	return cmd
 }
 

@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path"
 	"path/filepath"
 	"strings"
 
@@ -71,7 +72,11 @@ func Download(client *xssh.Client, remotePath, localPath string, mode *os.FileMo
 // ---------------------------------------------------------------------------
 
 func uploadFile(sc *sftp.Client, localPath string, info os.FileInfo, remotePath string, mode *os.FileMode) error {
-	if err := sc.MkdirAll(filepath.Dir(remotePath)); err != nil {
+	// Use path.Dir (POSIX, '/'), not filepath.Dir, because remotePath is a
+	// remote SFTP path. On Windows operators, filepath.Dir would return
+	// backslash-separated text which SFTP would then create as a single
+	// literal-backslash directory on the Linux remote.
+	if err := sc.MkdirAll(path.Dir(remotePath)); err != nil {
 		return fmt.Errorf("sshfile upload: mkdir parent of %s: %w", remotePath, err)
 	}
 	src, err := os.Open(localPath)

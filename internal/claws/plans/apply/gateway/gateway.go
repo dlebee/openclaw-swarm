@@ -29,6 +29,9 @@ type GatewayTarget struct {
 // GetMachine implements common.MachineProvider.
 func (gt *GatewayTarget) GetMachine() manifestdata.Machine { return gt.Machine }
 
+// GetOpenclawVersion implements common.OpenclawVersionProvider.
+func (gt *GatewayTarget) GetOpenclawVersion() string { return gt.Spec.OpenclawVersion }
+
 // BuildGatewayTargets creates scaffold targets from manifest gateways, resolving
 // each gateway's Reference to its machine.
 func BuildGatewayTargets(gateways []manifestdata.Gateway, machines []manifestdata.Machine) []scaffold.Target {

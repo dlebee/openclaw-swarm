@@ -52,7 +52,7 @@ func desiredFiles(spec manifestdata.Agent) []managedFile {
 		files = append(files, managedFile{name: "SOUL.md", content: spec.Soul})
 	}
 	if spec.AgentsMD != "" {
-		files = append(files, managedFile{name: "AGENTS.md", content: spec.AgentsMD})
+		files = append(files, managedFile{name: "AGENTS.md", content: string(spec.AgentsMD)})
 	}
 	if spec.Identity != nil && spec.Identity.Name != "" {
 		files = append(files, managedFile{name: "IDENTITY.md", content: buildIdentityMD(spec.Identity)})
@@ -73,7 +73,13 @@ func buildIdentityMD(id *manifestdata.AgentIdentity) string {
 }
 
 // resolveWorkspace resolves ~ in the workspace path using the remote $HOME.
+// When workspace is empty (no workspace field in the manifest — typical for
+// the reserved "main" agent), it falls back to ~/.openclaw/workspace, which
+// mirrors openclaw's own resolveDefaultAgentWorkspaceDir default.
 func resolveWorkspace(client *xssh.Client, workspace string) (string, error) {
+	if workspace == "" {
+		workspace = "~/.openclaw/workspace"
+	}
 	if strings.HasPrefix(workspace, "~/") {
 		home, err := gwService.ResolveHome(client)
 		if err != nil {
@@ -242,7 +248,12 @@ func writeManagedSection(client *xssh.Client, filePath, content string) error {
 		return sshfile.WriteFile(client, filePath, []byte(before+managedBlock+after))
 	}
 
-	// No markers found — inject at the top, preserve existing content.
-	return sshfile.WriteFile(client, filePath, []byte(managedBlock+"\n\n"+text))
+	// No markers found — first-time claws write. The existing content is the
+	// openclaw-generated bootstrap template, not user content (user hasn't had
+	// a chance to edit below the markers yet). Write a clean managed file so
+	// the agent only sees the soul/agents_md from the manifest, not the template.
+	// On all subsequent runs the markers are present and user additions below
+	// them are preserved correctly by the branch above.
+	return sshfile.WriteFile(client, filePath, []byte(wrapManaged(content)))
 }
 

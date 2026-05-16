@@ -43,15 +43,15 @@ func Ensure(client *xssh.Client, name string) error {
 		return err
 	}
 	script := fmt.Sprintf(`set -euo pipefail
-id -u %[1]s >/dev/null 2>&1 || useradd -m -s /bin/bash %[1]s
-mkdir -p /home/%[1]s/.ssh
-cp /root/.ssh/authorized_keys /home/%[1]s/.ssh/authorized_keys
-chown -R %[1]s:%[1]s /home/%[1]s/.ssh
-chmod 700 /home/%[1]s/.ssh
-chmod 600 /home/%[1]s/.ssh/authorized_keys
-echo '%[1]s ALL=(ALL) NOPASSWD:ALL' > /etc/sudoers.d/%[1]s
-chmod 440 /etc/sudoers.d/%[1]s
-loginctl enable-linger %[1]s 2>/dev/null || true
+id -u %[1]s >/dev/null 2>&1 || sudo useradd -m -s /bin/bash %[1]s
+sudo mkdir -p /home/%[1]s/.ssh
+sudo cp ~/.ssh/authorized_keys /home/%[1]s/.ssh/authorized_keys
+sudo chown -R %[1]s:%[1]s /home/%[1]s/.ssh
+sudo chmod 700 /home/%[1]s/.ssh
+sudo chmod 600 /home/%[1]s/.ssh/authorized_keys
+echo '%[1]s ALL=(ALL) NOPASSWD:ALL' | sudo tee /etc/sudoers.d/%[1]s >/dev/null
+sudo chmod 440 /etc/sudoers.d/%[1]s
+sudo loginctl enable-linger %[1]s 2>/dev/null || true
 `, name)
 	return sshutil.RunBashStdin(client, script)
 }
