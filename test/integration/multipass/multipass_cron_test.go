@@ -181,6 +181,17 @@ func TestCronAgentWithNodeExec(t *testing.T) {
 	rewriteMeshHost(m)
 	prefix := m.Prefix
 
+	// Allow version pinning via OPENCLAW_VERSION env var for bisecting regressions
+	if v := os.Getenv("OPENCLAW_VERSION"); v != "" {
+		t.Logf("Using pinned OpenClaw version: %s", v)
+		for i := range m.Gateways {
+			m.Gateways[i].OpenclawVersion = v
+		}
+		for i := range m.Nodes {
+			m.Nodes[i].OpenclawVersion = v
+		}
+	}
+
 	if len(m.Machines) != 2 {
 		t.Fatalf("fixture sanity: expected 2 machines, got %d", len(m.Machines))
 	}

@@ -1,0 +1,69 @@
+# Version bisect manifest for TestCronAgentWithNodeExec
+# Use OPENCLAW_VERSION env var to override the version installed
+#
+# Known working: 2026.4.24 (2026-04-25)
+# Known failing: 2026.5.12 (2026-05-14)
+#
+# Bisect candidates:
+# - 2026.4.25 (2026-04-27)
+# - 2026.4.26 (2026-04-28)
+# - 2026.4.27 (2026-04-29)
+# - 2026.4.29 (2026-04-30)
+# - 2026.5.4 (2026-05-05)
+# - 2026.5.5 (2026-05-06)
+# - 2026.5.6 (2026-05-06)
+# - 2026.5.7 (2026-05-07)
+
+prefix: claws-it-multipass-cron
+
+machines:
+  - name: gateway-host
+    type: multipass
+    cpus: 2
+    memory: 2G
+    disk: 20G
+    bootstrap_user: root
+    agent_user: agent
+  - name: scraper-host
+    type: multipass
+    cpus: 2
+    memory: 2G
+    disk: 20G
+    bootstrap_user: root
+    agent_user: agent
+
+gateways:
+  - name: gateway
+    reference: gateway-host
+    # OPENCLAW_VERSION env var can override this
+    openclaw_version: ""
+    networking:
+      mode: headscale
+      public_hostname:
+        strategy: custom
+        host: "http://claws-it-multipass-cron-gateway-host.local:8080"
+      preauth_key_source: file
+      preauth_key_file: /var/lib/claws/headscale/preauth.key
+
+nodes:
+  - name: scraper-node
+    gateway: gateway
+    reference: scraper-host
+    # OPENCLAW_VERSION env var can override this
+    openclaw_version: ""
+    exec_policy:
+      security: full
+      ask: "off"
+
+agents:
+  - id: reporter
+    gateway: gateway
+    workspace: ~/.openclaw/workspace
+    model: { primary: "ollama/qwen2.5:0.5b" }
+    tools:
+      exec: { host: node, node: scraper-node, security: full }
+    soul: |
+      You are a terse reporter for integration testing.
+      When asked for a sentence, reply with exactly one short English sentence.
+    identity:
+      name: Reporter
