@@ -369,10 +369,20 @@ func TestCronAgentWithNodeExec(t *testing.T) {
 			`journalctl --user -u openclaw-gateway --no-pager -n 100 2>&1 || true`)
 		t.Logf("%s", gwJournal)
 
+		t.Log("--- DIAGNOSTIC: node service status ---")
+		nodeStatus, _ := sshRunAsGatewayAgent(t, dial, nodePublicIP, nodeMachine,
+			`systemctl --user status openclaw-node 2>&1 || true`)
+		t.Logf("%s", nodeStatus)
+
 		t.Log("--- DIAGNOSTIC: node journal (last 100 lines) ---")
 		nodeJournal, _ := sshRunAsGatewayAgent(t, dial, nodePublicIP, nodeMachine,
 			`journalctl --user -u openclaw-node --no-pager -n 100 2>&1 || true`)
 		t.Logf("%s", nodeJournal)
+
+		t.Log("--- DIAGNOSTIC: full system journal for node user (last 50 lines) ---")
+		nodeSysJournal, _ := sshRunAsGatewayAgent(t, dial, nodePublicIP, nodeMachine,
+			`journalctl --user --no-pager -n 50 2>&1 || true`)
+		t.Logf("%s", nodeSysJournal)
 
 		t.Log("--- DIAGNOSTIC: fake-ollama journal ---")
 		ollamaJournal, _ := sshRunAsGatewayAgent(t, dial, gwPublicIP, gwMachine,
