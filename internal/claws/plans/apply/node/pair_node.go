@@ -160,6 +160,34 @@ func (s *PairNodeStep) Verify(ctx context.Context, t scaffold.Target) error {
 	defer common.ReturnSSH(ctx, key, client)
 
 	cfgHost := common.MachineConfigHost(gwMach, gwHost)
+
+	// Wait for the node to actually connect (not just be in the paired list).
+	// After approval + restart, the node needs time to initialize and establish
+	// its WebSocket connection to the gateway. We check lastSeenAtMs to verify
+	// the node has actually connected recently.
+	deadline := time.Now().Add(60 * time.Second)
+	for time.Now().Before(deadline) {
+		dl, err := s.reader.DeviceList(ctx, client, cfgHost)
+		if err != nil {
+			time.Sleep(2 * time.Second)
+			continue
+		}
+		for _, d := range dl.Paired {
+			if d.DisplayName == nt.Spec.Name && d.ClientMode == "node" {
+				// Check if node has connected recently (lastSeenAtMs within 60s)
+				nowMs := time.Now().UnixMilli()
+				ageMs := nowMs - d.LastSeenAtMs
+				if d.LastSeenAtMs > 0 && ageMs < 60000 {
+					return nil // Node is paired AND connected
+				}
+				// Node is paired but hasn't connected yet, keep waiting
+				break
+			}
+		}
+		time.Sleep(2 * time.Second)
+	}
+
+	// Final check - report what we found
 	dl, err := s.reader.DeviceList(ctx, client, cfgHost)
 	if err != nil {
 		return fmt.Errorf("pair-node verify: list devices: %w", err)
@@ -167,5 +195,11 @@ func (s *PairNodeStep) Verify(ctx context.Context, t scaffold.Target) error {
 	if !isNodePaired(dl, nt.Spec.Name) {
 		return fmt.Errorf("pair-node verify: node %q not found in paired devices", nt.Spec.Name)
 	}
-	return nil
+	// Node is paired but never connected - report lastSeenAtMs for debugging
+	for _, d := range dl.Paired {
+		if d.DisplayName == nt.Spec.Name && d.ClientMode == "node" {
+			return fmt.Errorf("pair-node verify: node %q is paired but not connected (lastSeenAtMs=%d)", nt.Spec.Name, d.LastSeenAtMs)
+		}
+	}
+	return fmt.Errorf("pair-node verify: node %q not found in paired devices", nt.Spec.Name)
 }
