@@ -18,9 +18,14 @@ const (
 	agentUserDialRetryDelay = 3 * time.Second
 )
 
-// EnsureAgentUserStep creates a dedicated agent user on Linode machines when
+// EnsureAgentUserStep creates a dedicated agent user on the target machine when
 // the manifest specifies a non-root agent_user. Runs as the SSH user (root)
 // after authorize-ssh-key has confirmed SSH access. Idempotent.
+//
+// For hosted machines (linode, multipass) the host is taken from the Instance
+// record set by create-machine. For pre-provisioned SSH machines the host
+// comes directly from Machine.Host — the operator is expected to have already
+// authorised the claws SSH key for the bootstrap_user (root) out of band.
 type EnsureAgentUserStep struct {
 	dial SSHDialFunc
 }
@@ -36,9 +41,6 @@ func (s *EnsureAgentUserStep) Applicable(_ context.Context, t scaffold.Target) (
 	if !ok || mt == nil {
 		return false, nil
 	}
-	if !manifestdata.IsHostedMachineType(mt.Spec.Type) {
-		return false, nil
-	}
 	return needsAgentUser(mt.Spec), nil
 }
 
@@ -47,10 +49,7 @@ func (s *EnsureAgentUserStep) Check(ctx context.Context, t scaffold.Target) (boo
 	if !ok || mt == nil {
 		return false, nil
 	}
-	if mt.Instance == nil {
-		return false, nil
-	}
-	host := strings.TrimSpace(mt.Instance.PublicIPv4)
+	host := resolveHost(mt)
 	if host == "" {
 		return false, nil
 	}
@@ -72,10 +71,10 @@ func (s *EnsureAgentUserStep) Execute(ctx context.Context, t scaffold.Target) er
 	if !ok || mt == nil {
 		return fmt.Errorf("ensure-agent-user: expected *MachineTarget for %q", t.ID)
 	}
-	if mt.Instance == nil || strings.TrimSpace(mt.Instance.PublicIPv4) == "" {
-		return fmt.Errorf("ensure-agent-user: instance not ready for %q (no public IPv4)", t.ID)
+	host := resolveHost(mt)
+	if host == "" {
+		return fmt.Errorf("ensure-agent-user: no host address for %q (hosted machine not yet provisioned, or ssh machine missing host field)", t.ID)
 	}
-	host := strings.TrimSpace(mt.Instance.PublicIPv4)
 	port := sshPort(mt.Spec)
 	login := bootstrapLoginUser(mt.Spec)
 
@@ -108,10 +107,10 @@ func (s *EnsureAgentUserStep) Verify(ctx context.Context, t scaffold.Target) err
 	if !ok || mt == nil {
 		return fmt.Errorf("ensure-agent-user verify: expected *MachineTarget for %q", t.ID)
 	}
-	if mt.Instance == nil || strings.TrimSpace(mt.Instance.PublicIPv4) == "" {
-		return fmt.Errorf("ensure-agent-user verify: instance not ready for %q", t.ID)
+	host := resolveHost(mt)
+	if host == "" {
+		return fmt.Errorf("ensure-agent-user verify: no host address for %q", t.ID)
 	}
-	host := strings.TrimSpace(mt.Instance.PublicIPv4)
 	client, key, err := s.borrowSSH(ctx, host, sshPort(mt.Spec), bootstrapLoginUser(mt.Spec))
 	if err != nil {
 		return fmt.Errorf("ensure-agent-user verify: dial: %w", err)
@@ -126,6 +125,19 @@ func (s *EnsureAgentUserStep) Verify(ctx context.Context, t scaffold.Target) err
 		return fmt.Errorf("ensure-agent-user verify: user %q does not exist", mt.Spec.AgentUser)
 	}
 	return nil
+}
+
+// resolveHost returns the SSH address for the machine. For hosted machines
+// (linode, multipass) it uses the Instance.PublicIPv4 populated by
+// create-machine; for pre-provisioned SSH machines it falls back to
+// Machine.Host from the manifest.
+func resolveHost(mt *MachineTarget) string {
+	if mt.Instance != nil {
+		if h := strings.TrimSpace(mt.Instance.PublicIPv4); h != "" {
+			return h
+		}
+	}
+	return strings.TrimSpace(mt.Spec.Host)
 }
 
 func needsAgentUser(m manifestdata.Machine) bool {

@@ -433,7 +433,7 @@ func TestAgentsSmoke(t *testing.T) {
 	//    drift detector) would, so "bytes on disk match manifest"
 	//    is the correct contract.
 	assertWorkspaceManagedFile(t, dial, host, mc, ag.Workspace, "SOUL.md", ag.Soul)
-	assertWorkspaceManagedFile(t, dial, host, mc, ag.Workspace, "AGENTS.md", ag.AgentsMD)
+	assertWorkspaceManagedFile(t, dial, host, mc, ag.Workspace, "AGENTS.md", string(ag.AgentsMD))
 	// IDENTITY.md is built by buildIdentityMD (configure_workspace.
 	// go:63). Asserting a substring, not the whole body, so a
 	// stylistic header change in buildIdentityMD doesn't force a

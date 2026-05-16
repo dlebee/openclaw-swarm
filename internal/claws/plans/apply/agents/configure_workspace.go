@@ -52,7 +52,7 @@ func desiredFiles(spec manifestdata.Agent) []managedFile {
 		files = append(files, managedFile{name: "SOUL.md", content: spec.Soul})
 	}
 	if spec.AgentsMD != "" {
-		files = append(files, managedFile{name: "AGENTS.md", content: spec.AgentsMD})
+		files = append(files, managedFile{name: "AGENTS.md", content: string(spec.AgentsMD)})
 	}
 	if spec.Identity != nil && spec.Identity.Name != "" {
 		files = append(files, managedFile{name: "IDENTITY.md", content: buildIdentityMD(spec.Identity)})

@@ -19,6 +19,11 @@ type Options struct {
 	SSHPubKey string // public key content for authorized_keys
 	// SSHDial connects with the active CLI identity (same as apply). Used by authorize-ssh-key.
 	SSHDial SSHDialFunc
+	// UnsetTMOUT, when true, adds the unset-tmout step that removes the TMOUT
+	// variable from shell profiles on the remote host. Enable for providers
+	// (e.g. OVH) that ship images with TMOUT set, causing SSH sessions to be
+	// killed mid-script with SIGALRM (exit 142).
+	UnsetTMOUT bool
 }
 
 const planCacheSSHPoolKey = "SSH_POOL"
