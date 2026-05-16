@@ -509,11 +509,10 @@ func assertNodeEnvDropIn(t *testing.T, dial provisioning.SSHDialFunc, host strin
 
 // assertNodePairedOnGateway SSHs to the GATEWAY and checks
 // `openclaw devices list --json` for the node's displayName under
-// paired, with zero pending. It also verifies the node has a recent
-// lastSeenAtMs timestamp (within 60s) to ensure it's actually connected.
+// paired, with zero pending.
 func assertNodePairedOnGateway(t *testing.T, dial provisioning.SSHDialFunc, host string, mc manifestdata.Machine, nodeName string) {
 	t.Helper()
-	deadline := time.Now().Add(60 * time.Second) // increased from 30s to allow for reconnection
+	deadline := time.Now().Add(30 * time.Second)
 	var lastOut string
 	for time.Now().Before(deadline) {
 		out, err := sshRunAsGatewayAgent(t, dial, host, mc,
@@ -529,9 +528,8 @@ func assertNodePairedOnGateway(t *testing.T, dial provisioning.SSHDialFunc, host
 				DisplayName string `json:"displayName"`
 			} `json:"pending"`
 			Paired []struct {
-				DisplayName  string `json:"displayName"`
-				ClientMode   string `json:"clientMode"`
-				LastSeenAtMs int64  `json:"lastSeenAtMs"`
+				DisplayName string `json:"displayName"`
+				ClientMode  string `json:"clientMode"`
 			} `json:"paired"`
 		}
 		if err := json.Unmarshal([]byte(out), &dl); err != nil {
@@ -541,18 +539,8 @@ func assertNodePairedOnGateway(t *testing.T, dial provisioning.SSHDialFunc, host
 		}
 		for _, p := range dl.Paired {
 			if p.DisplayName == nodeName {
-				// Check if node has connected recently (within 60 seconds)
-				nowMs := time.Now().UnixMilli()
-				ageMs := nowMs - p.LastSeenAtMs
-				if p.LastSeenAtMs == 0 || ageMs > 60000 {
-					// Node is paired but hasn't connected yet or connection is stale
-					t.Logf("[%s] node %q paired but lastSeenAtMs=%d (age=%dms), waiting for connection...",
-						mc.Name, nodeName, p.LastSeenAtMs, ageMs)
-					time.Sleep(2 * time.Second)
-					continue
-				}
-				t.Logf("[%s] gateway devices: node %q paired (mode=%s, lastSeenAge=%dms); pending=%d, paired=%d",
-					mc.Name, nodeName, p.ClientMode, ageMs, len(dl.Pending), len(dl.Paired))
+				t.Logf("[%s] gateway devices: node %q paired (mode=%s); pending=%d, paired=%d",
+					mc.Name, nodeName, p.ClientMode, len(dl.Pending), len(dl.Paired))
 				if len(dl.Pending) != 0 {
 					t.Errorf("[%s] expected 0 pending devices after pair-node, got %d (raw: %s)",
 						mc.Name, len(dl.Pending), out)
@@ -562,6 +550,6 @@ func assertNodePairedOnGateway(t *testing.T, dial provisioning.SSHDialFunc, host
 		}
 		time.Sleep(2 * time.Second)
 	}
-	t.Fatalf("[%s] node %q never appeared in gateway devices list paired array with recent lastSeenAtMs (last raw: %s)",
+	t.Fatalf("[%s] node %q never appeared in gateway devices list paired array (last raw: %s)",
 		mc.Name, nodeName, lastOut)
 }
