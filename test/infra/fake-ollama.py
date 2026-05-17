@@ -127,11 +127,21 @@ class Handler(BaseHTTPRequestHandler):
             # context_length keys are per-architecture in real ollama;
             # the openclaw plugin just reads model_info keyed by any
             # "<arch>.context_length" so we use a generic "qwen2" prefix.
+            #
+            # capabilities MUST advertise "tools" for OpenClaw 2026.5.x+
+            # (since the introduction of tool-allowlist-guard.ts model-
+            # capability gating; src/agents/tool-allowlist-guard.ts:49).
+            # Without it the isolated cron-agent turn fails with
+            # "No callable tools remain after resolving explicit tool
+            # allowlist; the selected model does not support tools."
+            # Real ollama servers report capabilities like
+            # ["completion", "tools", "vision"] depending on the model;
+            # we declare the minimum needed for the cron-agent pipeline.
             return self._send_json(
                 200,
                 {
                     "model_info": {"qwen2.context_length": 32768},
-                    "capabilities": [],
+                    "capabilities": ["completion", "tools"],
                 },
             )
         if path == "/api/pull":
