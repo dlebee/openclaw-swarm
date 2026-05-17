@@ -640,6 +640,6 @@ func assertNodePairedOnGateway(t *testing.T, dial provisioning.SSHDialFunc, host
 		}
 		time.Sleep(2 * time.Second)
 	}
-	t.Errorf("[%s] node %q never appeared in gateway devices list paired array (last raw: %s)",
+	t.Fatalf("[%s] node %q never appeared in gateway devices list paired array (last raw: %s)",
 		mc.Name, nodeName, lastOut)
 }
