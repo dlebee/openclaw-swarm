@@ -313,19 +313,6 @@ func TestCronAgentWithNodeExec(t *testing.T) {
 	assertGatewayPortListeningOnLAN(t, dial, gwPublicIP, gwMachine)
 	assertNodeUnitActive(t, dial, nodePublicIP, nodeMachine)
 
-	// Debug: check Tailscale status on node before asserting node is paired
-	t.Log("--- DEBUG: Tailscale status on node ---")
-	tsStatus, _ := sshRunAsGatewayAgent(t, dial, nodePublicIP, nodeMachine, `tailscale status 2>&1 || true`)
-	t.Logf("%s", tsStatus)
-
-	t.Log("--- DEBUG: Node service status ---")
-	nodeStatus, _ := sshRunAsGatewayAgent(t, dial, nodePublicIP, nodeMachine, `systemctl --user status openclaw-node 2>&1 || true`)
-	t.Logf("%s", nodeStatus)
-
-	t.Log("--- DEBUG: Node journal (last 30 lines) ---")
-	nodeJournal, _ := sshRunAsGatewayAgent(t, dial, nodePublicIP, nodeMachine, `journalctl --user -u openclaw-node --no-pager -n 30 2>&1 || true`)
-	t.Logf("%s", nodeJournal)
-
 	assertNodePairedOnGateway(t, dial, gwPublicIP, gwMachine, nd.Name)
 
 	// --- Fake Ollama stub on the gateway VM --------------------------------
@@ -377,31 +364,16 @@ func TestCronAgentWithNodeExec(t *testing.T) {
 			i+1, r.Status, r.Error, r.Summary)
 	}
 	if failed > 0 {
-		// Capture diagnostic logs from both gateway and node when cron runs fail
+		// Mirror multipass_cron_test.go: only gateway + node unit journals on failure.
 		t.Log("--- DIAGNOSTIC: gateway journal (last 100 lines) ---")
 		gwJournal, _ := sshRunAsGatewayAgent(t, dial, gwPublicIP, gwMachine,
 			`journalctl --user -u openclaw-gateway --no-pager -n 100 2>&1 || true`)
 		t.Logf("%s", gwJournal)
 
-		t.Log("--- DIAGNOSTIC: node service status ---")
-		nodeStatus, _ := sshRunAsGatewayAgent(t, dial, nodePublicIP, nodeMachine,
-			`systemctl --user status openclaw-node 2>&1 || true`)
-		t.Logf("%s", nodeStatus)
-
 		t.Log("--- DIAGNOSTIC: node journal (last 100 lines) ---")
 		nodeJournal, _ := sshRunAsGatewayAgent(t, dial, nodePublicIP, nodeMachine,
 			`journalctl --user -u openclaw-node --no-pager -n 100 2>&1 || true`)
 		t.Logf("%s", nodeJournal)
-
-		t.Log("--- DIAGNOSTIC: full system journal for node user (last 50 lines) ---")
-		nodeSysJournal, _ := sshRunAsGatewayAgent(t, dial, nodePublicIP, nodeMachine,
-			`journalctl --user --no-pager -n 50 2>&1 || true`)
-		t.Logf("%s", nodeSysJournal)
-
-		t.Log("--- DIAGNOSTIC: fake-ollama journal ---")
-		ollamaJournal, _ := sshRunAsGatewayAgent(t, dial, gwPublicIP, gwMachine,
-			fmt.Sprintf(`journalctl --user -u %s --no-pager -n 50 2>&1 || true`, linodeFakeOllamaUnit))
-		t.Logf("%s", ollamaJournal)
 
 		t.Fatalf("%d/%d cron runs failed", failed, len(runs))
 	}
