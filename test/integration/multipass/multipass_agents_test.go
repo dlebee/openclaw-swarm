@@ -29,6 +29,20 @@ import (
 // points back to the exact test that planted it.
 const fakeTelegramAgentsMainToken = "000000000:FAKE_CLAWS_IT_AGENTS_MAIN_TOKEN_DO_NOT_USE_XX"
 
+// defaultMainWorkspacePath is where OpenClaw places the reserved "main"
+// agent when the manifest omits workspace (manifest validator forbids overriding).
+const defaultMainWorkspacePath = "~/.openclaw/workspace"
+
+func agentWorkspaceForAssertions(ag manifestdata.Agent) string {
+	if strings.TrimSpace(ag.Workspace) != "" {
+		return ag.Workspace
+	}
+	if ag.ID == "main" {
+		return defaultMainWorkspacePath
+	}
+	return ""
+}
+
 // agentsPhaseConfig is the narrow slice of ~/.openclaw/openclaw.json
 // this test cares about. Keeping the struct narrow means a schema
 // migration that adds or reorders unrelated keys won't break the
@@ -225,8 +239,9 @@ func TestAgentsSmoke(t *testing.T) {
 	if ag.Gateway != gw.Name {
 		t.Fatalf("fixture sanity: agent %q gateway = %q, want %q", ag.ID, ag.Gateway, gw.Name)
 	}
-	if ag.Workspace == "" {
-		t.Fatalf("fixture sanity: agent %q has empty workspace", ag.ID)
+	if strings.TrimSpace(ag.Workspace) != "" {
+		t.Fatalf("fixture sanity: agent %q must omit workspace (reserved main agent uses gateway default %s)",
+			ag.ID, defaultMainWorkspacePath)
 	}
 	if ag.Model.Primary == "" {
 		t.Fatalf("fixture sanity: agent %q has empty model.primary", ag.ID)
@@ -365,6 +380,11 @@ func TestAgentsSmoke(t *testing.T) {
 
 	// ---- agents-phase outside-in assertions ----------------------------------
 
+	agentWS := agentWorkspaceForAssertions(*ag)
+	if agentWS == "" {
+		t.Fatalf("agent %q: could not resolve workspace for assertions", ag.ID)
+	}
+
 	// 1. `openclaw agents list --json` reports the agent by id,
 	//    with the manifest model. This is the single canonical
 	//    "did add-agent + ensure-model both land?" signal, and
@@ -380,7 +400,7 @@ func TestAgentsSmoke(t *testing.T) {
 	//    break, but the struct-level failure points at the shape
 	//    mismatch specifically.
 	cfg := fetchAgentsPhaseConfig(t, dial, host, mc)
-	assertAgentInConfig(t, mc.Name, cfg, ag.ID, ag.Model.Primary, ag.Workspace)
+	assertAgentInConfig(t, mc.Name, cfg, ag.ID, ag.Model.Primary, agentWS)
 
 	// 3. tools.elevated.enabled + allowFrom landed. Reading via
 	//    struct decode (not just `config get tools.elevated.enabled`)
@@ -432,16 +452,16 @@ func TestAgentsSmoke(t *testing.T) {
 	//    consume these files, but any future feature (e.g. a soul-
 	//    drift detector) would, so "bytes on disk match manifest"
 	//    is the correct contract.
-	assertWorkspaceManagedFile(t, dial, host, mc, ag.Workspace, "SOUL.md", ag.Soul)
-	assertWorkspaceManagedFile(t, dial, host, mc, ag.Workspace, "AGENTS.md", string(ag.AgentsMD))
+	assertWorkspaceManagedFile(t, dial, host, mc, agentWS, "SOUL.md", ag.Soul)
+	assertWorkspaceManagedFile(t, dial, host, mc, agentWS, "AGENTS.md", string(ag.AgentsMD))
 	// IDENTITY.md is built by buildIdentityMD (configure_workspace.
 	// go:63). Asserting a substring, not the whole body, so a
 	// stylistic header change in buildIdentityMD doesn't force a
 	// test rewrite; the critical invariant is that name + emoji
 	// actually made it into the file.
-	assertWorkspaceFileContains(t, dial, host, mc, ag.Workspace, "IDENTITY.md",
+	assertWorkspaceFileContains(t, dial, host, mc, agentWS, "IDENTITY.md",
 		"name: "+ag.Identity.Name)
-	assertWorkspaceFileContains(t, dial, host, mc, ag.Workspace, "IDENTITY.md",
+	assertWorkspaceFileContains(t, dial, host, mc, agentWS, "IDENTITY.md",
 		"emoji: "+ag.Identity.Emoji)
 
 	// 6. `openclaw agents bindings --agent main --json` returns
@@ -610,11 +630,9 @@ func fetchAgentsPhaseConfig(t *testing.T, dial provisioning.SSHDialFunc, host st
 // of a stale on-disk file) produces two distinct failures instead
 // of one.
 //
-// Workspace check uses strings.Contains on the suffix — the
-// openclaw CLI may or may not resolve `~/…` when it writes the
-// entry, so we tolerate either form. The STRONG check is that
-// it's non-empty and contains the trailing path component; the
-// resolution semantics are the CLI's business.
+// Workspace check uses suffix matching when persisted — the OpenClaw CLI may
+// resolve `~/…` to `/home/<user>/…`. Reserved agent "main" may omit workspace in
+// agents.list when the manifest omitted it (implicit default); CLI still resolves.
 func assertAgentInConfig(t *testing.T, machineName string, cfg agentsPhaseConfig, wantID, wantModel, wantWorkspace string) {
 	t.Helper()
 	for _, a := range cfg.Agents.List {
@@ -624,11 +642,12 @@ func assertAgentInConfig(t *testing.T, machineName string, cfg agentsPhaseConfig
 					machineName, wantID, a.Model, wantModel)
 			}
 			if a.Workspace == "" {
+				if wantID == "main" && wantWorkspace == defaultMainWorkspacePath {
+					return
+				}
 				t.Errorf("[%s] agents.list entry for %q: workspace is empty", machineName, wantID)
+				return
 			}
-			// Accept either "~/.openclaw/workspace" (literal)
-			// or "/home/<user>/.openclaw/workspace" (resolved)
-			// — whichever the CLI chose to persist.
 			suffix := strings.TrimPrefix(wantWorkspace, "~")
 			if !strings.HasSuffix(a.Workspace, suffix) {
 				t.Errorf("[%s] agents.list entry for %q: workspace = %q, want suffix %q",

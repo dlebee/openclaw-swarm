@@ -28,6 +28,18 @@ import (
 // can't reject it on syntactic grounds.
 const fakeTelegramAgentsMainToken = "000000002:FAKE_CLAWS_IT_LINODE_AGENTS_MAIN_TOKEN_DO_NOT_XXX"
 
+const defaultMainWorkspacePath = "~/.openclaw/workspace"
+
+func agentWorkspaceForAssertions(ag manifestdata.Agent) string {
+	if strings.TrimSpace(ag.Workspace) != "" {
+		return ag.Workspace
+	}
+	if ag.ID == "main" {
+		return defaultMainWorkspacePath
+	}
+	return ""
+}
+
 // agentsPhaseConfig: narrow slice of ~/.openclaw/openclaw.json the
 // Linode agents test needs. Intentionally duplicated with the
 // Multipass tier's equivalent struct (multipass_agents_test.go) —
@@ -203,8 +215,12 @@ func TestAgentsSmoke(t *testing.T) {
 	if ag.Gateway != gw.Name {
 		t.Fatalf("fixture sanity: agent %q gateway = %q, want %q", ag.ID, ag.Gateway, gw.Name)
 	}
-	if ag.Workspace == "" || ag.Model.Primary == "" {
-		t.Fatalf("fixture sanity: agent %q has empty workspace or model.primary", ag.ID)
+	if strings.TrimSpace(ag.Workspace) != "" {
+		t.Fatalf("fixture sanity: agent %q must omit workspace (reserved main agent uses gateway default %s)",
+			ag.ID, defaultMainWorkspacePath)
+	}
+	if ag.Model.Primary == "" {
+		t.Fatalf("fixture sanity: agent %q has empty model.primary", ag.ID)
 	}
 	// Tools.Elevated presence is what makes ConfigureToolsStep.
 	// Applicable return true. Drifting to nil silently skips the
@@ -338,6 +354,11 @@ func TestAgentsSmoke(t *testing.T) {
 
 	// ---- agents-phase outside-in assertions -----------------------------------
 
+	agentWS := agentWorkspaceForAssertions(*ag)
+	if agentWS == "" {
+		t.Fatalf("agent %q: could not resolve workspace for assertions", ag.ID)
+	}
+
 	// 1. `openclaw agents list --json` reports the agent, with the
 	//    manifest model. Canonical "did add-agent + ensure-model
 	//    both land?" signal, and matches the surface production
@@ -350,7 +371,7 @@ func TestAgentsSmoke(t *testing.T) {
 	//    agents.registered[]) leaves the struct's List empty and
 	//    the loud failure message pinpoints the shape mismatch.
 	cfg := fetchAgentsPhaseConfig(t, dial, host, mc)
-	assertAgentInConfig(t, mc.Name, cfg, ag.ID, ag.Model.Primary, ag.Workspace)
+	assertAgentInConfig(t, mc.Name, cfg, ag.ID, ag.Model.Primary, agentWS)
 
 	// 3. tools.elevated.enabled + allowFrom round-tripped end-to-
 	//    end. Struct-decode (not plain `config get` scalar) proves
@@ -398,15 +419,15 @@ func TestAgentsSmoke(t *testing.T) {
 	//    daemon doesn't consume these files, but any future
 	//    feature (soul-drift detector, identity rotator, etc.)
 	//    will — "bytes on disk match manifest" is the contract.
-	assertWorkspaceManagedFile(t, dial, host, mc, ag.Workspace, "SOUL.md", ag.Soul)
-	assertWorkspaceManagedFile(t, dial, host, mc, ag.Workspace, "AGENTS.md", string(ag.AgentsMD))
+	assertWorkspaceManagedFile(t, dial, host, mc, agentWS, "SOUL.md", ag.Soul)
+	assertWorkspaceManagedFile(t, dial, host, mc, agentWS, "AGENTS.md", string(ag.AgentsMD))
 	// IDENTITY.md body is synthesized by buildIdentityMD (configure_
 	// workspace.go:63); assert on the name: / emoji: lines rather
 	// than the full body so a cosmetic header change in that
 	// builder doesn't force a test rewrite.
-	assertWorkspaceFileContains(t, dial, host, mc, ag.Workspace, "IDENTITY.md",
+	assertWorkspaceFileContains(t, dial, host, mc, agentWS, "IDENTITY.md",
 		"name: "+ag.Identity.Name)
-	assertWorkspaceFileContains(t, dial, host, mc, ag.Workspace, "IDENTITY.md",
+	assertWorkspaceFileContains(t, dial, host, mc, agentWS, "IDENTITY.md",
 		"emoji: "+ag.Identity.Emoji)
 
 	// 6. `openclaw agents bindings --agent main --json` returns
@@ -559,7 +580,11 @@ func assertAgentInConfig(t *testing.T, machineName string, cfg agentsPhaseConfig
 					machineName, wantID, a.Model, wantModel)
 			}
 			if a.Workspace == "" {
+				if wantID == "main" && wantWorkspace == defaultMainWorkspacePath {
+					return
+				}
 				t.Errorf("[%s] agents.list entry for %q: workspace is empty", machineName, wantID)
+				return
 			}
 			// Accept either "~/.openclaw/workspace" or the
 			// resolved "/home/<user>/.openclaw/workspace" —
