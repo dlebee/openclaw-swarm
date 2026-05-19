@@ -159,7 +159,7 @@ func (s *PairNodeStep) Execute(ctx context.Context, t scaffold.Target) error {
 	// OpenClaw >= 2026.5.18: approve the pending node surface (system.run)
 	// after the node reconnects. Uses the gateway's own auth token via CLI,
 	// the same approach as ApproveDevice. No-op on older releases.
-	return approveNodeSurface(ctx, client, nt)
+	return approveNodeSurface(ctx, s.dial, client, nt)
 }
 
 func (s *PairNodeStep) Verify(ctx context.Context, t scaffold.Target) error {
