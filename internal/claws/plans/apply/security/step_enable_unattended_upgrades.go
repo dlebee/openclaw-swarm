@@ -22,12 +22,12 @@ func NewEnableUnattendedUpgradesStep(opts Options) *EnableUnattendedUpgradesStep
 func (*EnableUnattendedUpgradesStep) Name() string { return "enable-unattended-upgrades" }
 
 func (s *EnableUnattendedUpgradesStep) Applicable(_ context.Context, t scaffold.Target) (bool, error) {
-	_, ok := isHostedMachine(t.Payload)
+	_, ok := isSecurityApplicable(t.Payload)
 	return ok, nil
 }
 
 func (s *EnableUnattendedUpgradesStep) Check(ctx context.Context, t scaffold.Target) (bool, error) {
-	mt, ok := isHostedMachine(t.Payload)
+	mt, ok := isSecurityApplicable(t.Payload)
 	if !ok {
 		return false, nil
 	}
@@ -49,7 +49,7 @@ func (s *EnableUnattendedUpgradesStep) Check(ctx context.Context, t scaffold.Tar
 }
 
 func (s *EnableUnattendedUpgradesStep) Execute(ctx context.Context, t scaffold.Target) error {
-	mt, ok := isHostedMachine(t.Payload)
+	mt, ok := isSecurityApplicable(t.Payload)
 	if !ok {
 		return fmt.Errorf("enable-unattended-upgrades: expected *MachineTarget for %q", t.ID)
 	}
@@ -70,7 +70,7 @@ func (s *EnableUnattendedUpgradesStep) Execute(ctx context.Context, t scaffold.T
 }
 
 func (s *EnableUnattendedUpgradesStep) Verify(ctx context.Context, t scaffold.Target) error {
-	mt, ok := isHostedMachine(t.Payload)
+	mt, ok := isSecurityApplicable(t.Payload)
 	if !ok {
 		return fmt.Errorf("enable-unattended-upgrades verify: expected *MachineTarget for %q", t.ID)
 	}

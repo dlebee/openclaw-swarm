@@ -4,7 +4,6 @@ package security
 
 import (
 	"github.com/gluwa/openclaw-swarm2/internal/claws/plans/apply/provisioning"
-	manifestdata "github.com/gluwa/openclaw-swarm2/internal/manifests/data"
 	"github.com/gluwa/openclaw-swarm2/internal/scaffold"
 )
 
@@ -14,16 +13,21 @@ const maxSecurityConcurrency = 5
 // at maxSecurityConcurrency); each target runs the four security steps
 // sequentially. Targets must be the same []scaffold.Target slice used by
 // provisioning so that Instance (with PublicIPv4) is already populated.
+//
+// Concurrency is sized to the number of machines the security phase will
+// actually touch (hosted machines plus any opt-in `type: ssh` machines
+// with apply_security: true). The same gate is enforced per-step in
+// isSecurityApplicable so the count and the actual run set always match.
 func AddPhase(p *scaffold.Plan, targets []scaffold.Target, opts Options) *scaffold.Phase {
 	ph := p.AddPhase("security")
 
-	hostedN := 0
+	applicableN := 0
 	for _, t := range targets {
-		if mt, ok := t.Payload.(*provisioning.MachineTarget); ok && manifestdata.IsHostedMachineType(mt.Spec.Type) {
-			hostedN++
+		if mt, ok := t.Payload.(*provisioning.MachineTarget); ok && mt.Spec.SecurityPhaseApplies() {
+			applicableN++
 		}
 	}
-	concurrency := hostedN
+	concurrency := applicableN
 	if concurrency < 1 {
 		concurrency = 1
 	}

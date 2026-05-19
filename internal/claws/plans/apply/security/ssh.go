@@ -179,20 +179,31 @@ func runScriptOutput(client *xssh.Client, script string) (string, error) {
 	return stdout.String(), nil
 }
 
-// isHostedMachine is the shared Applicable check for all security steps.
-// It returns (target, true) iff the payload describes a machine backed by
-// a hosting.Provider (linode, multipass, …) — i.e. anything that went
-// through create-machine. Bare `type: ssh` entries are pre-provisioned and
-// must be left alone by the hardening steps (they may not allow our edits
-// to /etc/ssh/sshd_config, and their owners haven't opted into fail2ban /
-// ufw). Keeping the gate centralized here means adding a new provider is
-// a one-line edit to manifestdata.IsHostedMachineType.
-func isHostedMachine(t interface{}) (*provisioning.MachineTarget, bool) {
+// isSecurityApplicable is the shared Applicable check for every security
+// step. It returns (target, true) iff the payload describes a machine the
+// security phase is allowed to touch:
+//
+//   - Hosted machines backed by a hosting.Provider (linode, multipass, …)
+//     — anything that went through create-machine. Always run.
+//   - `type: ssh` machines with apply_security: true — pre-provisioned
+//     hosts that the operator has explicitly opted into hardening for.
+//
+// Bare `type: ssh` entries without the flag are skipped by design: they
+// are pre-provisioned and `claws` doesn't own them. The same rule used to
+// be hard-coded here as "hosted-only"; the apply_security flag now lets
+// operators turn the gate on per-machine for boxes they've decided claws
+// can touch (passwordless sudo + image they're happy to see ufw/fail2ban/
+// unattended-upgrades land on).
+//
+// Centralizing this keeps every step's Applicable / Check / Execute /
+// Verify aligned and means future machine types are a one-line edit to
+// manifestdata.Machine.SecurityPhaseApplies.
+func isSecurityApplicable(t interface{}) (*provisioning.MachineTarget, bool) {
 	mt, ok := t.(*provisioning.MachineTarget)
 	if !ok || mt == nil {
 		return nil, false
 	}
-	if !manifestdata.IsHostedMachineType(mt.Spec.Type) {
+	if !mt.Spec.SecurityPhaseApplies() {
 		return nil, false
 	}
 	return mt, true

@@ -20,12 +20,12 @@ func NewInstallPackagesStep(opts Options) *InstallPackagesStep {
 func (*InstallPackagesStep) Name() string { return "install-security-packages" }
 
 func (s *InstallPackagesStep) Applicable(_ context.Context, t scaffold.Target) (bool, error) {
-	_, ok := isHostedMachine(t.Payload)
+	_, ok := isSecurityApplicable(t.Payload)
 	return ok, nil
 }
 
 func (s *InstallPackagesStep) Check(ctx context.Context, t scaffold.Target) (bool, error) {
-	mt, ok := isHostedMachine(t.Payload)
+	mt, ok := isSecurityApplicable(t.Payload)
 	if !ok {
 		return false, nil
 	}
@@ -52,7 +52,7 @@ func (s *InstallPackagesStep) Check(ctx context.Context, t scaffold.Target) (boo
 }
 
 func (s *InstallPackagesStep) Execute(ctx context.Context, t scaffold.Target) error {
-	mt, ok := isHostedMachine(t.Payload)
+	mt, ok := isSecurityApplicable(t.Payload)
 	if !ok {
 		return fmt.Errorf("install-security-packages: expected *MachineTarget for %q", t.ID)
 	}
@@ -76,7 +76,7 @@ func (s *InstallPackagesStep) Execute(ctx context.Context, t scaffold.Target) er
 }
 
 func (s *InstallPackagesStep) Verify(ctx context.Context, t scaffold.Target) error {
-	mt, ok := isHostedMachine(t.Payload)
+	mt, ok := isSecurityApplicable(t.Payload)
 	if !ok {
 		return fmt.Errorf("install-security-packages verify: expected *MachineTarget for %q", t.ID)
 	}

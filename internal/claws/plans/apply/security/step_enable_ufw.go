@@ -20,12 +20,12 @@ func NewEnableUFWStep(opts Options) *EnableUFWStep {
 func (*EnableUFWStep) Name() string { return "enable-ufw" }
 
 func (s *EnableUFWStep) Applicable(_ context.Context, t scaffold.Target) (bool, error) {
-	_, ok := isHostedMachine(t.Payload)
+	_, ok := isSecurityApplicable(t.Payload)
 	return ok, nil
 }
 
 func (s *EnableUFWStep) Check(ctx context.Context, t scaffold.Target) (bool, error) {
-	mt, ok := isHostedMachine(t.Payload)
+	mt, ok := isSecurityApplicable(t.Payload)
 	if !ok {
 		return false, nil
 	}
@@ -47,7 +47,7 @@ func (s *EnableUFWStep) Check(ctx context.Context, t scaffold.Target) (bool, err
 }
 
 func (s *EnableUFWStep) Execute(ctx context.Context, t scaffold.Target) error {
-	mt, ok := isHostedMachine(t.Payload)
+	mt, ok := isSecurityApplicable(t.Payload)
 	if !ok {
 		return fmt.Errorf("enable-ufw: expected *MachineTarget for %q", t.ID)
 	}
@@ -72,7 +72,7 @@ func (s *EnableUFWStep) Execute(ctx context.Context, t scaffold.Target) error {
 }
 
 func (s *EnableUFWStep) Verify(ctx context.Context, t scaffold.Target) error {
-	mt, ok := isHostedMachine(t.Payload)
+	mt, ok := isSecurityApplicable(t.Payload)
 	if !ok {
 		return fmt.Errorf("enable-ufw verify: expected *MachineTarget for %q", t.ID)
 	}

@@ -218,7 +218,11 @@ password SSH by then anyway.
 `destroy` removes the provisioned machines (Multipass delete / Linode
 delete). `clean` removes local claws state (plan cache, SSH known-hosts).
 `type: ssh` machines are never deleted — `claws` has no authority over
-pre-existing hosts.
+pre-existing hosts. By default they also skip the `security` phase
+(ufw / fail2ban / unattended-upgrades) for the same reason; set
+`apply_security: true` on the machine entry to opt back in when you
+*do* want claws to harden a pre-existing host. See `manifest.md` for
+the field reference.
 
 ## Where to go next
 

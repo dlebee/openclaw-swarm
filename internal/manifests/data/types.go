@@ -262,6 +262,35 @@ type Machine struct {
 	CPUs   int    `yaml:"cpus,omitempty"`
 	Memory string `yaml:"memory,omitempty"`
 	Disk   string `yaml:"disk,omitempty"`
+
+	// ApplySecurity opts a `type: ssh` machine into the security phase
+	// (install-security-packages, enable-ufw, enable-fail2ban,
+	// enable-unattended-upgrades). The default is false: pre-provisioned
+	// SSH boxes are owned by the operator and `claws` leaves their host
+	// hardening alone, because (a) we may not have permission to edit
+	// /etc/ssh/sshd_config, and (b) the operator hasn't necessarily
+	// opted into fail2ban / ufw.
+	//
+	// Set apply_security: true when you DO want claws to run the same
+	// hardening steps it runs on hosted (linode/multipass) machines. The
+	// bootstrap_user must have passwordless sudo (the platformutil/apt
+	// and platformutil/ufw helpers shell out via `sudo`).
+	//
+	// Hosted types (linode/multipass) ignore this field: they always run
+	// the security phase as part of provisioning.
+	ApplySecurity bool `yaml:"apply_security,omitempty"`
+}
+
+// SecurityPhaseApplies reports whether the security phase should run
+// against this machine. Hosted machine types (linode/multipass) always
+// run; `type: ssh` only runs when the operator explicitly sets
+// apply_security: true. Centralizing this gate keeps the security
+// package and any future caller (validation, plan preview) in lockstep.
+func (m Machine) SecurityPhaseApplies() bool {
+	if IsHostedMachineType(m.Type) {
+		return true
+	}
+	return m.Type == MachineTypeSSH && m.ApplySecurity
 }
 
 // Gateway is an OpenClaw gateway instance bound to a machine reference.
