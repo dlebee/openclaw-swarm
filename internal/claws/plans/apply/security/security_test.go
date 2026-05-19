@@ -37,6 +37,9 @@ func TestApplicable_linodeMachine(t *testing.T) {
 }
 
 func TestApplicable_sshMachineSkipped(t *testing.T) {
+	// Default behaviour: bare `type: ssh` (no apply_security flag) skips
+	// the entire security phase. Pre-provisioned hosts are owned by the
+	// operator and must be left alone unless they opt in.
 	for _, s := range allSteps(Options{}) {
 		ok, err := s.Applicable(context.Background(), scaffold.Target{
 			ID:      "jump",
@@ -46,7 +49,28 @@ func TestApplicable_sshMachineSkipped(t *testing.T) {
 			t.Fatalf("%s: %v", s.Name(), err)
 		}
 		if ok {
-			t.Fatalf("%s: expected not applicable for SSH machine", s.Name())
+			t.Fatalf("%s: expected not applicable for SSH machine without apply_security", s.Name())
+		}
+	}
+}
+
+func TestApplicable_sshMachineWithApplySecurityRuns(t *testing.T) {
+	// Opt-in: `type: ssh` + apply_security: true must run every security
+	// step the same way a hosted (linode/multipass) machine does.
+	for _, s := range allSteps(Options{}) {
+		ok, err := s.Applicable(context.Background(), scaffold.Target{
+			ID: "jump",
+			Payload: &provisioning.MachineTarget{Spec: manifestdata.Machine{
+				Name:          "jump",
+				Type:          manifestdata.MachineTypeSSH,
+				ApplySecurity: true,
+			}},
+		})
+		if err != nil {
+			t.Fatalf("%s: %v", s.Name(), err)
+		}
+		if !ok {
+			t.Fatalf("%s: expected applicable for SSH machine with apply_security: true", s.Name())
 		}
 	}
 }
@@ -194,5 +218,35 @@ func TestAddPhase_stepCount(t *testing.T) {
 		if s.Name() != want[i] {
 			t.Fatalf("step[%d] = %q, want %q", i, s.Name(), want[i])
 		}
+	}
+}
+
+func TestAddPhase_concurrencyCountsApplySecuritySSH(t *testing.T) {
+	// Concurrency must reflect every machine the phase will touch — both
+	// hosted machines and SSH machines that opted in via apply_security.
+	// Bare ssh entries (no flag) are not counted so they don't inflate
+	// the concurrency budget for a phase they never run on.
+	p := scaffold.New()
+	ph := AddPhase(p, provisioning.BuildMachineTargets([]manifestdata.Machine{
+		{Name: "linode-web", Type: manifestdata.MachineTypeLinode},
+		{Name: "jump-opted-in", Type: manifestdata.MachineTypeSSH, ApplySecurity: true},
+		{Name: "jump-bare", Type: manifestdata.MachineTypeSSH},
+	}), Options{})
+	if got, want := ph.Concurrency, 2; got != want {
+		t.Fatalf("phase Concurrency = %d, want %d (1 linode + 1 ssh-opt-in, ignoring bare ssh)", got, want)
+	}
+}
+
+func TestAddPhase_concurrencyAllSkippedClampsToOne(t *testing.T) {
+	// All-SSH-no-flag manifest: the phase still exists but no machine is
+	// applicable. The concurrency floor of 1 keeps scaffold happy without
+	// implying any work will actually run.
+	p := scaffold.New()
+	ph := AddPhase(p, provisioning.BuildMachineTargets([]manifestdata.Machine{
+		{Name: "jump1", Type: manifestdata.MachineTypeSSH},
+		{Name: "jump2", Type: manifestdata.MachineTypeSSH},
+	}), Options{})
+	if got, want := ph.Concurrency, 1; got != want {
+		t.Fatalf("phase Concurrency = %d, want %d (floor)", got, want)
 	}
 }

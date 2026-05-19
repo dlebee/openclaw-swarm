@@ -11,8 +11,10 @@ import (
 	"github.com/gluwa/openclaw-swarm2/internal/scaffold"
 )
 
-// PairNodeStep approves the node's pending device entry on the gateway.
-// This step SSHes into the gateway host to run `openclaw devices approve`.
+// PairNodeStep approves the node's pending device entry on the gateway
+// and, on OpenClaw >= 2026.5.18, promotes the node's command surface so
+// agents can use system.run over the node websocket. Older OpenClaw
+// releases only need device pairing; surface approval is a no-op there.
 type PairNodeStep struct {
 	dial         SSHDialFunc
 	reader       common.ConfigReader
@@ -52,7 +54,14 @@ func (s *PairNodeStep) Check(ctx context.Context, t scaffold.Target) (bool, erro
 	if err != nil {
 		return false, fmt.Errorf("list devices on %s: %w", gwMach.Name, err)
 	}
-	return isNodePaired(dl, nt.Spec.Name), nil
+	if !isNodePaired(dl, nt.Spec.Name) {
+		return false, nil
+	}
+	okSurface, err := nodeSurfaceSatisfied(client, nt.Spec.Name)
+	if err != nil {
+		return false, fmt.Errorf("pair-node check: %w", err)
+	}
+	return okSurface, nil
 }
 
 func isNodePaired(dl *common.DeviceList, displayName string) bool {
@@ -146,7 +155,10 @@ func (s *PairNodeStep) Execute(ctx context.Context, t scaffold.Target) error {
 	if err := systemd.Restart(nodeClient, nodeUnit, true); err != nil {
 		return fmt.Errorf("pair-node: restart node daemon: %w", err)
 	}
-	return nil
+
+	// OpenClaw >= 2026.5.18: approve the pending node surface (system.run)
+	// after the node reconnects. No-op on older releases.
+	return approveNodeSurface(ctx, s.dial, client, nt)
 }
 
 func (s *PairNodeStep) Verify(ctx context.Context, t scaffold.Target) error {
@@ -166,6 +178,15 @@ func (s *PairNodeStep) Verify(ctx context.Context, t scaffold.Target) error {
 	}
 	if !isNodePaired(dl, nt.Spec.Name) {
 		return fmt.Errorf("pair-node verify: node %q not found in paired devices", nt.Spec.Name)
+	}
+	okSurface, err := nodeSurfaceSatisfied(client, nt.Spec.Name)
+	if err != nil {
+		return fmt.Errorf("pair-node verify: %w", err)
+	}
+	if !okSurface {
+		commands, _ := readPairedNodeCommands(client, nt.Spec.Name)
+		return fmt.Errorf("pair-node verify: node %q effective commands %v missing required surface %v",
+			nt.Spec.Name, commands, surfaceCommandsRequired)
 	}
 	return nil
 }

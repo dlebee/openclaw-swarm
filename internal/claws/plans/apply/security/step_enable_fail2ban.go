@@ -31,12 +31,12 @@ func NewEnableFail2banStep(opts Options) *EnableFail2banStep {
 func (*EnableFail2banStep) Name() string { return "enable-fail2ban" }
 
 func (s *EnableFail2banStep) Applicable(_ context.Context, t scaffold.Target) (bool, error) {
-	_, ok := isHostedMachine(t.Payload)
+	_, ok := isSecurityApplicable(t.Payload)
 	return ok, nil
 }
 
 func (s *EnableFail2banStep) Check(ctx context.Context, t scaffold.Target) (bool, error) {
-	mt, ok := isHostedMachine(t.Payload)
+	mt, ok := isSecurityApplicable(t.Payload)
 	if !ok {
 		return false, nil
 	}
@@ -58,7 +58,7 @@ func (s *EnableFail2banStep) Check(ctx context.Context, t scaffold.Target) (bool
 }
 
 func (s *EnableFail2banStep) Execute(ctx context.Context, t scaffold.Target) error {
-	mt, ok := isHostedMachine(t.Payload)
+	mt, ok := isSecurityApplicable(t.Payload)
 	if !ok {
 		return fmt.Errorf("enable-fail2ban: expected *MachineTarget for %q", t.ID)
 	}
@@ -108,7 +108,7 @@ fi
 }
 
 func (s *EnableFail2banStep) Verify(ctx context.Context, t scaffold.Target) error {
-	mt, ok := isHostedMachine(t.Payload)
+	mt, ok := isSecurityApplicable(t.Payload)
 	if !ok {
 		return fmt.Errorf("enable-fail2ban verify: expected *MachineTarget for %q", t.ID)
 	}

@@ -68,12 +68,13 @@ machines:
     ssh_key_env: SSH_KEY_PATH   # optional override for SSH key path
     arch: linux-arm64           # optional; defaults inferred from image/sku
     container: false            # internal; used by docker tests
+    apply_security: false       # type: ssh only — opt-in to the security phase
 ```
 
 | Field | Applies to | Notes |
 | ----- | ---------- | ----- |
 | `name` | all | Local-only identifier. Rejected if equal to `self` (reserved for local execution). |
-| `type` | all | `linode`, `ssh`, `multipass`. `self` is synthetic and never appears here. `linode`/`multipass` are "hosted" types that get created + hardened by `provisioning` and `security` phases; `ssh` types skip provisioning and assume an already-hardened host. |
+| `type` | all | `linode`, `ssh`, `multipass`. `self` is synthetic and never appears here. `linode`/`multipass` are "hosted" types that get created + hardened by `provisioning` and `security` phases; `ssh` types skip provisioning and (by default) skip security too — pass `apply_security: true` to opt in. |
 | `sku`, `image`, `region` | linode | Passed through to Linode's instance API. |
 | `cpus`, `memory`, `disk` | multipass | Units match `multipass launch` (`1G`, `512M`, …). Zero/empty → provider defaults. |
 | `host`, `ssh_port` | ssh | Required for pre-existing hosts. For hosted types they're filled in post-provisioning and persisted to local state. |
@@ -81,6 +82,7 @@ machines:
 | `bootstrap_user` | all | Privileged identity used ONLY during `provisioning` and `security` phases. Never used post-bootstrap. |
 | `agent_user` | all | Unprivileged identity every post-security phase uses. |
 | `arch` | all | `linux-x64`, `linux-arm64`, `darwin-x64`, `darwin-arm64`. Auto-detected for hosted types; required if you ship arch-specific binaries via automations. |
+| `apply_security` | ssh | When `true`, run the security phase (`install-security-packages`, `enable-ufw`, `enable-fail2ban`, `enable-unattended-upgrades`) on this pre-existing host. Default `false`: claws leaves pre-provisioned SSH boxes alone. Requires the `bootstrap_user` to have passwordless sudo. Hosted types (`linode`/`multipass`) ignore this field — they always run security. |
 
 ### The reserved `self` target
 
