@@ -56,15 +56,15 @@ func nodeSurfaceSatisfied(client *xssh.Client, displayName string) (bool, error)
 // approveNodeSurface promotes a pending node-pair request on OpenClaw
 // >= NodeSurfaceApprovalRequiredSince. No-op on older releases.
 //
-// Why direct file manipulation instead of `openclaw nodes approve`?
-// The node.pair.approve RPC requires operator.admin scope on the caller's
-// session. The gateway's own auth token (used by ApproveDevice for device
-// pairing) doesn't carry operator.admin — so even passing --token <gw-token>
-// to `openclaw nodes approve` hits "missing scope: operator.admin". The only
-// escape hatch is writing directly to the gateway's on-disk nodes/paired.json
-// and restarting the gateway so it reloads state, then restarting the node
-// daemon to trigger reconcileNodePairingOnConnect — same pattern the gateway
-// phase uses for the paired-devices.json admin-scope patch.
+// The node.pair.approve RPC requires operator.admin scope. The gateway
+// machine's local CLI device starts with operator.pairing scope (the scope
+// openclaw cron list requests when triggering the initial pairing in
+// pair-gateway-device), which is insufficient. Rather than chasing token
+// upgrade paths we use the same pattern pair-gateway-device already uses for
+// device scope escalation: write directly to the gateway's on-disk
+// nodes/paired.json, restart the gateway to reload state, then restart the
+// node daemon so it reconnects and reconcileNodePairingOnConnect populates
+// effectiveCommands.
 func approveNodeSurface(ctx context.Context, dial SSHDialFunc, gwClient *xssh.Client, nt *NodeTarget) error {
 	ver, err := probeOpenclawVersion(gwClient)
 	if err != nil {
@@ -115,6 +115,13 @@ func probeOpenclawVersion(client *xssh.Client) (openclawver.Version, error) {
 // Returns (true, nil) when a matching pending entry was found and promoted;
 // (false, nil) when no pending entry exists yet (node hasn't reconnected);
 // (false, err) on any I/O or shell error.
+//
+// Why not `openclaw nodes approve`? That RPC requires operator.admin scope.
+// The gateway machine's CLI device is paired with operator.pairing scope
+// (the scope openclaw cron list requests) — insufficient for node surface
+// approval. Directly editing nodes/paired.json and restarting sidesteps the
+// scope check entirely, the same way pair-gateway-device escalates device
+// scope by patching devices/paired.json.
 func promotePendingNodeToPaired(client *xssh.Client, displayName string) (bool, error) {
 	script := fmt.Sprintf(`set -euo pipefail
 PENDING=~/.openclaw/nodes/pending.json
