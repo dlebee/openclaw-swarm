@@ -1,6 +1,10 @@
 # 06 — `openclaw nodes approve` requires `operator.admin` scope, blocking automation
 
-## Problem
+**Status: RESOLVED** — OpenClaw 2026.5.x patched gateway token auth to have
+sufficient scope for node surface approval. The file-surgery workaround has
+been removed in favor of using `openclaw nodes approve --token <gateway_token>`.
+
+## Problem (historical)
 
 In OpenClaw >= 2026.5.18 (introduced by gateway commit `6160e7a411`
 "fix(gateway): hide unapproved node surfaces"), device pairing and node-surface
@@ -100,8 +104,15 @@ OpenClaw older than 2026.5.18.
 
 ## openclaw-swarm tracking
 
-- **Workaround implemented in:** `internal/claws/plans/apply/node/pair_node_surface.go`
-  — function `promotePendingNodeToPaired`
+- **Solution:** `internal/claws/plans/apply/node/pair_node_surface.go` now uses
+  `openclaw nodes approve --token <gateway_token>` via `gwService.ApproveNode()`
 - **Version gate:** `NodeSurfaceApprovalRequiredSince = 2026.5.18`
 - **Tests covering this path:** `TestCronAgentWithNodeExec`, `TestNodeSmoke`
   in `test/integration/multipass/`
+
+## Resolution
+
+OpenClaw 2026.5.x patched the gateway to treat shared-secret auth (gateway
+token) as having sufficient operator scope for node surface approval. The
+original file-surgery workaround (`promotePendingNodeToPaired`) has been
+replaced with proper CLI usage via `openclaw nodes approve --token`.
