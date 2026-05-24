@@ -362,3 +362,25 @@ func ApproveDevice(client *xssh.Client, requestID string) error {
 	}
 	return nil
 }
+
+// ApproveNode approves a pending node surface request by its requestId.
+// It uses the gateway token to authenticate, which now has sufficient scope
+// since OpenClaw 2026.5.x patched the operator.admin requirement.
+func ApproveNode(client *xssh.Client, requestID string) error {
+	// Read the gateway token to authenticate the approval.
+	tokenScript := common.OpenclawCLIPreamble() + `openclaw config get gateway.token 2>/dev/null`
+	tokenOut, _ := bash.RunOutput(client, tokenScript)
+	token := strings.TrimSpace(tokenOut)
+
+	var script string
+	if token != "" && !strings.HasPrefix(token, "Config") && token != "__missing__" {
+		script = common.OpenclawCLIPreamble() + fmt.Sprintf(`openclaw nodes approve %q --token %q`, requestID, token)
+	} else {
+		script = common.OpenclawCLIPreamble() + fmt.Sprintf(`openclaw nodes approve %q`, requestID)
+	}
+	out, err := bash.RunOutput(client, script)
+	if err != nil {
+		return fmt.Errorf("approve node %s: %w\n%s", requestID, err, out)
+	}
+	return nil
+}

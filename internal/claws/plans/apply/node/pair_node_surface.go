@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/gluwa/openclaw-swarm2/internal/claws/plans/apply/common"
+	gwService "github.com/gluwa/openclaw-swarm2/internal/claws/plans/apply/gateway"
 	"github.com/gluwa/openclaw-swarm2/internal/openclawver"
 	"github.com/gluwa/openclaw-swarm2/internal/platformutil/bash"
 	xssh "golang.org/x/crypto/ssh"
@@ -53,18 +54,13 @@ func nodeSurfaceSatisfied(client *xssh.Client, displayName string) (bool, error)
 	return hasAllSurfaceCommands(commands, surfaceCommandsRequired), nil
 }
 
-// approveNodeSurface promotes a pending node-pair request on OpenClaw
-// >= NodeSurfaceApprovalRequiredSince. No-op on older releases.
+// approveNodeSurface approves a pending node-pair surface request on OpenClaw
+// >= NodeSurfaceApprovalRequiredSince using `openclaw nodes approve`. No-op
+// on older releases.
 //
-// The node.pair.approve RPC requires operator.admin scope. The gateway
-// machine's local CLI device starts with operator.pairing scope (the scope
-// openclaw cron list requests when triggering the initial pairing in
-// pair-gateway-device), which is insufficient. Rather than chasing token
-// upgrade paths we use the same pattern pair-gateway-device already uses for
-// device scope escalation: write directly to the gateway's on-disk
-// nodes/paired.json, restart the gateway to reload state, then restart the
-// node daemon so it reconnects and reconcileNodePairingOnConnect populates
-// effectiveCommands.
+// The gateway token is used to authenticate, which has sufficient scope since
+// OpenClaw 2026.5.x patched the operator.admin requirement for gateway token
+// auth.
 func approveNodeSurface(ctx context.Context, dial SSHDialFunc, gwClient *xssh.Client, nt *NodeTarget) error {
 	ver, err := probeOpenclawVersion(gwClient)
 	if err != nil {
@@ -76,16 +72,37 @@ func approveNodeSurface(ctx context.Context, dial SSHDialFunc, gwClient *xssh.Cl
 
 	const maxAttempts = 20
 	for i := 0; i < maxAttempts; i++ {
+		// Check if surface is already approved
 		commands, err := readPairedNodeCommands(gwClient, nt.Spec.Name)
 		if err == nil && hasAllSurfaceCommands(commands, surfaceCommandsRequired) {
 			return nil
 		}
-		patched, err := promotePendingNodeToPaired(gwClient, nt.Spec.Name)
-		if err == nil && patched {
-			if err := restartNodeDaemon(ctx, dial, nt); err != nil {
-				return fmt.Errorf("pair-node: restart node after surface promote: %w", err)
+
+		// Try to find and approve the pending request
+		requestID, err := findPendingNodeRequest(gwClient, nt.Spec.Name)
+		if err != nil {
+			// Log but continue - might not be pending yet
+			select {
+			case <-ctx.Done():
+				return ctx.Err()
+			case <-time.After(2 * time.Second):
 			}
+			continue
 		}
+		if requestID != "" {
+			if err := gwService.ApproveNode(gwClient, requestID); err != nil {
+				// Log but continue - approval may fail transiently
+				select {
+				case <-ctx.Done():
+					return ctx.Err()
+				case <-time.After(2 * time.Second):
+				}
+				continue
+			}
+			// Give the gateway time to process and the node time to reconnect
+			time.Sleep(2 * time.Second)
+		}
+
 		select {
 		case <-ctx.Done():
 			return ctx.Err()
@@ -108,108 +125,50 @@ func probeOpenclawVersion(client *xssh.Client) (openclawver.Version, error) {
 	return openclawver.Parse(out)
 }
 
-// promotePendingNodeToPaired moves a pending node-pair request from
-// ~/.openclaw/nodes/pending.json to ~/.openclaw/nodes/paired.json on the
-// gateway VM, then restarts the gateway so it reloads state.
-//
-// Returns (true, nil) when a matching pending entry was found and promoted;
-// (false, nil) when no pending entry exists yet (node hasn't reconnected);
-// (false, err) on any I/O or shell error.
-//
-// Why not `openclaw nodes approve`? That RPC requires operator.admin scope.
-// The gateway machine's CLI device is paired with operator.pairing scope
-// (the scope openclaw cron list requests) — insufficient for node surface
-// approval. Directly editing nodes/paired.json and restarting sidesteps the
-// scope check entirely, the same way pair-gateway-device escalates device
-// scope by patching devices/paired.json.
-func promotePendingNodeToPaired(client *xssh.Client, displayName string) (bool, error) {
-	script := fmt.Sprintf(`set -euo pipefail
-PENDING=~/.openclaw/nodes/pending.json
-PAIRED=~/.openclaw/nodes/paired.json
-[ -f "$PENDING" ] || { echo "no-pending-file" >&2; exit 0; }
-[ -f "$PAIRED" ]  || echo "{}" > "$PAIRED"
+// findPendingNodeRequest looks up the pending node surface request ID for
+// the node with the given displayName by running `openclaw nodes list --json`.
+// Returns ("", nil) when no pending request is found.
+func findPendingNodeRequest(client *xssh.Client, displayName string) (string, error) {
+	// Read the gateway token for authentication
+	tokenScript := common.OpenclawCLIPreamble() + `openclaw config get gateway.token 2>/dev/null`
+	tokenOut, _ := bash.RunOutput(client, tokenScript)
+	token := strings.TrimSpace(tokenOut)
 
-MATCH=$(jq -r --arg name %q '
-  to_entries[]
-  | select(.value.displayName == $name)
-  | .key
-' "$PENDING" | head -1)
-if [ -z "$MATCH" ]; then
-  echo "no-pending-match" >&2
-  exit 0
-fi
+	var script string
+	if token != "" && !strings.HasPrefix(token, "Config") && token != "__missing__" {
+		script = common.OpenclawCLIPreamble() + fmt.Sprintf(`openclaw nodes list --json --token %q 2>/dev/null`, token)
+	} else {
+		script = common.OpenclawCLIPreamble() + `openclaw nodes list --json 2>/dev/null`
+	}
 
-NOW=$(date +%%s%%3N)
-TOKEN=$(openssl rand -base64 32 | tr -d '/+=\n' | head -c 32)
-
-TMP=$(mktemp /tmp/paired-nodes.json.XXXXXX)
-jq --arg req "$MATCH" --arg now "$NOW" --arg token "$TOKEN" --slurpfile paired "$PAIRED" '
-  (.[$req]) as $r
-  | ($paired[0] // {}) + {
-      ($r.nodeId): {
-        nodeId: $r.nodeId,
-        token: $token,
-        clientId: "node-host",
-        clientMode: "node",
-        displayName: $r.displayName,
-        platform: $r.platform,
-        version: $r.version,
-        coreVersion: $r.coreVersion,
-        uiVersion: $r.uiVersion,
-        deviceFamily: $r.deviceFamily,
-        modelIdentifier: $r.modelIdentifier,
-        caps: $r.caps,
-        commands: $r.commands,
-        permissions: $r.permissions,
-        remoteIp: $r.remoteIp,
-        createdAtMs: ($now | tonumber),
-        approvedAtMs: ($now | tonumber)
-      }
-    }
-' "$PENDING" > "$TMP"
-mv "$TMP" "$PAIRED"
-
-TMP=$(mktemp /tmp/pending-nodes.json.XXXXXX)
-jq --arg req "$MATCH" 'del(.[$req])' "$PENDING" > "$TMP"
-mv "$TMP" "$PENDING"
-
-echo "promoted" >&2
-
-export XDG_RUNTIME_DIR="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}"
-export DBUS_SESSION_BUS_ADDRESS="${DBUS_SESSION_BUS_ADDRESS:-unix:path=$XDG_RUNTIME_DIR/bus}"
-systemctl --user restart openclaw-gateway 2>/dev/null || \
-  sudo systemctl restart openclaw-gateway 2>/dev/null || true
-sleep 4
-`, displayName)
 	out, err := bash.RunOutput(client, script)
 	if err != nil {
-		return false, fmt.Errorf("promote pending node: %w\n%s", err, out)
+		return "", fmt.Errorf("openclaw nodes list --json: %w", err)
 	}
-	return strings.Contains(out, "promoted"), nil
-}
+	body := strings.TrimSpace(out)
+	if body == "" {
+		return "", nil
+	}
 
-// restartNodeDaemon SSHes into the node VM and bounces openclaw-node so it
-// reconnects to the gateway. After the gateway reloads its paired-nodes state,
-// the reconnect drives reconcileNodePairingOnConnect to populate the node's
-// effective command surface.
-func restartNodeDaemon(ctx context.Context, dial SSHDialFunc, nt *NodeTarget) error {
-	m := nt.Machine
-	host := common.ResolveMachineHost(ctx, m)
-	client, key, err := common.BorrowSSH(ctx, dial, host, common.MachineSSHPort(m), common.MachineAgentUser(m))
-	if err != nil {
-		return fmt.Errorf("dial node %s: %w", m.Name, err)
+	type pendingEntry struct {
+		RequestID   string `json:"requestId"`
+		DisplayName string `json:"displayName"`
 	}
-	defer common.ReturnSSH(ctx, key, client)
-	script := `export XDG_RUNTIME_DIR="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}"
-export DBUS_SESSION_BUS_ADDRESS="${DBUS_SESSION_BUS_ADDRESS:-unix:path=$XDG_RUNTIME_DIR/bus}"
-systemctl --user restart openclaw-node 2>/dev/null || \
-  sudo systemctl restart openclaw-node 2>/dev/null || true
-sleep 4
-`
-	if _, err := bash.RunOutput(client, script); err != nil {
-		return fmt.Errorf("restart openclaw-node: %w", err)
+
+	if body[0] == '{' {
+		var wrap struct {
+			Pending []pendingEntry `json:"pending"`
+		}
+		if err := json.Unmarshal([]byte(body), &wrap); err != nil {
+			return "", fmt.Errorf("parse openclaw nodes list --json (object form): %w", err)
+		}
+		for _, p := range wrap.Pending {
+			if p.DisplayName == displayName {
+				return p.RequestID, nil
+			}
+		}
 	}
-	return nil
+	return "", nil
 }
 
 // readPairedNodeCommands runs `openclaw nodes list --json` and returns the
