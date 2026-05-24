@@ -76,9 +76,15 @@ func (s *ConfigureBindingsStep) Execute(ctx context.Context, t scaffold.Target) 
 
 	toAdd, toRemove := diffBindings(current, at.Spec.Bindings)
 
+	// Serialize config mutations per machine to avoid ConfigMutationConflictError
 	for _, b := range toRemove {
 		script := common.OpenclawCLIPreamble() + fmt.Sprintf(`openclaw agents unbind --agent %q --bind %q`, at.Spec.ID, formatBinding(b))
-		out, err := bash.RunOutput(client, script)
+		var out string
+		err := common.WithConfigMutationLock(m.Name, func() error {
+			var runErr error
+			out, runErr = bash.RunOutput(client, script)
+			return runErr
+		})
 		if err != nil {
 			return fmt.Errorf("configure-bindings: unbind %s: %w\n%s", formatBinding(b), err, out)
 		}
@@ -86,7 +92,12 @@ func (s *ConfigureBindingsStep) Execute(ctx context.Context, t scaffold.Target) 
 
 	for _, b := range toAdd {
 		script := common.OpenclawCLIPreamble() + fmt.Sprintf(`openclaw agents bind --agent %q --bind %q`, at.Spec.ID, formatBinding(b))
-		out, err := bash.RunOutput(client, script)
+		var out string
+		err := common.WithConfigMutationLock(m.Name, func() error {
+			var runErr error
+			out, runErr = bash.RunOutput(client, script)
+			return runErr
+		})
 		if err != nil {
 			return fmt.Errorf("configure-bindings: bind %s: %w\n%s", formatBinding(b), err, out)
 		}

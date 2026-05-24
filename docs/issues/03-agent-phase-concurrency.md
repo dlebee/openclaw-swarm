@@ -1,6 +1,9 @@
 # 03 — Agent phase concurrency limited to 1 (config file race)
 
-## Problem
+**Status: RESOLVED** — OpenClaw 2026.5.x implemented file locking (Option B)
+around config reads/writes. The swarm tool now uses `maxAgentConcurrency = 5`.
+
+## Problem (historical)
 
 Multiple agents can target the same gateway machine. Each step in the agents
 phase (`add-agent`, `ensure-model`, `configure-tools`, etc.) reads and writes
@@ -56,4 +59,11 @@ would still be unreliable.
 
 ## Files affected
 
-- `internal/claws/plans/apply/agents/agents.go` — `maxAgentConcurrency = 1`
+- `internal/claws/plans/apply/agents/agents.go` — `maxAgentConcurrency = 5` (was 1)
+
+## Resolution
+
+OpenClaw 2026.5.x implemented file locking in the CLI (Option B), so concurrent
+`openclaw agents add` and `openclaw config set` commands now serialize properly.
+The swarm tool has raised `maxAgentConcurrency` from 1 to 5 to take advantage
+of this fix.

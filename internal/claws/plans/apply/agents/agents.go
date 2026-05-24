@@ -8,10 +8,10 @@ import (
 	"github.com/gluwa/openclaw-swarm2/internal/scaffold"
 )
 
-// maxAgentConcurrency caps parallel agent targets. Currently 1 because
-// agents sharing a gateway race on openclaw.json writes. See
-// docs/issues/03-agent-phase-concurrency.md.
-const maxAgentConcurrency = 1
+// maxAgentConcurrency caps parallel agent targets. OpenClaw 2026.5.x
+// fixed the race on openclaw.json writes, so we can now run agents
+// in parallel.
+const maxAgentConcurrency = 5
 
 // maxAgentProbeConcurrency caps parallel Applicable+Check per target during
 // prepared-plan probing only. Execute still uses maxAgentConcurrency.

@@ -145,7 +145,13 @@ func (s *ConfigureWorkspaceStep) Execute(ctx context.Context, t scaffold.Target)
 		if at.Spec.Identity.Emoji != "" {
 			cmd += fmt.Sprintf(` --emoji %q`, at.Spec.Identity.Emoji)
 		}
-		out, err := bash.RunOutput(client, cmd)
+		// Serialize config mutations per machine to avoid ConfigMutationConflictError
+		var out string
+		err := common.WithConfigMutationLock(m.Name, func() error {
+			var runErr error
+			out, runErr = bash.RunOutput(client, cmd)
+			return runErr
+		})
 		if err != nil {
 			return fmt.Errorf("configure-workspace: set-identity: %w\n%s", err, out)
 		}

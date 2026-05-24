@@ -64,9 +64,7 @@ agents:
     identity:
       name: Research
       emoji: "🔬"
-    bindings:
-      - channel: telegram
-        account: telegram-main
+    bindings: []  # No bindings - validates agent creation without channel binding
 
   - id: ops
     gateway: gateway

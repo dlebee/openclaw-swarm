@@ -76,14 +76,20 @@ func (s *AddAgentStep) Execute(ctx context.Context, t scaffold.Target) error {
 	defer common.ReturnSSH(ctx, key, client)
 
 	if at.Spec.ID == defaultAgentID {
-		return s.seedDefaultAgent(client, at.Spec.Workspace)
+		return s.seedDefaultAgent(client, m.Name, at.Spec.Workspace)
 	}
 
 	script := common.OpenclawCLIPreamble() + fmt.Sprintf(
 		`openclaw agents add %q --workspace %q --model %q --non-interactive 2>&1`,
 		at.Spec.ID, at.Spec.Workspace, at.Spec.Model.Primary)
 
-	out, err := bash.RunOutput(client, script)
+	// Serialize config mutations per machine to avoid ConfigMutationConflictError
+	var out string
+	err = common.WithConfigMutationLock(m.Name, func() error {
+		var runErr error
+		out, runErr = bash.RunOutput(client, script)
+		return runErr
+	})
 	if err != nil {
 		return fmt.Errorf("add-agent: openclaw agents add failed: %w\n%s", err, out)
 	}
@@ -96,7 +102,7 @@ func (s *AddAgentStep) Execute(ctx context.Context, t scaffold.Target) error {
 // against the remote $HOME here because `agents add` (which we can't use
 // for id="main") is the normal place where ~ expansion happens. Model is
 // left to ensure-model.
-func (s *AddAgentStep) seedDefaultAgent(client *xssh.Client, workspace string) error {
+func (s *AddAgentStep) seedDefaultAgent(client *xssh.Client, machineName, workspace string) error {
 	resolved, err := resolveRemoteWorkspace(client, workspace)
 	if err != nil {
 		return fmt.Errorf("add-agent: resolve workspace for %q: %w", defaultAgentID, err)
@@ -111,9 +117,16 @@ func (s *AddAgentStep) seedDefaultAgent(client *xssh.Client, workspace string) e
 		return fmt.Errorf("add-agent: marshal seed for %q: %w", defaultAgentID, err)
 	}
 	script := fmt.Sprintf(`set -euo pipefail
-%sopenclaw config set --batch-json '%s'
+%sopenclaw config set --merge --batch-json '%s'
 `, common.OpenclawCLIPreamble(), string(batchJSON))
-	out, err := bash.RunOutput(client, script)
+
+	// Serialize config mutations per machine to avoid ConfigMutationConflictError
+	var out string
+	err = common.WithConfigMutationLock(machineName, func() error {
+		var runErr error
+		out, runErr = bash.RunOutput(client, script)
+		return runErr
+	})
 	if err != nil {
 		return fmt.Errorf("add-agent: seed agents.list for %q failed: %w\n%s", defaultAgentID, err, out)
 	}

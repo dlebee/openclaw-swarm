@@ -120,7 +120,13 @@ func (s *EnsureModelStep) Execute(ctx context.Context, t scaffold.Target) error 
 %sopenclaw config set --batch-json '%s'
 `, common.OpenclawCLIPreamble(), string(batchJSON))
 
-	out, err := bash.RunOutput(client, script)
+	// Serialize config mutations per machine to avoid ConfigMutationConflictError
+	var out string
+	err = common.WithConfigMutationLock(m.Name, func() error {
+		var runErr error
+		out, runErr = bash.RunOutput(client, script)
+		return runErr
+	})
 	if err != nil {
 		return fmt.Errorf("ensure-model: config set: %w\n%s", err, out)
 	}

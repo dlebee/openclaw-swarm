@@ -5,7 +5,7 @@ package linode
 import (
 	"context"
 	"encoding/json"
-	"strings"
+	"net"
 	"testing"
 	"time"
 
@@ -13,6 +13,7 @@ import (
 	"github.com/gluwa/openclaw-swarm2/internal/claws/plans/apply/provisioning"
 	"github.com/gluwa/openclaw-swarm2/internal/hosting/linode"
 	manifestdata "github.com/gluwa/openclaw-swarm2/internal/manifests/data"
+	"github.com/gluwa/openclaw-swarm2/internal/platformutil/bash"
 	"github.com/gluwa/openclaw-swarm2/internal/platformutil/sshfile"
 	"github.com/gluwa/openclaw-swarm2/internal/scaffold"
 	"github.com/gluwa/openclaw-swarm2/internal/scaffold/progress"
@@ -87,40 +88,92 @@ func TestAgentsParallel(t *testing.T) {
 		}
 	}
 
-	// --- apply authorization + provisioning ---------------------------------
+	// --- provider + SSH dialer ---------------------------------------------
 
-	applySSHPubKey(t, m, pubKey)
+	prov := linode.NewProvider(tok)
+	dial := sshDialFunc(signer)
 
-	dial := provisioning.SSHDialWithSignerFunc(signer)
-	inj := makeInjector(ctx, t, tok, dial)
+	t.Cleanup(func() {
+		cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 2*time.Minute)
+		defer cleanupCancel()
+		insts, err := prov.ListByTag(cleanupCtx, "claws/"+prefix)
+		if err != nil {
+			t.Logf("cleanup: list instances by tag: %v", err)
+			return
+		}
+		for _, inst := range insts {
+			if err := prov.DeleteInstance(cleanupCtx, inst.ResourceID); err != nil {
+				t.Logf("cleanup: delete instance %s: %v", inst.Label, err)
+			} else {
+				t.Logf("cleanup: deleted instance %s", inst.Label)
+			}
+		}
+	})
 
-	plan, err := planapply.BuildPlan(m, planapply.WithResolvers(inj))
+	// --- build and apply plan ----------------------------------------------
+
+	plan, err := planapply.BuildPlan(planapply.BuildOptions{
+		Manifest:  m,
+		Provider:  prov,
+		SSHPubKey: pubKey,
+		SSHDial:   dial,
+	})
 	if err != nil {
 		t.Fatalf("build plan: %v", err)
 	}
 
-	rep := progress.NewTestReporter(t)
-	if err := scaffold.ApplyPlan(ctx, plan, rep); err != nil {
-		t.Fatalf("apply plan: %v", err)
+	// Verify we have the agents phase
+	if !containsStr(plan.PhaseNames(), "agents") {
+		t.Fatalf("plan is missing agents phase; got %v", plan.PhaseNames())
 	}
-	t.Cleanup(func() {
-		linodeCleanup(t, tok, prefix)
-	})
+
+	ex, err := plan.Build()
+	if err != nil {
+		t.Fatalf("plan.Build: %v", err)
+	}
+
+	t.Log("applying provisioning + security + gateway + channels + agents on 1 Linode instance (3 agents in parallel)")
+	if err := ex.Execute(ctx, scaffold.ExecuteOptions{
+		Progress:   progress.Noop{},
+		OnlyPhases: []string{"provisioning", "security", "gateway", "channels", "agents"},
+	}); err != nil {
+		t.Fatalf("execute plan: %v", err)
+	}
 
 	// --- assertions ---------------------------------------------------------
 
 	mc := m.Machines[0]
+	mt := findMachineTarget(t, plan, mc.Name)
+	if mt.Instance == nil {
+		t.Fatalf("machine %q has no Instance after apply", mc.Name)
+	}
+	inst := mt.Instance
+	if inst.PublicIPv4 == "" || net.ParseIP(inst.PublicIPv4) == nil {
+		t.Fatalf("machine %q PublicIPv4 %q is not a valid IP", mc.Name, inst.PublicIPv4)
+	}
+	host := inst.PublicIPv4
+	t.Logf("[%s] machine ip=%s status=%s", mc.Name, host, inst.Status)
 
-	ips, err := linode.GetInstanceIPs(ctx, tok, prefix+"-"+mc.Name)
+	// Debug: check what files exist in the agent home
+	user := mc.AgentUser
+	if user == "" {
+		user = "root"
+	}
+	debugCtx, debugCancel := context.WithTimeout(ctx, 20*time.Second)
+	defer debugCancel()
+	debugClient, err := dial(debugCtx, host, 22, user)
 	if err != nil {
-		t.Fatalf("[%s] fetch ips: %v", mc.Name, err)
+		t.Logf("[%s] debug dial failed: %v", mc.Name, err)
+	} else {
+		debugOut, debugErr := bash.RunOutput(debugClient, "ls -la ~/.openclaw/ 2>&1 || echo 'dir not found'")
+		t.Logf("[%s] debug ~/.openclaw/: %s (err=%v)", mc.Name, debugOut, debugErr)
+		serviceOut, _ := bash.RunOutput(debugClient, "systemctl status openclaw-gateway 2>&1 | head -20")
+		t.Logf("[%s] debug gateway service: %s", mc.Name, serviceOut)
+		debugClient.Close()
 	}
-	if ips.Public == nil {
-		t.Fatalf("[%s] no public ip assigned", mc.Name)
-	}
-	host := ips.Public.String()
 
-	cfg := fetchOpenclawConfig(t, dial, host, mc)
+	// Fetch the config to verify all agents
+	cfg := fetchAgentsParallelConfig(t, dial, host, mc)
 
 	// Assert all three agents exist in the config
 	t.Log("Checking all agents were created...")
@@ -159,7 +212,7 @@ func TestAgentsParallel(t *testing.T) {
 		}
 		// Check SOUL.md exists
 		assertWorkspaceFileContains(t, dial, host, mc, workspace, "SOUL.md", "You are")
-		// Check AGENTS.md exists
+		// Check AGENTS.md exists  
 		assertWorkspaceFileContains(t, dial, host, mc, workspace, "AGENTS.md", "You are")
 	}
 
@@ -167,10 +220,9 @@ func TestAgentsParallel(t *testing.T) {
 		mc.Name, len(m.Agents))
 }
 
-// fetchOpenclawConfig reads and parses ~/.openclaw/openclaw.json from the
-// remote machine. This is a copy of the helper from linode_agents_test.go
-// since we can't easily share helpers across build-tagged files.
-func fetchOpenclawConfig(t *testing.T, dial provisioning.SSHDialFunc, host string, mc manifestdata.Machine) agentsPhaseConfig {
+// fetchAgentsParallelConfig reads and parses ~/.openclaw/openclaw.json from the
+// remote machine. Uses agentsPhaseConfig type from linode_agents_test.go.
+func fetchAgentsParallelConfig(t *testing.T, dial provisioning.SSHDialFunc, host string, mc manifestdata.Machine) agentsPhaseConfig {
 	t.Helper()
 	configPath := "~/.openclaw/openclaw.json"
 	user := mc.AgentUser
