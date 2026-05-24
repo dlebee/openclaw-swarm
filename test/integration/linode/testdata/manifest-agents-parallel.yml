@@ -1,0 +1,89 @@
+# Linode provisioning + security + gateway + channels + agents
+# parallel smoke-test manifest.
+#
+# Tests that multiple agents can be created in parallel without
+# race conditions. This validates the fix for the parallel agent
+# creation issue.
+
+prefix: claws-it-linode-agents-parallel
+
+machines:
+  - name: gateway-host
+    type: linode
+    sku: g6-standard-1
+    image: linode/ubuntu24.04
+    region: us-east
+    bootstrap_user: root
+    agent_user: agent
+
+gateways:
+  - name: gateway
+    reference: gateway-host
+    channels:
+      - kind: telegram
+        name: telegram-main
+        token_env: TELEGRAM_MAIN_BOT_TOKEN
+        default: true
+      - kind: telegram
+        name: telegram-secondary
+        token_env: TELEGRAM_SECONDARY_BOT_TOKEN
+
+agents:
+  - id: main
+    gateway: gateway
+    model: { primary: "anthropic/claude-sonnet-4-6" }
+    tools:
+      elevated:
+        enabled: true
+        allow_from:
+          telegram: ["6609699762"]
+    soul: |
+      You are the main agent in a parallel agents test.
+    agents_md: |
+      You are the main agent. Handle day-to-day tasks.
+    identity:
+      name: Main
+      emoji: "🧠"
+    bindings:
+      - channel: telegram
+        account: telegram-main
+
+  - id: research
+    gateway: gateway
+    workspace: ~/.openclaw/agents/research
+    model: { primary: "anthropic/claude-sonnet-4-6" }
+    tools:
+      elevated:
+        enabled: true
+        allow_from:
+          telegram: ["6609699762"]
+    soul: |
+      You are a research agent specializing in deep analysis.
+    agents_md: |
+      You are the research agent. Focus on investigation and analysis.
+    identity:
+      name: Research
+      emoji: "🔬"
+    bindings:
+      - channel: telegram
+        account: telegram-main
+
+  - id: ops
+    gateway: gateway
+    workspace: ~/.openclaw/agents/ops
+    model: { primary: "anthropic/claude-sonnet-4-6" }
+    tools:
+      elevated:
+        enabled: true
+        allow_from:
+          telegram: ["6609699762"]
+    soul: |
+      You are an operations agent handling infrastructure tasks.
+    agents_md: |
+      You are the ops agent. Handle system operations and monitoring.
+    identity:
+      name: Ops
+      emoji: "⚙️"
+    bindings:
+      - channel: telegram
+        account: telegram-secondary
