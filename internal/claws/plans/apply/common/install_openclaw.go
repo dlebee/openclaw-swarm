@@ -3,6 +3,7 @@ package common
 import (
 	"context"
 	"fmt"
+	"os"
 	"strings"
 
 	"github.com/gluwa/openclaw-swarm2/internal/platformutil/bash"
@@ -75,9 +76,16 @@ func (s *InstallOpenclawStep) Execute(ctx context.Context, t scaffold.Target) er
 	host, port, user := ResolveMachineHost(ctx, m), MachineSSHPort(m), MachineAgentUser(m)
 
 	pkg := "openclaw"
+	// Check target payload first, then fall back to OPENCLAW_VERSION env var.
+	// This allows CI to pin a version without modifying manifests.
 	if vp, ok := t.Payload.(OpenclawVersionProvider); ok {
 		if v := strings.TrimSpace(vp.GetOpenclawVersion()); v != "" {
 			pkg = "openclaw@" + v
+		}
+	}
+	if pkg == "openclaw" {
+		if envVer := strings.TrimSpace(os.Getenv("OPENCLAW_VERSION")); envVer != "" {
+			pkg = "openclaw@" + envVer
 		}
 	}
 	script := fmt.Sprintf("set -euo pipefail\nsudo npm install -g %s --quiet\n", pkg)
