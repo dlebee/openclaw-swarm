@@ -323,7 +323,20 @@ func (r *cliConfigReader) DeviceList(ctx context.Context, client *xssh.Client, h
 }
 
 func listDevicesViaCLI(client *xssh.Client) (*DeviceList, bool) {
-	out, err := bash.RunOutput(client, OpenclawCLIPreamble()+`openclaw devices list --json 2>/dev/null`)
+	// Use gateway token to bypass CLI device auth, which may have a pending
+	// scope upgrade that blocks the connection.
+	tokenScript := OpenclawCLIPreamble() + `openclaw config get gateway.token 2>/dev/null`
+	tokenOut, _ := bash.RunOutput(client, tokenScript)
+	token := strings.TrimSpace(tokenOut)
+
+	var script string
+	if token != "" && !strings.HasPrefix(token, "Config") && token != "__missing__" {
+		script = OpenclawCLIPreamble() + fmt.Sprintf(`openclaw devices list --json --token %q 2>/dev/null`, token)
+	} else {
+		script = OpenclawCLIPreamble() + `openclaw devices list --json 2>/dev/null`
+	}
+
+	out, err := bash.RunOutput(client, script)
 	if err != nil {
 		return nil, false
 	}
