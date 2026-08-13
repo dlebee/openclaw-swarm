@@ -8,6 +8,7 @@ import (
 	"github.com/gluwa/openclaw-swarm2/internal/claws/plans/apply/common"
 	"github.com/gluwa/openclaw-swarm2/internal/platformutil/bash"
 	"github.com/gluwa/openclaw-swarm2/internal/scaffold"
+	xssh "golang.org/x/crypto/ssh"
 )
 
 const (
@@ -85,9 +86,16 @@ func hasLocalCLIWithAdminScope(dl *common.DeviceList) bool {
 }
 
 // Execute ensures the local CLI device is paired with full operator.admin scope.
-// OpenClaw 2026.8+ auto-approves local CLI connections, so this step may complete
-// immediately after triggering a CLI command. For older versions, pending pairing
-// requests are approved explicitly.
+//
+// Flow:
+// 1. Trigger pairing with `openclaw status` (minimal command, creates pairing request)
+// 2. Poll for pending requests and approve them
+// 3. Verify CLI is paired with admin scope
+// 4. Run `openclaw cron list` to confirm admin access works
+//
+// This two-phase approach avoids the scope upgrade race condition where running
+// an admin-scope command before pairing causes a separate scope upgrade request
+// with a different requestId.
 func (s *PairGatewayDeviceStep) Execute(ctx context.Context, t scaffold.Target) error {
 	gt := t.Payload.(*GatewayTarget)
 	m := gt.Machine
@@ -100,37 +108,31 @@ func (s *PairGatewayDeviceStep) Execute(ctx context.Context, t scaffold.Target) 
 
 	cfgHost := common.MachineConfigHost(m, host)
 
-	// Trigger the local device pairing request with admin scope.
-	// We use `openclaw cron list` because it requires operator.admin scope,
-	// so the resulting pairing will include admin privileges for later CLI use.
-	// On OpenClaw 2026.8+, this connection will be auto-approved immediately.
-	_, _ = bash.RunOutput(client, common.OpenclawCLIPreamble()+`openclaw cron list >/dev/null 2>&1 || true`)
+	// Phase 1: Trigger pairing with a minimal command.
+	// `openclaw status` connects to the gateway and triggers a pairing request.
+	// The CLI always requests operator.admin scope in its pairing request.
+	_, _ = bash.RunOutput(client, common.OpenclawCLIPreamble()+`openclaw status >/dev/null 2>&1 || true`)
 
+	// Phase 2: Poll for pending requests and approve them.
 	for attempt := 0; attempt < pairingRetries; attempt++ {
 		dl, err := s.reader.DeviceList(ctx, client, cfgHost)
 		if err != nil {
 			return fmt.Errorf("pair-gateway-device: list devices: %w", err)
 		}
 
-		// Check if CLI is already paired with admin scope (OpenClaw 2026.8+ auto-approval)
+		// Check if CLI is already paired with admin scope
 		if hasLocalCLIWithAdminScope(dl) {
-			return nil
+			return s.verifyAdminAccess(client)
 		}
 
-		// Check if CLI is paired at all (older OpenClaw or auto-approval without admin scope)
-		if len(dl.Pending) == 0 && common.HasPairedLocalDevice(dl) {
-			return nil
-		}
-
-		// Approve any pending requests (pre-2026.8 OpenClaw behavior)
+		// Approve any pending requests
 		for _, p := range dl.Pending {
 			if err := ApproveDevice(client, p.RequestID); err != nil {
 				return fmt.Errorf("pair-gateway-device: %w", err)
 			}
-		}
-
-		if len(dl.Pending) > 0 {
-			return nil
+			// After approving, give gateway time to process, then verify
+			time.Sleep(1 * time.Second)
+			return s.verifyAdminAccess(client)
 		}
 
 		select {
@@ -141,6 +143,17 @@ func (s *PairGatewayDeviceStep) Execute(ctx context.Context, t scaffold.Target) 
 	}
 
 	return fmt.Errorf("pair-gateway-device: no pending pairing request appeared after %d attempts", pairingRetries)
+}
+
+// verifyAdminAccess confirms the CLI can run admin-scope commands.
+func (s *PairGatewayDeviceStep) verifyAdminAccess(client *xssh.Client) error {
+	// Run an admin-scope command to verify the pairing has full access.
+	// This also warms up the CLI connection for subsequent commands.
+	out, err := bash.RunOutput(client, common.OpenclawCLIPreamble()+`openclaw cron list 2>&1`)
+	if err != nil {
+		return fmt.Errorf("pair-gateway-device: verify admin access: %w\n%s", err, out)
+	}
+	return nil
 }
 
 // Verify confirms at least one device is paired.
