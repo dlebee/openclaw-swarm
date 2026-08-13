@@ -346,12 +346,10 @@ func HasPairedLocalDevice(dl *DeviceList) bool {
 func ApproveDevice(client *xssh.Client, requestID string) error {
 	// Read the gateway token to authenticate the approval.
 	// This is needed because the CLI device may not have sufficient scope yet.
-	tokenScript := common.OpenclawCLIPreamble() + `openclaw config get gateway.token 2>/dev/null`
-	tokenOut, _ := bash.RunOutput(client, tokenScript)
-	token := strings.TrimSpace(tokenOut)
+	token := common.ReadGatewayAuthToken(client)
 
 	var script string
-	if token != "" && !strings.HasPrefix(token, "Config") && token != "__missing__" {
+	if token != "" {
 		script = common.OpenclawCLIPreamble() + fmt.Sprintf(`openclaw devices approve %q --token %q`, requestID, token)
 	} else {
 		script = common.OpenclawCLIPreamble() + fmt.Sprintf(`openclaw devices approve %q`, requestID)
@@ -367,13 +365,10 @@ func ApproveDevice(client *xssh.Client, requestID string) error {
 // It uses the gateway token to authenticate, which now has sufficient scope
 // since OpenClaw 2026.5.x patched the operator.admin requirement.
 func ApproveNode(client *xssh.Client, requestID string) error {
-	// Read the gateway token to authenticate the approval.
-	tokenScript := common.OpenclawCLIPreamble() + `openclaw config get gateway.token 2>/dev/null`
-	tokenOut, _ := bash.RunOutput(client, tokenScript)
-	token := strings.TrimSpace(tokenOut)
+	token := common.ReadGatewayAuthToken(client)
 
 	var script string
-	if token != "" && !strings.HasPrefix(token, "Config") && token != "__missing__" {
+	if token != "" {
 		script = common.OpenclawCLIPreamble() + fmt.Sprintf(`openclaw nodes approve %q --token %q`, requestID, token)
 	} else {
 		script = common.OpenclawCLIPreamble() + fmt.Sprintf(`openclaw nodes approve %q`, requestID)
@@ -384,3 +379,4 @@ func ApproveNode(client *xssh.Client, requestID string) error {
 	}
 	return nil
 }
+

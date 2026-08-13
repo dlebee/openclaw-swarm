@@ -130,12 +130,10 @@ func probeOpenclawVersion(client *xssh.Client) (openclawver.Version, error) {
 // Returns ("", nil) when no pending request is found.
 func findPendingNodeRequest(client *xssh.Client, displayName string) (string, error) {
 	// Read the gateway token for authentication
-	tokenScript := common.OpenclawCLIPreamble() + `openclaw config get gateway.token 2>/dev/null`
-	tokenOut, _ := bash.RunOutput(client, tokenScript)
-	token := strings.TrimSpace(tokenOut)
+	token := common.ReadGatewayAuthToken(client)
 
 	var script string
-	if token != "" && !strings.HasPrefix(token, "Config") && token != "__missing__" {
+	if token != "" {
 		script = common.OpenclawCLIPreamble() + fmt.Sprintf(`openclaw nodes list --json --token %q 2>/dev/null`, token)
 	} else {
 		script = common.OpenclawCLIPreamble() + `openclaw nodes list --json 2>/dev/null`

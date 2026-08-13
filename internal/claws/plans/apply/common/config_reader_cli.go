@@ -325,12 +325,10 @@ func (r *cliConfigReader) DeviceList(ctx context.Context, client *xssh.Client, h
 func listDevicesViaCLI(client *xssh.Client) (*DeviceList, bool) {
 	// Use gateway token to bypass CLI device auth, which may have a pending
 	// scope upgrade that blocks the connection.
-	tokenScript := OpenclawCLIPreamble() + `openclaw config get gateway.token 2>/dev/null`
-	tokenOut, _ := bash.RunOutput(client, tokenScript)
-	token := strings.TrimSpace(tokenOut)
+	token := readGatewayAuthToken(client)
 
 	var script string
-	if token != "" && !strings.HasPrefix(token, "Config") && token != "__missing__" {
+	if token != "" {
 		script = OpenclawCLIPreamble() + fmt.Sprintf(`openclaw devices list --json --token %q 2>/dev/null`, token)
 	} else {
 		script = OpenclawCLIPreamble() + `openclaw devices list --json 2>/dev/null`
@@ -421,6 +419,30 @@ func readDaemonStateFile(client *xssh.Client, path string) (string, bool) {
 // returns from there onward. Openclaw's CLI sometimes prints daemon-status
 // preamble before the JSON payload; callers strip it so the unmarshal sees
 // a clean document.
+// ReadGatewayAuthToken reads the gateway auth token from the remote
+// machine's openclaw config. Returns "" when the token cannot be read.
+// It tries the canonical path (gateway.auth.token) first, then falls
+// back to the deprecated top-level gateway.token for older installs.
+func ReadGatewayAuthToken(client *xssh.Client) string {
+	for _, key := range []string{"gateway.auth.token", "gateway.token"} {
+		script := OpenclawCLIPreamble() + fmt.Sprintf(`openclaw config get %s 2>/dev/null`, key)
+		out, err := bash.RunOutput(client, script)
+		if err != nil {
+			continue
+		}
+		v := strings.TrimSpace(out)
+		if v != "" && !strings.HasPrefix(v, "Config") && v != "__missing__" {
+			return v
+		}
+	}
+	return ""
+}
+
+// readGatewayAuthToken is the package-internal alias.
+func readGatewayAuthToken(client *xssh.Client) string {
+	return ReadGatewayAuthToken(client)
+}
+
 func extractJSON(s string, startChar byte) string {
 	idx := strings.IndexByte(s, startChar)
 	if idx < 0 {
