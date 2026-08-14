@@ -87,15 +87,14 @@ func hasLocalCLIWithAdminScope(dl *common.DeviceList) bool {
 
 // Execute ensures the local CLI device is paired with full operator.admin scope.
 //
-// Flow:
-// 1. Trigger pairing with `openclaw status` (minimal command, creates pairing request)
-// 2. Poll for pending requests and approve them
-// 3. Verify CLI is paired with admin scope
-// 4. Run `openclaw cron list` to confirm admin access works
+// On loopback gateways, the first CLI command that connects via WebSocket
+// triggers silent auto-pairing with operator.admin scope. We run
+// `openclaw cron list` as the trigger — it uses CLI mode (not probe mode),
+// requests admin scope, and on loopback gets auto-approved immediately.
 //
-// This two-phase approach avoids the scope upgrade race condition where running
-// an admin-scope command before pairing causes a separate scope upgrade request
-// with a different requestId.
+// If auto-pairing doesn't happen (e.g. non-loopback gateway or config
+// differences), we fall back to polling for pending requests and approving
+// them explicitly.
 func (s *PairGatewayDeviceStep) Execute(ctx context.Context, t scaffold.Target) error {
 	gt := t.Payload.(*GatewayTarget)
 	m := gt.Machine
@@ -108,29 +107,36 @@ func (s *PairGatewayDeviceStep) Execute(ctx context.Context, t scaffold.Target) 
 
 	cfgHost := common.MachineConfigHost(m, host)
 
-	// Phase 1: Trigger pairing with a minimal command.
-	// `openclaw status` connects to the gateway and triggers a pairing request.
-	// The CLI always requests operator.admin scope in its pairing request.
-	_, _ = bash.RunOutput(client, common.OpenclawCLIPreamble()+`openclaw status >/dev/null 2>&1 || true`)
+	// Try a CLI command first. On loopback this silently auto-pairs with admin.
+	// Ignore errors — the command may fail if pairing requires approval.
+	_, _ = bash.RunOutput(client, common.OpenclawCLIPreamble()+`openclaw cron list 2>/dev/null || true`)
 
-	// Phase 2: Poll for pending requests and approve them.
+	// Give the gateway a moment to settle after the connect/pair.
+	time.Sleep(1 * time.Second)
+
+	// Poll: check if auto-paired succeeded, otherwise approve pending requests.
 	for attempt := 0; attempt < pairingRetries; attempt++ {
 		dl, err := s.reader.DeviceList(ctx, client, cfgHost)
 		if err != nil {
 			return fmt.Errorf("pair-gateway-device: list devices: %w", err)
 		}
 
-		// Check if CLI is already paired with admin scope
+		// Check if CLI is already paired with admin scope (auto-pair succeeded).
 		if hasLocalCLIWithAdminScope(dl) {
 			return s.verifyAdminAccess(client)
 		}
 
-		// Approve any pending requests
+		// If any paired CLI exists without admin, we need a scope upgrade.
+		// If there are pending requests, approve them.
+		approved := false
 		for _, p := range dl.Pending {
 			if err := ApproveDevice(client, p.RequestID); err != nil {
 				return fmt.Errorf("pair-gateway-device: %w", err)
 			}
-			// After approving, give gateway time to process, then verify
+			approved = true
+		}
+
+		if approved {
 			time.Sleep(1 * time.Second)
 			return s.verifyAdminAccess(client)
 		}
@@ -142,7 +148,7 @@ func (s *PairGatewayDeviceStep) Execute(ctx context.Context, t scaffold.Target) 
 		}
 	}
 
-	return fmt.Errorf("pair-gateway-device: no pending pairing request appeared after %d attempts", pairingRetries)
+	return fmt.Errorf("pair-gateway-device: CLI device not paired with admin scope after %d attempts", pairingRetries)
 }
 
 // verifyAdminAccess confirms the CLI can run admin-scope commands.
