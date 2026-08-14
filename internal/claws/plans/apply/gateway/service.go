@@ -344,8 +344,6 @@ func HasPairedLocalDevice(dl *DeviceList) bool {
 // ApproveDevice approves a pending device by its requestId.
 // It uses the gateway token to authenticate, bypassing the CLI device's limited scope.
 func ApproveDevice(client *xssh.Client, requestID string) error {
-	// Read the gateway token to authenticate the approval.
-	// This is needed because the CLI device may not have sufficient scope yet.
 	token := common.ReadGatewayAuthToken(client)
 
 	var script string
@@ -379,4 +377,5 @@ func ApproveNode(client *xssh.Client, requestID string) error {
 	}
 	return nil
 }
+
 
