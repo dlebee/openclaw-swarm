@@ -89,13 +89,14 @@ func hasLocalCLIWithAdminScope(dl *common.DeviceList) bool {
 //
 // The CLI auto-pairs on loopback but only with the scopes of the first
 // method it calls (e.g. operator.read for `cron list`). Subsequent commands
-// that need admin scope trigger a scope-upgrade pending request. The CLI's
-// own `devices approve --token` still sends a device identity in the WS
-// handshake, which itself hits the scope-upgrade block.
+// that need admin scope trigger a scope-upgrade pending request.
 //
-// To break the cycle we approve pending requests using a direct Node.js
-// script that calls the approveDevicePairing function in-process, bypassing
-// the WebSocket device-identity handshake entirely.
+// Strategy:
+// 1. Run `openclaw cron list` to auto-pair with initial (limited) scopes
+// 2. Run `openclaw agents list` WITHOUT token — this needs admin scope and
+//    triggers a pending scope-upgrade request for the CLI device
+// 3. Approve the pending request using `--token --url` which bypasses device
+//    identity and uses token auth directly
 func (s *PairGatewayDeviceStep) Execute(ctx context.Context, t scaffold.Target) error {
 	gt := t.Payload.(*GatewayTarget)
 	m := gt.Machine
@@ -108,9 +109,7 @@ func (s *PairGatewayDeviceStep) Execute(ctx context.Context, t scaffold.Target) 
 
 	cfgHost := common.MachineConfigHost(m, host)
 
-	// Phase 1: Trigger a CLI connection so the device identity and initial
-	// pairing are created. The gateway auto-pairs on loopback but only
-	// with the method's least-privilege scopes.
+	// Phase 1: Initial pairing — run a low-privilege command to auto-pair.
 	_, _ = bash.RunOutput(client, common.OpenclawCLIPreamble()+`openclaw cron list 2>/dev/null || true`)
 	time.Sleep(1 * time.Second)
 
@@ -121,10 +120,12 @@ func (s *PairGatewayDeviceStep) Execute(ctx context.Context, t scaffold.Target) 
 			return fmt.Errorf("pair-gateway-device: list devices: %w", err)
 		}
 
+		// Success: CLI already has admin scope.
 		if hasLocalCLIWithAdminScope(dl) {
 			return s.verifyAdminAccess(client)
 		}
 
+		// Approve any pending requests.
 		if len(dl.Pending) > 0 {
 			for _, p := range dl.Pending {
 				if err := approveDeviceDirect(client, p.RequestID); err != nil {
@@ -132,8 +133,14 @@ func (s *PairGatewayDeviceStep) Execute(ctx context.Context, t scaffold.Target) 
 				}
 			}
 			time.Sleep(2 * time.Second)
-			continue // re-check after approval
+			continue
 		}
+
+		// No pending requests and CLI doesn't have admin: trigger a scope
+		// upgrade by running an admin-scope command WITHOUT token auth.
+		// This uses the device identity and creates a pending scope upgrade.
+		_, _ = bash.RunOutput(client, common.OpenclawCLIPreamble()+`openclaw agents list 2>/dev/null || true`)
+		time.Sleep(1 * time.Second)
 
 		select {
 		case <-ctx.Done():
