@@ -292,8 +292,19 @@ func (r *cliConfigReader) GatewayView(ctx context.Context, client *xssh.Client, 
 // sentinel-missing with "__missing__" so a genuinely empty value survives
 // the round-trip while an unset key collapses to "".
 func readConfigScalar(client *xssh.Client, key string) (string, error) {
-	out, err := bash.RunOutput(client, OpenclawCLIPreamble()+fmt.Sprintf(
-		`openclaw config get %s 2>/dev/null || echo "__missing__"`, key))
+	token := ReadGatewayAuthToken(client)
+	var script string
+	if token != "" {
+		// --url ensures the CLI skips config loading and uses pure token auth,
+		// which omits device identity. Without --url the CLI loads config
+		// and may send device identity for the first call on a fresh install.
+		script = OpenclawCLIPreamble() + fmt.Sprintf(
+			`openclaw config get %s --token %q --url ws://127.0.0.1:18789 2>/dev/null || echo "__missing__"`, key, token)
+	} else {
+		script = OpenclawCLIPreamble() + fmt.Sprintf(
+			`openclaw config get %s 2>/dev/null || echo "__missing__"`, key)
+	}
+	out, err := bash.RunOutput(client, script)
 	if err != nil {
 		return "", err
 	}
@@ -330,7 +341,10 @@ func listDevicesViaCLI(client *xssh.Client) (*DeviceList, bool) {
 
 	var script string
 	if token != "" {
-		script = OpenclawCLIPreamble() + fmt.Sprintf(`openclaw devices list --json --token %q 2>/dev/null`, token)
+		// --url ensures loopback detection so the CLI omits device identity
+		// and uses pure token auth. Without --url, the CLI may send device
+		// identity on the first call and create an unwanted pairing.
+		script = OpenclawCLIPreamble() + fmt.Sprintf(`openclaw devices list --json --token %q --url ws://127.0.0.1:18789 2>/dev/null`, token)
 	} else {
 		script = OpenclawCLIPreamble() + `openclaw devices list --json 2>/dev/null`
 	}
