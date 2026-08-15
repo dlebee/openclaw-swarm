@@ -16,12 +16,11 @@ const (
 	pairingDelay   = 2 * time.Second
 )
 
-// PairGatewayDeviceStep approves the local CLI device pairing on the gateway.
-// OpenClaw requires WebSocket device approval before commands like
-// `openclaw nodes list` or `openclaw agents add` work. This step triggers
-// the pairing request and approves it.
-//
-// Applicable only when the gateway is already onboarded (config exists).
+// PairGatewayDeviceStep ensures the CLI can access the gateway with full
+// admin scope. On loopback gateways with token auth, the CLI uses the
+// config token directly (no device pairing needed). On gateways without
+// shared-secret auth, the CLI connects with a device identity that must
+// be paired and approved.
 type PairGatewayDeviceStep struct {
 	dial   SSHDialFunc
 	reader common.ConfigReader
@@ -37,16 +36,13 @@ func NewPairGatewayDeviceStep(opts Options) *PairGatewayDeviceStep {
 
 func (*PairGatewayDeviceStep) Name() string { return "pair-gateway-device" }
 
-// Applicable returns true for any gateway target. The step runs after
-// bootstrap-gateway in the pipeline, so by execution time the config will
-// exist regardless of whether this is a fresh or existing gateway.
+// Applicable returns true for any gateway target.
 func (s *PairGatewayDeviceStep) Applicable(_ context.Context, t scaffold.Target) (bool, error) {
 	_, ok := t.Payload.(*GatewayTarget)
 	return ok, nil
 }
 
-// Check returns true when at least one local device is already paired.
-// Check returns true when a local CLI device is paired with admin scope.
+// Check verifies the CLI can run admin-scope commands on the gateway.
 func (s *PairGatewayDeviceStep) Check(ctx context.Context, t scaffold.Target) (bool, error) {
 	gt := t.Payload.(*GatewayTarget)
 	m := gt.Machine
@@ -56,47 +52,40 @@ func (s *PairGatewayDeviceStep) Check(ctx context.Context, t scaffold.Target) (b
 	}
 	client, key, err := borrowSSH(ctx, s.dial, host, machineSSHPort(m), machineAgentUser(m))
 	if err != nil {
-		return false, nil // connection failure — unsatisfied, Execute retries
+		return false, nil
 	}
 	defer returnSSH(ctx, key, client)
 
-	cfgHost := common.MachineConfigHost(m, host)
-	dl, err := s.reader.DeviceList(ctx, client, cfgHost)
-	if err != nil {
-		return false, fmt.Errorf("list devices on %s: %w", m.Name, err)
-	}
-	return hasLocalCLIWithAdminScope(dl), nil
+	return cliHasAdminAccess(client), nil
 }
 
-// hasLocalCLIWithAdminScope checks if there's a CLI device paired with admin scope.
-func hasLocalCLIWithAdminScope(dl *common.DeviceList) bool {
-	if dl == nil {
-		return false
+// cliHasAdminAccess tests whether the CLI can run an admin-scope command.
+// On loopback with token auth, the CLI uses the config token directly
+// and bypasses device identity — so device pairing doesn't apply.
+func cliHasAdminAccess(client *xssh.Client) bool {
+	// `openclaw cron list` requires operator.read — any CLI with valid
+	// auth can run it. But we need to verify admin access specifically.
+	// We use `openclaw config get gateway.bind` which requires operator.admin.
+	token := common.ReadGatewayAuthToken(client)
+	var script string
+	if token != "" {
+		script = common.OpenclawCLIPreamble() + fmt.Sprintf(
+			`openclaw config get gateway.bind --token %q 2>/dev/null`, token)
+	} else {
+		script = common.OpenclawCLIPreamble() + `openclaw config get gateway.bind 2>/dev/null`
 	}
-	for _, p := range dl.Paired {
-		if p.ClientID == "cli" && p.ClientMode == "cli" {
-			for _, scope := range p.Scopes {
-				if scope == "operator.admin" {
-					return true
-				}
-			}
-		}
-	}
-	return false
+	_, err := bash.RunOutput(client, script)
+	return err == nil
 }
 
-// Execute ensures the local CLI device is paired with full operator.admin scope.
+// Execute ensures the CLI has admin access to the gateway.
 //
-// The CLI auto-pairs on loopback but only with the scopes of the first
-// method it calls (e.g. operator.read for `cron list`). Subsequent commands
-// that need admin scope trigger a scope-upgrade pending request.
+// With token auth on loopback (the standard swarm setup), the CLI uses
+// the config token directly and skips device identity entirely. No
+// device pairing is needed — we just verify the token works.
 //
-// Strategy:
-// 1. Run `openclaw cron list` to auto-pair with initial (limited) scopes
-// 2. Run `openclaw agents list` WITHOUT token — this needs admin scope and
-//    triggers a pending scope-upgrade request for the CLI device
-// 3. Approve the pending request using `--token --url` which bypasses device
-//    identity and uses token auth directly
+// Without token auth, the CLI sends a device identity that needs to be
+// paired and approved. This path handles both cases.
 func (s *PairGatewayDeviceStep) Execute(ctx context.Context, t scaffold.Target) error {
 	gt := t.Payload.(*GatewayTarget)
 	m := gt.Machine
@@ -108,40 +97,45 @@ func (s *PairGatewayDeviceStep) Execute(ctx context.Context, t scaffold.Target) 
 	defer returnSSH(ctx, key, client)
 
 	cfgHost := common.MachineConfigHost(m, host)
+	token := common.ReadGatewayAuthToken(client)
 
-	// Phase 1: Initial pairing — run a low-privilege command to auto-pair.
+	// Fast path: if the CLI already has admin access (e.g. token auth
+	// on loopback), no pairing is needed.
+	if cliHasAdminAccess(client) {
+		return nil
+	}
+
+	// Trigger a CLI connection to create the device identity and
+	// initial pairing request. The gateway auto-pairs on loopback.
 	_, _ = bash.RunOutput(client, common.OpenclawCLIPreamble()+`openclaw cron list 2>/dev/null || true`)
 	time.Sleep(1 * time.Second)
 
-	// Phase 2: Poll and approve pending scope upgrades.
+	// Check again after initial connection.
+	if cliHasAdminAccess(client) {
+		return nil
+	}
+
+	// Poll for pending requests and approve them.
 	for attempt := 0; attempt < pairingRetries; attempt++ {
 		dl, err := s.reader.DeviceList(ctx, client, cfgHost)
 		if err != nil {
 			return fmt.Errorf("pair-gateway-device: list devices: %w", err)
 		}
 
-		// Success: CLI already has admin scope.
-		if hasLocalCLIWithAdminScope(dl) {
-			return s.verifyAdminAccess(client)
-		}
-
-		// Approve any pending requests.
+		// Approve any pending requests using token auth.
 		if len(dl.Pending) > 0 {
 			for _, p := range dl.Pending {
-				if err := approveDeviceDirect(client, p.RequestID); err != nil {
+				if err := approveDeviceRequest(client, p.RequestID, token); err != nil {
 					return fmt.Errorf("pair-gateway-device: approve %s: %w", p.RequestID, err)
 				}
 			}
 			time.Sleep(2 * time.Second)
+
+			if cliHasAdminAccess(client) {
+				return nil
+			}
 			continue
 		}
-
-		// No pending requests and CLI doesn't have admin: trigger a scope
-		// upgrade by running an admin-scope command WITHOUT token auth.
-		// This uses the device identity and creates a pending scope upgrade.
-		// Use `config set` which requires operator.admin scope.
-		_, _ = bash.RunOutput(client, common.OpenclawCLIPreamble()+`openclaw config set gateway.bind loopback 2>/dev/null || true`)
-		time.Sleep(1 * time.Second)
 
 		select {
 		case <-ctx.Done():
@@ -150,60 +144,30 @@ func (s *PairGatewayDeviceStep) Execute(ctx context.Context, t scaffold.Target) 
 		}
 	}
 
-	return fmt.Errorf("pair-gateway-device: CLI device not paired with admin scope after %d attempts", pairingRetries)
+	return fmt.Errorf("pair-gateway-device: CLI does not have admin access after %d attempts", pairingRetries)
 }
 
-// approveDeviceDirect approves a pending device pairing request by
-// modifying the pairing state file directly on disk. This bypasses
-// the CLI's WebSocket connection which would trigger its own scope-
-// upgrade conflict.
-//
-// The pairing state lives in ~/.openclaw/devices/paired.json (paired
-// devices) and the pending requests are in memory only. Since we can't
-// approve in-memory state from outside the process, we restart the
-// gateway daemon after setting up startup-local-cli-pairing conditions.
-//
-// Actually, let's just use the CLI with explicit --url to ensure
-// loopback detection works correctly.
-func approveDeviceDirect(client *xssh.Client, requestID string) error {
-	token := common.ReadGatewayAuthToken(client)
-	tokenLen := len(token)
-
-	if token == "" {
-		// Fallback: try without token
-		script := common.OpenclawCLIPreamble() + fmt.Sprintf(`openclaw devices approve %q 2>&1`, requestID)
-		out, err := bash.RunOutput(client, script)
-		if err != nil {
-			return fmt.Errorf("no-token approve failed (tokenLen=%d): %w\noutput: %s", tokenLen, err, out)
-		}
-		return nil
+// approveDeviceRequest approves a pending device pairing via the CLI.
+// When a token is available, it uses --token --url to bypass device
+// identity in the approval call itself.
+func approveDeviceRequest(client *xssh.Client, requestID, token string) error {
+	var script string
+	if token != "" {
+		script = common.OpenclawCLIPreamble() + fmt.Sprintf(
+			`openclaw devices approve %q --token %q --url ws://127.0.0.1:18789 2>&1`,
+			requestID, token)
+	} else {
+		script = common.OpenclawCLIPreamble() + fmt.Sprintf(
+			`openclaw devices approve %q 2>&1`, requestID)
 	}
-
-	// Use --token AND --url to ensure the CLI detects loopback + shared
-	// secret auth, which omits device identity from the WS handshake.
-	// Also add DEBUG=openclaw:gateway:call to see what's happening internally.
-	script := common.OpenclawCLIPreamble() + fmt.Sprintf(
-		`DEBUG=openclaw:gateway:call openclaw devices approve %q --token %q --url ws://127.0.0.1:18789 2>&1 | tail -50`,
-		requestID, token)
 	out, err := bash.RunOutput(client, script)
 	if err != nil {
-		return fmt.Errorf("approve with --token --url failed (tokenLen=%d): %w\noutput: %s", tokenLen, err, out)
+		return fmt.Errorf("%w\noutput: %s", err, out)
 	}
 	return nil
 }
 
-// verifyAdminAccess confirms the CLI can run admin-scope commands.
-func (s *PairGatewayDeviceStep) verifyAdminAccess(client *xssh.Client) error {
-	// Run an admin-scope command to verify the pairing has full access.
-	// This also warms up the CLI connection for subsequent commands.
-	out, err := bash.RunOutput(client, common.OpenclawCLIPreamble()+`openclaw cron list 2>&1`)
-	if err != nil {
-		return fmt.Errorf("pair-gateway-device: verify admin access: %w\n%s", err, out)
-	}
-	return nil
-}
-
-// Verify confirms at least one device is paired.
+// Verify confirms the CLI has admin access.
 func (s *PairGatewayDeviceStep) Verify(ctx context.Context, t scaffold.Target) error {
 	gt := t.Payload.(*GatewayTarget)
 	m := gt.Machine
@@ -214,13 +178,8 @@ func (s *PairGatewayDeviceStep) Verify(ctx context.Context, t scaffold.Target) e
 	}
 	defer returnSSH(ctx, key, client)
 
-	cfgHost := common.MachineConfigHost(m, host)
-	dl, err := s.reader.DeviceList(ctx, client, cfgHost)
-	if err != nil {
-		return fmt.Errorf("pair-gateway-device verify: %w", err)
-	}
-	if !common.HasPairedLocalDevice(dl) {
-		return fmt.Errorf("pair-gateway-device verify: no paired device found after approval")
+	if !cliHasAdminAccess(client) {
+		return fmt.Errorf("pair-gateway-device verify: CLI does not have admin access")
 	}
 	return nil
 }
