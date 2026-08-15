@@ -104,12 +104,15 @@ func (s *PairGatewayDeviceStep) Execute(ctx context.Context, t scaffold.Target) 
 	for attempt := 0; attempt < pairingRetries; attempt++ {
 		out, err := runCLICommand(client)
 		if err == nil {
-			return nil // CLI can talk to the gateway — done
+			// CLI works. Also approve any pending device requests
+			// so they don't block subsequent commands that don't
+			// use --token --url.
+			s.approvePendingRequests(ctx, client, cfgHost, token)
+			return nil
 		}
 		lastErr = strings.TrimSpace(out)
 
 		// If there are pending device pairing requests, approve them.
-		// This handles the non-token-auth case where device identity is used.
 		dl, dlErr := s.reader.DeviceList(ctx, client, cfgHost)
 		if dlErr == nil && dl != nil && len(dl.Pending) > 0 {
 			for _, p := range dl.Pending {
@@ -134,6 +137,20 @@ func (s *PairGatewayDeviceStep) Execute(ctx context.Context, t scaffold.Target) 
 
 	return fmt.Errorf("pair-gateway-device: CLI cannot access gateway after %d attempts (tokenLen=%d)\nlast error: %s\ngateway logs:\n%s",
 		pairingRetries, len(token), lastErr, logs)
+}
+
+// approvePendingRequests approves all pending device pairing requests.
+// This is called even when the CLI can already talk to the gateway
+// (via token auth) to clean up any stale pending requests that would
+// block subsequent non-token CLI calls.
+func (s *PairGatewayDeviceStep) approvePendingRequests(ctx context.Context, client *xssh.Client, cfgHost common.ConfigHost, token string) {
+	dl, err := s.reader.DeviceList(ctx, client, cfgHost)
+	if err != nil || dl == nil {
+		return
+	}
+	for _, p := range dl.Pending {
+		_ = approveDeviceRequest(client, p.RequestID, token)
+	}
 }
 
 // approveDeviceRequest approves a pending device pairing via the CLI.
