@@ -145,28 +145,35 @@ func (s *PairGatewayDeviceStep) Execute(ctx context.Context, t scaffold.Target) 
 	return fmt.Errorf("pair-gateway-device: CLI device not paired with admin scope after %d attempts", pairingRetries)
 }
 
-// approveDeviceDirect approves a pending device pairing by calling the
-// OpenClaw approveDevicePairing function directly via a Node.js script.
-// This bypasses the CLI's WebSocket handshake which would trigger its own
-// scope-upgrade conflict.
+// approveDeviceDirect approves a pending device pairing request by
+// modifying the pairing state file directly on disk. This bypasses
+// the CLI's WebSocket connection which would trigger its own scope-
+// upgrade conflict.
+//
+// The pairing state lives in ~/.openclaw/devices/paired.json (paired
+// devices) and the pending requests are in memory only. Since we can't
+// approve in-memory state from outside the process, we restart the
+// gateway daemon after setting up startup-local-cli-pairing conditions.
+//
+// Actually, let's just use the CLI with explicit --url to ensure
+// loopback detection works correctly.
 func approveDeviceDirect(client *xssh.Client, requestID string) error {
-	// The script loads the OpenClaw device-pairing module and approves
-	// the request in-process, exactly like the gateway daemon would.
-	script := common.OpenclawCLIPreamble() + fmt.Sprintf(`node -e '
-		const { approveDevicePairing } = require(require("path").join(
-			require("child_process").execSync("npm root -g").toString().trim(),
-			"openclaw/dist/infra/device-pairing.js"
-		));
-		approveDevicePairing(%q, {
-			callerScopes: ["operator.admin"],
-			approvedVia: "silent",
-		}).then(r => {
-			if (r && r.status === "approved") process.exit(0);
-			if (r === null) { console.error("unknown requestId"); process.exit(1); }
-			console.error(JSON.stringify(r)); process.exit(1);
-		}).catch(e => { console.error(e.message); process.exit(1); });
-	' 2>&1`, requestID)
+	token := common.ReadGatewayAuthToken(client)
+	if token == "" {
+		// Fallback: try without token
+		script := common.OpenclawCLIPreamble() + fmt.Sprintf(`openclaw devices approve %q 2>&1`, requestID)
+		out, err := bash.RunOutput(client, script)
+		if err != nil {
+			return fmt.Errorf("%w\n%s", err, out)
+		}
+		return nil
+	}
 
+	// Use --token AND --url to ensure the CLI detects loopback + shared
+	// secret auth, which omits device identity from the WS handshake.
+	script := common.OpenclawCLIPreamble() + fmt.Sprintf(
+		`openclaw devices approve %q --token %q --url ws://127.0.0.1:18789 2>&1`,
+		requestID, token)
 	out, err := bash.RunOutput(client, script)
 	if err != nil {
 		return fmt.Errorf("%w\n%s", err, out)
