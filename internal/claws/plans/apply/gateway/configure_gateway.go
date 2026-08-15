@@ -119,18 +119,9 @@ func (s *ConfigureGatewayStep) Execute(ctx context.Context, t scaffold.Target) e
 		return fmt.Errorf("configure-gateway: marshal batch: %w", err)
 	}
 
-	// Use --url to ensure loopback detection so the CLI omits device identity.
-	// Without --url the CLI may create a device pairing on the first call.
-	token := common.ReadGatewayAuthToken(client)
-	var configSetScript string
-	if token != "" {
-		configSetScript = fmt.Sprintf(`openclaw config set --batch-json '%s' --token %q --url ws://127.0.0.1:18789`, string(batchJSON), token)
-	} else {
-		configSetScript = fmt.Sprintf(`openclaw config set --batch-json '%s'`, string(batchJSON))
-	}
 	script := fmt.Sprintf(`set -euo pipefail
-%s%s
-`, common.OpenclawCLIPreamble(), configSetScript)
+%sopenclaw config set --batch-json '%s'
+`, common.OpenclawCLIPreamble(), string(batchJSON))
 
 	out, err := bash.RunOutput(client, script)
 	if err != nil {
