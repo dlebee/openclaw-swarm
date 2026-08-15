@@ -2,6 +2,7 @@ package gateway
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"time"
 
@@ -114,6 +115,10 @@ func (s *PairGatewayDeviceStep) Execute(ctx context.Context, t scaffold.Target) 
 	// Give the gateway a moment to settle after the connect/pair.
 	time.Sleep(1 * time.Second)
 
+	// Debug: check what token we're reading
+	token := common.ReadGatewayAuthToken(client)
+	tokenLen := len(token)
+
 	// Poll: check if auto-paired succeeded, otherwise approve pending requests.
 	for attempt := 0; attempt < pairingRetries; attempt++ {
 		dl, err := s.reader.DeviceList(ctx, client, cfgHost)
@@ -131,7 +136,13 @@ func (s *PairGatewayDeviceStep) Execute(ctx context.Context, t scaffold.Target) 
 		approved := false
 		for _, p := range dl.Pending {
 			if err := ApproveDevice(client, p.RequestID); err != nil {
-				return fmt.Errorf("pair-gateway-device: %w", err)
+				// Include diagnostic info in error
+				diag := fmt.Sprintf("tokenLen=%d, pending=%d, paired=%d", tokenLen, len(dl.Pending), len(dl.Paired))
+				for i, pd := range dl.Paired {
+					raw, _ := json.Marshal(pd)
+					diag += fmt.Sprintf(", paired[%d]=%s", i, string(raw))
+				}
+				return fmt.Errorf("pair-gateway-device [%s]: %w", diag, err)
 			}
 			approved = true
 		}
