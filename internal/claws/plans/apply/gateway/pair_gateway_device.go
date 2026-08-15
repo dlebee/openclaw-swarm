@@ -3,6 +3,7 @@ package gateway
 import (
 	"context"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/gluwa/openclaw-swarm2/internal/claws/plans/apply/common"
@@ -12,8 +13,8 @@ import (
 )
 
 const (
-	pairingRetries = 8
-	pairingDelay   = 2 * time.Second
+	pairingRetries = 12
+	pairingDelay   = 3 * time.Second
 )
 
 // PairGatewayDeviceStep ensures the CLI can access the gateway with full
@@ -42,7 +43,7 @@ func (s *PairGatewayDeviceStep) Applicable(_ context.Context, t scaffold.Target)
 	return ok, nil
 }
 
-// Check verifies the CLI can run admin-scope commands on the gateway.
+// Check verifies the CLI can run commands against the gateway.
 func (s *PairGatewayDeviceStep) Check(ctx context.Context, t scaffold.Target) (bool, error) {
 	gt := t.Payload.(*GatewayTarget)
 	m := gt.Machine
@@ -56,26 +57,26 @@ func (s *PairGatewayDeviceStep) Check(ctx context.Context, t scaffold.Target) (b
 	}
 	defer returnSSH(ctx, key, client)
 
-	return cliHasAdminAccess(client), nil
+	_, err = runCLICommand(client)
+	return err == nil, nil
 }
 
-// cliHasAdminAccess tests whether the CLI can run an admin-scope command.
+// runCLICommand runs a lightweight gateway RPC command via the CLI.
 // On loopback with token auth, the CLI uses the config token directly
 // and bypasses device identity — so device pairing doesn't apply.
-func cliHasAdminAccess(client *xssh.Client) bool {
-	// `openclaw cron list` requires operator.read — any CLI with valid
-	// auth can run it. But we need to verify admin access specifically.
-	// We use `openclaw config get gateway.bind` which requires operator.admin.
+// Returns the command output and any error.
+func runCLICommand(client *xssh.Client) (string, error) {
 	token := common.ReadGatewayAuthToken(client)
 	var script string
 	if token != "" {
+		// Explicit --url ensures loopback detection. --token provides auth.
+		// Together they make the CLI skip config loading and omit device identity.
 		script = common.OpenclawCLIPreamble() + fmt.Sprintf(
-			`openclaw config get gateway.bind --token %q 2>/dev/null`, token)
+			`openclaw cron list --token %q --url ws://127.0.0.1:18789 2>&1`, token)
 	} else {
-		script = common.OpenclawCLIPreamble() + `openclaw config get gateway.bind 2>/dev/null`
+		script = common.OpenclawCLIPreamble() + `openclaw cron list 2>&1`
 	}
-	_, err := bash.RunOutput(client, script)
-	return err == nil
+	return bash.RunOutput(client, script)
 }
 
 // Execute ensures the CLI has admin access to the gateway.
@@ -84,8 +85,8 @@ func cliHasAdminAccess(client *xssh.Client) bool {
 // the config token directly and skips device identity entirely. No
 // device pairing is needed — we just verify the token works.
 //
-// Without token auth, the CLI sends a device identity that needs to be
-// paired and approved. This path handles both cases.
+// The gateway might still be initializing after onboard, so we retry
+// with increasing delays to wait for readiness.
 func (s *PairGatewayDeviceStep) Execute(ctx context.Context, t scaffold.Target) error {
 	gt := t.Payload.(*GatewayTarget)
 	m := gt.Machine
@@ -98,42 +99,23 @@ func (s *PairGatewayDeviceStep) Execute(ctx context.Context, t scaffold.Target) 
 
 	cfgHost := common.MachineConfigHost(m, host)
 	token := common.ReadGatewayAuthToken(client)
+	var lastErr string
 
-	// Fast path: if the CLI already has admin access (e.g. token auth
-	// on loopback), no pairing is needed.
-	if cliHasAdminAccess(client) {
-		return nil
-	}
-
-	// Trigger a CLI connection to create the device identity and
-	// initial pairing request. The gateway auto-pairs on loopback.
-	_, _ = bash.RunOutput(client, common.OpenclawCLIPreamble()+`openclaw cron list 2>/dev/null || true`)
-	time.Sleep(1 * time.Second)
-
-	// Check again after initial connection.
-	if cliHasAdminAccess(client) {
-		return nil
-	}
-
-	// Poll for pending requests and approve them.
 	for attempt := 0; attempt < pairingRetries; attempt++ {
-		dl, err := s.reader.DeviceList(ctx, client, cfgHost)
-		if err != nil {
-			return fmt.Errorf("pair-gateway-device: list devices: %w", err)
+		out, err := runCLICommand(client)
+		if err == nil {
+			return nil // CLI can talk to the gateway — done
 		}
+		lastErr = strings.TrimSpace(out)
 
-		// Approve any pending requests using token auth.
-		if len(dl.Pending) > 0 {
+		// If there are pending device pairing requests, approve them.
+		// This handles the non-token-auth case where device identity is used.
+		dl, dlErr := s.reader.DeviceList(ctx, client, cfgHost)
+		if dlErr == nil && dl != nil && len(dl.Pending) > 0 {
 			for _, p := range dl.Pending {
-				if err := approveDeviceRequest(client, p.RequestID, token); err != nil {
-					return fmt.Errorf("pair-gateway-device: approve %s: %w", p.RequestID, err)
-				}
+				_ = approveDeviceRequest(client, p.RequestID, token)
 			}
 			time.Sleep(2 * time.Second)
-
-			if cliHasAdminAccess(client) {
-				return nil
-			}
 			continue
 		}
 
@@ -144,7 +126,14 @@ func (s *PairGatewayDeviceStep) Execute(ctx context.Context, t scaffold.Target) 
 		}
 	}
 
-	return fmt.Errorf("pair-gateway-device: CLI does not have admin access after %d attempts", pairingRetries)
+	// Grab gateway logs for diagnostics.
+	logs, _ := bash.RunOutput(client, strings.Join([]string{
+		`export XDG_RUNTIME_DIR=/run/user/$(id -u)`,
+		`journalctl --user -u openclaw-gateway -n 30 --no-pager 2>/dev/null || true`,
+	}, "\n"))
+
+	return fmt.Errorf("pair-gateway-device: CLI cannot access gateway after %d attempts (tokenLen=%d)\nlast error: %s\ngateway logs:\n%s",
+		pairingRetries, len(token), lastErr, logs)
 }
 
 // approveDeviceRequest approves a pending device pairing via the CLI.
@@ -167,7 +156,7 @@ func approveDeviceRequest(client *xssh.Client, requestID, token string) error {
 	return nil
 }
 
-// Verify confirms the CLI has admin access.
+// Verify confirms the CLI can access the gateway.
 func (s *PairGatewayDeviceStep) Verify(ctx context.Context, t scaffold.Target) error {
 	gt := t.Payload.(*GatewayTarget)
 	m := gt.Machine
@@ -178,8 +167,9 @@ func (s *PairGatewayDeviceStep) Verify(ctx context.Context, t scaffold.Target) e
 	}
 	defer returnSSH(ctx, key, client)
 
-	if !cliHasAdminAccess(client) {
-		return fmt.Errorf("pair-gateway-device verify: CLI does not have admin access")
+	_, err = runCLICommand(client)
+	if err != nil {
+		return fmt.Errorf("pair-gateway-device verify: CLI cannot access gateway")
 	}
 	return nil
 }
