@@ -139,7 +139,8 @@ func (s *PairGatewayDeviceStep) Execute(ctx context.Context, t scaffold.Target) 
 		// No pending requests and CLI doesn't have admin: trigger a scope
 		// upgrade by running an admin-scope command WITHOUT token auth.
 		// This uses the device identity and creates a pending scope upgrade.
-		_, _ = bash.RunOutput(client, common.OpenclawCLIPreamble()+`openclaw agents list 2>/dev/null || true`)
+		// Use `config set` which requires operator.admin scope.
+		_, _ = bash.RunOutput(client, common.OpenclawCLIPreamble()+`openclaw config set gateway.bind loopback 2>/dev/null || true`)
 		time.Sleep(1 * time.Second)
 
 		select {
