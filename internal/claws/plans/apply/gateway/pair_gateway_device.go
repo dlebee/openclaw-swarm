@@ -159,12 +159,14 @@ func (s *PairGatewayDeviceStep) Execute(ctx context.Context, t scaffold.Target) 
 // loopback detection works correctly.
 func approveDeviceDirect(client *xssh.Client, requestID string) error {
 	token := common.ReadGatewayAuthToken(client)
+	tokenLen := len(token)
+
 	if token == "" {
 		// Fallback: try without token
 		script := common.OpenclawCLIPreamble() + fmt.Sprintf(`openclaw devices approve %q 2>&1`, requestID)
 		out, err := bash.RunOutput(client, script)
 		if err != nil {
-			return fmt.Errorf("%w\n%s", err, out)
+			return fmt.Errorf("no-token approve failed (tokenLen=%d): %w\noutput: %s", tokenLen, err, out)
 		}
 		return nil
 	}
@@ -176,7 +178,7 @@ func approveDeviceDirect(client *xssh.Client, requestID string) error {
 		requestID, token)
 	out, err := bash.RunOutput(client, script)
 	if err != nil {
-		return fmt.Errorf("%w\n%s", err, out)
+		return fmt.Errorf("approve with --token --url failed (tokenLen=%d): %w\noutput: %s", tokenLen, err, out)
 	}
 	return nil
 }
