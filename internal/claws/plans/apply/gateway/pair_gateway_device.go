@@ -65,7 +65,6 @@ func (s *PairGatewayDeviceStep) Check(ctx context.Context, t scaffold.Target) (b
 // runCLICommand runs a lightweight gateway RPC command via the CLI.
 // On loopback with token auth, the CLI uses the config token directly
 // and bypasses device identity — so device pairing doesn't apply.
-// Returns the command output and any error.
 func runCLICommand(client *xssh.Client) (string, error) {
 	token := common.ReadGatewayAuthToken(client)
 	var script string
@@ -80,14 +79,40 @@ func runCLICommand(client *xssh.Client) (string, error) {
 	return bash.RunOutput(client, script)
 }
 
-// Execute ensures the CLI has admin access to the gateway.
-//
-// With token auth on loopback (the standard swarm setup), the CLI uses
-// the config token directly and skips device identity entirely. No
-// device pairing is needed — we just verify the token works.
-//
-// The gateway might still be initializing after onboard, so we retry
-// with increasing delays to wait for readiness.
+// listPendingDevices returns pending device pairing requests using token auth.
+func listPendingDevices(client *xssh.Client, token string) ([]string, error) {
+	if token == "" {
+		return nil, nil
+	}
+	script := common.OpenclawCLIPreamble() + fmt.Sprintf(
+		`openclaw devices list --json --token %q --url ws://127.0.0.1:18789 2>&1`, token)
+	out, err := bash.RunOutput(client, script)
+	if err != nil {
+		return nil, fmt.Errorf("devices list failed: %w\noutput: %s", err, out)
+	}
+	out = strings.TrimSpace(out)
+	if out == "" {
+		return nil, nil
+	}
+	var dl struct {
+		Pending []struct {
+			RequestID string `json:"requestId"`
+		} `json:"pending"`
+	}
+	if err := json.Unmarshal([]byte(out), &dl); err != nil {
+		return nil, fmt.Errorf("parse devices list: %w\nraw: %s", err, out)
+	}
+	var ids []string
+	for _, p := range dl.Pending {
+		if p.RequestID != "" {
+			ids = append(ids, p.RequestID)
+		}
+	}
+	return ids, nil
+}
+
+// Execute ensures the CLI has admin access to the gateway and that
+// no pending device pairing requests remain.
 func (s *PairGatewayDeviceStep) Execute(ctx context.Context, t scaffold.Target) error {
 	gt := t.Payload.(*GatewayTarget)
 	m := gt.Machine
@@ -98,29 +123,35 @@ func (s *PairGatewayDeviceStep) Execute(ctx context.Context, t scaffold.Target) 
 	}
 	defer returnSSH(ctx, key, client)
 
-	cfgHost := common.MachineConfigHost(m, host)
 	token := common.ReadGatewayAuthToken(client)
 	var lastErr string
 
+	// Phase 1: Wait for the gateway to accept CLI commands.
 	for attempt := 0; attempt < pairingRetries; attempt++ {
 		out, err := runCLICommand(client)
 		if err == nil {
-			// CLI works. Also approve any pending device requests
-			// so they don't block subsequent commands that don't
-			// use --token --url.
-			s.approvePendingRequests(ctx, client, cfgHost, token)
-			return nil
+			// Gateway is ready. Drain pending requests.
+			break
 		}
 		lastErr = strings.TrimSpace(out)
 
-		// If there are pending device pairing requests, approve them.
-		dl, dlErr := s.reader.DeviceList(ctx, client, cfgHost)
-		if dlErr == nil && dl != nil && len(dl.Pending) > 0 {
-			for _, p := range dl.Pending {
-				_ = approveDeviceRequest(client, p.RequestID, token)
+		// Approve pending requests that might be blocking the connection.
+		pending, _ := listPendingDevices(client, token)
+		for _, id := range pending {
+			approveOut, approveErr := approveDeviceRequest(client, id, token)
+			if approveErr != nil {
+				lastErr = fmt.Sprintf("approve %s: %s\noutput: %s", id, approveErr.Error(), approveOut)
 			}
-			time.Sleep(2 * time.Second)
-			continue
+		}
+
+		if attempt == pairingRetries-1 {
+			// Grab gateway logs for diagnostics.
+			logs, _ := bash.RunOutput(client, strings.Join([]string{
+				`export XDG_RUNTIME_DIR=/run/user/$(id -u)`,
+				`journalctl --user -u openclaw-gateway -n 30 --no-pager 2>/dev/null || true`,
+			}, "\n"))
+			return fmt.Errorf("pair-gateway-device: CLI cannot access gateway after %d attempts (tokenLen=%d)\nlast error: %s\ngateway logs:\n%s",
+				pairingRetries, len(token), lastErr, logs)
 		}
 
 		select {
@@ -130,64 +161,33 @@ func (s *PairGatewayDeviceStep) Execute(ctx context.Context, t scaffold.Target) 
 		}
 	}
 
-	// Grab gateway logs for diagnostics.
-	logs, _ := bash.RunOutput(client, strings.Join([]string{
-		`export XDG_RUNTIME_DIR=/run/user/$(id -u)`,
-		`journalctl --user -u openclaw-gateway -n 30 --no-pager 2>/dev/null || true`,
-	}, "\n"))
-
-	return fmt.Errorf("pair-gateway-device: CLI cannot access gateway after %d attempts (tokenLen=%d)\nlast error: %s\ngateway logs:\n%s",
-		pairingRetries, len(token), lastErr, logs)
-}
-
-// approvePendingRequests approves all pending device pairing requests.
-// This is called even when the CLI can already talk to the gateway
-// (via token auth) to clean up any stale pending requests that would
-// block subsequent non-token CLI calls.
-//
-// We call `devices list --json --token --url` directly so device identity
-// is omitted and we get the full list via token auth.
-func (s *PairGatewayDeviceStep) approvePendingRequests(_ context.Context, client *xssh.Client, _ common.ConfigHost, token string) {
-	if token == "" {
-		return
-	}
-	// List with --token --url to bypass device identity.
-	listScript := common.OpenclawCLIPreamble() + fmt.Sprintf(
-		`openclaw devices list --json --token %q --url ws://127.0.0.1:18789 2>/dev/null`, token)
-	out, err := bash.RunOutput(client, listScript)
-	if err != nil {
-		return
-	}
-	out = strings.TrimSpace(out)
-	if out == "" {
-		return
-	}
-	var dl struct {
-		Pending []struct {
-			RequestID string `json:"requestId"`
-		} `json:"pending"`
-	}
-	if err := json.Unmarshal([]byte(out), &dl); err != nil {
-		return
-	}
-	for _, p := range dl.Pending {
-		if p.RequestID != "" {
-			approveDeviceRequest(client, p.RequestID, token) //nolint:errcheck
-			// Wait a moment for the approval to propagate.
-			time.Sleep(500 * time.Millisecond)
+	// Phase 2: Drain ALL pending device requests so the test assertion
+	// (openclaw devices list) sees 0 pending.
+	for i := 0; i < 5; i++ {
+		pending, err := listPendingDevices(client, token)
+		if err != nil || len(pending) == 0 {
+			return nil // clean
 		}
+		for _, id := range pending {
+			approveOut, approveErr := approveDeviceRequest(client, id, token)
+			_ = approveOut
+			if approveErr != nil {
+				// Log but don't fail — we'll check again next iteration.
+				_ = approveErr
+			}
+		}
+		time.Sleep(1 * time.Second)
 	}
+	// Final check — if still pending, log but don't fail the step.
+	// The test assertion will report the issue.
+	return nil
 }
 
 // approveDeviceRequest approves a pending device pairing via the CLI.
-// When a token is available, it uses --token --url to bypass device
-// identity in the approval call itself.
-func approveDeviceRequest(client *xssh.Client, requestID, token string) error {
+// Returns output and error. Uses --json + --url to bypass device identity.
+func approveDeviceRequest(client *xssh.Client, requestID, token string) (string, error) {
 	var script string
 	if token != "" {
-		// Use --json to force JSON output mode which prevents the interactive
-		// preview path. Pass --url to ensure loopback detection works so the
-		// CLI uses token auth without sending device identity.
 		script = common.OpenclawCLIPreamble() + fmt.Sprintf(
 			`openclaw devices approve %q --token %q --url ws://127.0.0.1:18789 --json 2>&1; echo exit_code:$?`,
 			requestID, token)
@@ -195,14 +195,11 @@ func approveDeviceRequest(client *xssh.Client, requestID, token string) error {
 		script = common.OpenclawCLIPreamble() + fmt.Sprintf(
 			`openclaw devices approve %q 2>&1; echo exit_code:$?`, requestID)
 	}
-	out, err := bash.RunOutput(client, script)
-	// bash.RunOutput returns error only if the SSH session itself fails.
-	// We check the embedded exit code for the actual command result.
-	_ = err
+	out, _ := bash.RunOutput(client, script)
 	if strings.Contains(out, "exit_code:0") {
-		return nil
+		return out, nil
 	}
-	return fmt.Errorf("approve exited non-zero\noutput: %s", strings.TrimSpace(out))
+	return out, fmt.Errorf("approve exited non-zero")
 }
 
 // Verify confirms the CLI can access the gateway.

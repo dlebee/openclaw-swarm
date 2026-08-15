@@ -445,5 +445,5 @@ func assertGatewayDevicePaired(t *testing.T, dial provisioning.SSHDialFunc, host
 		t.Errorf("[%s] expected 0 pending devices, got %d (pair-gateway-device should have approved them all)",
 			mc.Name, len(dl.Pending))
 	}
-	t.Logf("[%s] devices: paired=%d pending=%d", mc.Name, len(dl.Paired), len(dl.Pending))
+	t.Logf("[%s] devices: paired=%d pending=%d\nraw: %s", mc.Name, len(dl.Paired), len(dl.Pending), out)
 }
