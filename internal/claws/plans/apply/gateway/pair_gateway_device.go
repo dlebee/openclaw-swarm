@@ -173,8 +173,9 @@ func approveDeviceDirect(client *xssh.Client, requestID string) error {
 
 	// Use --token AND --url to ensure the CLI detects loopback + shared
 	// secret auth, which omits device identity from the WS handshake.
+	// Also add DEBUG=openclaw:gateway:call to see what's happening internally.
 	script := common.OpenclawCLIPreamble() + fmt.Sprintf(
-		`openclaw devices approve %q --token %q --url ws://127.0.0.1:18789 2>&1`,
+		`DEBUG=openclaw:gateway:call openclaw devices approve %q --token %q --url ws://127.0.0.1:18789 2>&1 | tail -50`,
 		requestID, token)
 	out, err := bash.RunOutput(client, script)
 	if err != nil {
