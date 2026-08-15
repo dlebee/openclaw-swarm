@@ -2,6 +2,7 @@ package gateway
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"strings"
 	"time"
@@ -143,13 +144,38 @@ func (s *PairGatewayDeviceStep) Execute(ctx context.Context, t scaffold.Target) 
 // This is called even when the CLI can already talk to the gateway
 // (via token auth) to clean up any stale pending requests that would
 // block subsequent non-token CLI calls.
-func (s *PairGatewayDeviceStep) approvePendingRequests(ctx context.Context, client *xssh.Client, cfgHost common.ConfigHost, token string) {
-	dl, err := s.reader.DeviceList(ctx, client, cfgHost)
-	if err != nil || dl == nil {
+//
+// We call `devices list --json --token --url` directly so device identity
+// is omitted and we get the full list via token auth.
+func (s *PairGatewayDeviceStep) approvePendingRequests(_ context.Context, client *xssh.Client, _ common.ConfigHost, token string) {
+	if token == "" {
+		return
+	}
+	// List with --token --url to bypass device identity.
+	listScript := common.OpenclawCLIPreamble() + fmt.Sprintf(
+		`openclaw devices list --json --token %q --url ws://127.0.0.1:18789 2>/dev/null`, token)
+	out, err := bash.RunOutput(client, listScript)
+	if err != nil {
+		return
+	}
+	out = strings.TrimSpace(out)
+	if out == "" {
+		return
+	}
+	var dl struct {
+		Pending []struct {
+			RequestID string `json:"requestId"`
+		} `json:"pending"`
+	}
+	if err := json.Unmarshal([]byte(out), &dl); err != nil {
 		return
 	}
 	for _, p := range dl.Pending {
-		_ = approveDeviceRequest(client, p.RequestID, token)
+		if p.RequestID != "" {
+			approveDeviceRequest(client, p.RequestID, token) //nolint:errcheck
+			// Wait a moment for the approval to propagate.
+			time.Sleep(500 * time.Millisecond)
+		}
 	}
 }
 
@@ -159,18 +185,24 @@ func (s *PairGatewayDeviceStep) approvePendingRequests(ctx context.Context, clie
 func approveDeviceRequest(client *xssh.Client, requestID, token string) error {
 	var script string
 	if token != "" {
+		// Use --json to force JSON output mode which prevents the interactive
+		// preview path. Pass --url to ensure loopback detection works so the
+		// CLI uses token auth without sending device identity.
 		script = common.OpenclawCLIPreamble() + fmt.Sprintf(
-			`openclaw devices approve %q --token %q --url ws://127.0.0.1:18789 2>&1`,
+			`openclaw devices approve %q --token %q --url ws://127.0.0.1:18789 --json 2>&1; echo exit_code:$?`,
 			requestID, token)
 	} else {
 		script = common.OpenclawCLIPreamble() + fmt.Sprintf(
-			`openclaw devices approve %q 2>&1`, requestID)
+			`openclaw devices approve %q 2>&1; echo exit_code:$?`, requestID)
 	}
 	out, err := bash.RunOutput(client, script)
-	if err != nil {
-		return fmt.Errorf("%w\noutput: %s", err, out)
+	// bash.RunOutput returns error only if the SSH session itself fails.
+	// We check the embedded exit code for the actual command result.
+	_ = err
+	if strings.Contains(out, "exit_code:0") {
+		return nil
 	}
-	return nil
+	return fmt.Errorf("approve exited non-zero\noutput: %s", strings.TrimSpace(out))
 }
 
 // Verify confirms the CLI can access the gateway.
