@@ -24,7 +24,7 @@ env:
   LINODE_TOKEN: ${{ secrets.LINODE_TOKEN }}
   # Pin to last known working version (June 5, 2026 test passed with 2026.6.1)
   # The pairing flow changed in 2026.8.x and needs investigation.
-  OPENCLAW_VERSION: ${{ inputs.openclaw_version || '2026.6.1' }}
+  OPENCLAW_VERSION: ${{ inputs.openclaw_version || '2026.7.1' }}
 
 jobs:
   integration:
