@@ -189,12 +189,16 @@ func collectNodePairingDiagnostics(ctx context.Context, dial SSHDialFunc, nt *No
 		diag = append(diag, fmt.Sprintf("[node-diag] node daemon logs:\n%s", strings.TrimSpace(logs)))
 
 		// Check if node binary exists and is executable
-		nodeBin, _ := bash.RunOutput(nodeClient, `ls -la ~/.nvm/versions/node/*/bin/openclaw 2>&1 || echo "not found"`)
-		diag = append(diag, fmt.Sprintf("[node-diag] node binary: %s", strings.TrimSpace(nodeBin)))
+		nodeBin, _ := bash.RunOutput(nodeClient, `which openclaw 2>&1 && openclaw --version 2>&1 || echo "not found"`)
+		diag = append(diag, fmt.Sprintf("[node-diag] openclaw binary: %s", strings.TrimSpace(nodeBin)))
 
-		// Check node config file
+		// Check node config
 		nodeConfig, _ := bash.RunOutput(nodeClient, `cat ~/.openclaw/openclaw.json 2>&1 | head -20 || echo "no config"`)
 		diag = append(diag, fmt.Sprintf("[node-diag] node config: %s", strings.TrimSpace(nodeConfig)))
+
+		// Check the systemd unit file and env
+		nodeUnit, _ := bash.RunOutput(nodeClient, `cat ~/.config/systemd/user/openclaw-node.service 2>&1 | head -15 || echo "no unit"`)
+		diag = append(diag, fmt.Sprintf("[node-diag] systemd unit: %s", strings.TrimSpace(nodeUnit)))
 
 		// Can node reach gateway via headscale?
 		gwHost := nt.GatewayInternalHost(ctx, dial)
