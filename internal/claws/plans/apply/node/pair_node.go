@@ -3,12 +3,15 @@ package node
 import (
 	"context"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/gluwa/openclaw-swarm2/internal/claws/plans/apply/common"
 	gwService "github.com/gluwa/openclaw-swarm2/internal/claws/plans/apply/gateway"
+	"github.com/gluwa/openclaw-swarm2/internal/platformutil/bash"
 	"github.com/gluwa/openclaw-swarm2/internal/platformutil/systemd"
 	"github.com/gluwa/openclaw-swarm2/internal/scaffold"
+	xssh "golang.org/x/crypto/ssh"
 )
 
 // PairNodeStep approves the node's pending device entry on the gateway
@@ -135,11 +138,13 @@ func (s *PairNodeStep) Execute(ctx context.Context, t scaffold.Target) error {
 		time.Sleep(2 * time.Second)
 	}
 	if !approved {
+		// Collect diagnostics to understand why the node didn't appear.
+		diag := collectNodePairingDiagnostics(ctx, s.dial, nt, client)
 		if sawPending && lastApproveErr != nil {
-			return fmt.Errorf("pair-node: node %q remained unpaired after %d approve attempts; last approve error: %w",
-				nt.Spec.Name, maxAttempts, lastApproveErr)
+			return fmt.Errorf("pair-node: node %q remained unpaired after %d approve attempts; last approve error: %w\n%s",
+				nt.Spec.Name, maxAttempts, lastApproveErr, diag)
 		}
-		return fmt.Errorf("pair-node: node %q did not appear as pending device after %d attempts", nt.Spec.Name, maxAttempts)
+		return fmt.Errorf("pair-node: node %q did not appear as pending device after %d attempts\n%s", nt.Spec.Name, maxAttempts, diag)
 	}
 
 	// The node daemon may have exited after its initial connection was
@@ -159,6 +164,51 @@ func (s *PairNodeStep) Execute(ctx context.Context, t scaffold.Target) error {
 	// OpenClaw >= 2026.5.18: approve the pending node surface (system.run)
 	// after the node reconnects. No-op on older releases.
 	return approveNodeSurface(ctx, s.dial, client, nt)
+}
+
+// collectNodePairingDiagnostics gathers info to debug why a node didn't
+// appear as a pending device on the gateway.
+func collectNodePairingDiagnostics(ctx context.Context, dial SSHDialFunc, nt *NodeTarget, gwClient *xssh.Client) string {
+	var diag []string
+
+	// 1. Check node daemon status on the node machine
+	nodeMach := nt.Machine
+	nodeHost := common.ResolveMachineHost(ctx, nodeMach)
+	nodeClient, nodeKey, err := common.BorrowSSH(ctx, dial, nodeHost, common.MachineSSHPort(nodeMach), common.MachineAgentUser(nodeMach))
+	if err != nil {
+		diag = append(diag, fmt.Sprintf("[node-diag] failed to SSH to node: %v", err))
+	} else {
+		defer common.ReturnSSH(ctx, nodeKey, nodeClient)
+
+		// Node daemon status
+		status, _ := bash.RunOutput(nodeClient, `systemctl --user is-active openclaw-node 2>&1 || true`)
+		diag = append(diag, fmt.Sprintf("[node-diag] node daemon status: %s", strings.TrimSpace(status)))
+
+		// Node daemon journal (last 10 lines)
+		logs, _ := bash.RunOutput(nodeClient, `export XDG_RUNTIME_DIR=/run/user/$(id -u); journalctl --user -u openclaw-node -n 10 --no-pager 2>&1 || true`)
+		diag = append(diag, fmt.Sprintf("[node-diag] node daemon logs:\n%s", strings.TrimSpace(logs)))
+
+		// Can node reach gateway via headscale?
+		gwHost := nt.GatewayInternalHost(ctx, dial)
+		if gwHost != "" {
+			ping, _ := bash.RunOutput(nodeClient, fmt.Sprintf(`ping -c 1 -W 2 %s 2>&1 || echo "ping failed"`, gwHost))
+			diag = append(diag, fmt.Sprintf("[node-diag] ping gateway (%s): %s", gwHost, strings.TrimSpace(ping)))
+		}
+
+		// Tailscale status on node
+		tsStatus, _ := bash.RunOutput(nodeClient, `tailscale status 2>&1 | head -5 || true`)
+		diag = append(diag, fmt.Sprintf("[node-diag] tailscale status: %s", strings.TrimSpace(tsStatus)))
+	}
+
+	// 2. Check gateway's view of pending/paired devices
+	devList, _ := bash.RunOutput(gwClient, common.OpenclawCLIPreamble()+`openclaw devices list --json 2>&1 | head -50 || true`)
+	diag = append(diag, fmt.Sprintf("[gw-diag] devices list: %s", strings.TrimSpace(devList)))
+
+	// Gateway daemon logs
+	gwLogs, _ := bash.RunOutput(gwClient, `export XDG_RUNTIME_DIR=/run/user/$(id -u); journalctl --user -u openclaw-gateway -n 15 --no-pager 2>&1 || true`)
+	diag = append(diag, fmt.Sprintf("[gw-diag] gateway logs:\n%s", strings.TrimSpace(gwLogs)))
+
+	return strings.Join(diag, "\n")
 }
 
 func (s *PairNodeStep) Verify(ctx context.Context, t scaffold.Target) error {
