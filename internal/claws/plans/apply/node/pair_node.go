@@ -221,11 +221,15 @@ func collectNodePairingDiagnostics(ctx context.Context, dial SSHDialFunc, nt *No
 
 	// 2. Check gateway's view of pending/paired devices (use token auth)
 	token := common.ReadGatewayAuthToken(gwClient)
+	diag = append(diag, fmt.Sprintf("[gw-diag] token length: %d", len(token)))
+	
 	var devScript string
 	if token != "" {
 		devScript = fmt.Sprintf(`openclaw devices list --json --token %q --url ws://127.0.0.1:18789 2>&1 | head -50 || true`, token)
+		diag = append(diag, "[gw-diag] using token auth for devices list")
 	} else {
 		devScript = `openclaw devices list --json 2>&1 | head -50 || true`
+		diag = append(diag, "[gw-diag] NO TOKEN - using default auth for devices list")
 	}
 	devList, _ := bash.RunOutput(gwClient, common.OpenclawCLIPreamble()+devScript)
 	diag = append(diag, fmt.Sprintf("[gw-diag] devices list: %s", strings.TrimSpace(devList)))
