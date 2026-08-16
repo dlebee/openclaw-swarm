@@ -184,8 +184,11 @@ func collectNodePairingDiagnostics(ctx context.Context, dial SSHDialFunc, nt *No
 		status, _ := bash.RunOutput(nodeClient, `systemctl --user is-active openclaw-node 2>&1 || true`)
 		diag = append(diag, fmt.Sprintf("[node-diag] node daemon status: %s", strings.TrimSpace(status)))
 
-		// Node daemon journal (last 20 lines)
-		logs, _ := bash.RunOutput(nodeClient, `export XDG_RUNTIME_DIR=/run/user/$(id -u); journalctl --user -u openclaw-node -n 20 --no-pager 2>&1 || true`)
+		// Node daemon status (detailed) + journal
+		statusOut, _ := bash.RunOutput(nodeClient, `export XDG_RUNTIME_DIR=/run/user/$(id -u); systemctl --user status openclaw-node 2>&1 || true`)
+		diag = append(diag, fmt.Sprintf("[node-diag] systemctl status:\n%s", strings.TrimSpace(statusOut)))
+
+		logs, _ := bash.RunOutput(nodeClient, `export XDG_RUNTIME_DIR=/run/user/$(id -u); journalctl --user -u openclaw-node -n 30 --no-pager 2>&1 || true`)
 		diag = append(diag, fmt.Sprintf("[node-diag] node daemon logs:\n%s", strings.TrimSpace(logs)))
 
 		// Check if node binary exists and is executable
@@ -196,9 +199,13 @@ func collectNodePairingDiagnostics(ctx context.Context, dial SSHDialFunc, nt *No
 		nodeConfig, _ := bash.RunOutput(nodeClient, `cat ~/.openclaw/openclaw.json 2>&1 | head -20 || echo "no config"`)
 		diag = append(diag, fmt.Sprintf("[node-diag] node config: %s", strings.TrimSpace(nodeConfig)))
 
-		// Check the systemd unit file and env
-		nodeUnit, _ := bash.RunOutput(nodeClient, `cat ~/.config/systemd/user/openclaw-node.service 2>&1 | head -15 || echo "no unit"`)
-		diag = append(diag, fmt.Sprintf("[node-diag] systemd unit: %s", strings.TrimSpace(nodeUnit)))
+		// Check the systemd unit file and env drop-in
+		nodeUnitContent, _ := bash.RunOutput(nodeClient, `cat ~/.config/systemd/user/openclaw-node.service 2>&1 || echo "no unit"`)
+		diag = append(diag, fmt.Sprintf("[node-diag] systemd unit:\n%s", strings.TrimSpace(nodeUnitContent)))
+
+		// Check openclaw data dir
+		dataDir, _ := bash.RunOutput(nodeClient, `ls -la ~/.openclaw/ 2>&1 || echo "no .openclaw dir"`)
+		diag = append(diag, fmt.Sprintf("[node-diag] .openclaw dir: %s", strings.TrimSpace(dataDir)))
 
 		// Can node reach gateway via headscale?
 		gwHost := nt.GatewayInternalHost(ctx, dial)
