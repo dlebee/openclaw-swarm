@@ -184,9 +184,17 @@ func collectNodePairingDiagnostics(ctx context.Context, dial SSHDialFunc, nt *No
 		status, _ := bash.RunOutput(nodeClient, `systemctl --user is-active openclaw-node 2>&1 || true`)
 		diag = append(diag, fmt.Sprintf("[node-diag] node daemon status: %s", strings.TrimSpace(status)))
 
-		// Node daemon journal (last 10 lines)
-		logs, _ := bash.RunOutput(nodeClient, `export XDG_RUNTIME_DIR=/run/user/$(id -u); journalctl --user -u openclaw-node -n 10 --no-pager 2>&1 || true`)
+		// Node daemon journal (last 20 lines)
+		logs, _ := bash.RunOutput(nodeClient, `export XDG_RUNTIME_DIR=/run/user/$(id -u); journalctl --user -u openclaw-node -n 20 --no-pager 2>&1 || true`)
 		diag = append(diag, fmt.Sprintf("[node-diag] node daemon logs:\n%s", strings.TrimSpace(logs)))
+
+		// Check if node binary exists and is executable
+		nodeBin, _ := bash.RunOutput(nodeClient, `ls -la ~/.nvm/versions/node/*/bin/openclaw 2>&1 || echo "not found"`)
+		diag = append(diag, fmt.Sprintf("[node-diag] node binary: %s", strings.TrimSpace(nodeBin)))
+
+		// Check node config file
+		nodeConfig, _ := bash.RunOutput(nodeClient, `cat ~/.openclaw/openclaw.json 2>&1 | head -20 || echo "no config"`)
+		diag = append(diag, fmt.Sprintf("[node-diag] node config: %s", strings.TrimSpace(nodeConfig)))
 
 		// Can node reach gateway via headscale?
 		gwHost := nt.GatewayInternalHost(ctx, dial)
@@ -200,8 +208,15 @@ func collectNodePairingDiagnostics(ctx context.Context, dial SSHDialFunc, nt *No
 		diag = append(diag, fmt.Sprintf("[node-diag] tailscale status: %s", strings.TrimSpace(tsStatus)))
 	}
 
-	// 2. Check gateway's view of pending/paired devices
-	devList, _ := bash.RunOutput(gwClient, common.OpenclawCLIPreamble()+`openclaw devices list --json 2>&1 | head -50 || true`)
+	// 2. Check gateway's view of pending/paired devices (use token auth)
+	token := common.ReadGatewayAuthToken(gwClient)
+	var devScript string
+	if token != "" {
+		devScript = fmt.Sprintf(`openclaw devices list --json --token %q --url ws://127.0.0.1:18789 2>&1 | head -50 || true`, token)
+	} else {
+		devScript = `openclaw devices list --json 2>&1 | head -50 || true`
+	}
+	devList, _ := bash.RunOutput(gwClient, common.OpenclawCLIPreamble()+devScript)
 	diag = append(diag, fmt.Sprintf("[gw-diag] devices list: %s", strings.TrimSpace(devList)))
 
 	// Gateway daemon logs
