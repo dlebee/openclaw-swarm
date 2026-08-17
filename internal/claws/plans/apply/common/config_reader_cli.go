@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/gluwa/openclaw-swarm2/internal/platformutil/bash"
+	"github.com/gluwa/openclaw-swarm2/internal/platformutil/sshfile"
 	xssh "golang.org/x/crypto/ssh"
 )
 
@@ -323,7 +324,21 @@ func (r *cliConfigReader) DeviceList(ctx context.Context, client *xssh.Client, h
 }
 
 func listDevicesViaCLI(client *xssh.Client) (*DeviceList, bool) {
-	out, err := bash.RunOutput(client, OpenclawCLIPreamble()+`openclaw devices list --json 2>/dev/null`)
+	// Use gateway token to bypass CLI device auth, which may have a pending
+	// scope upgrade that blocks the connection.
+	token := ReadGatewayAuthToken(client)
+
+	var script string
+	if token != "" {
+		// --url ensures loopback detection so the CLI omits device identity
+		// and uses pure token auth. Without --url, the CLI may send device
+		// identity on the first call and create an unwanted pairing.
+		script = OpenclawCLIPreamble() + fmt.Sprintf(`openclaw devices list --json --token %q --url ws://127.0.0.1:18789 2>/dev/null`, token)
+	} else {
+		script = OpenclawCLIPreamble() + `openclaw devices list --json 2>/dev/null`
+	}
+
+	out, err := bash.RunOutput(client, script)
 	if err != nil {
 		return nil, false
 	}
@@ -408,6 +423,34 @@ func readDaemonStateFile(client *xssh.Client, path string) (string, bool) {
 // returns from there onward. Openclaw's CLI sometimes prints daemon-status
 // preamble before the JSON payload; callers strip it so the unmarshal sees
 // a clean document.
+// ReadGatewayAuthToken reads the gateway auth token from the remote
+// machine's config file via SFTP. Returns "" when the token cannot
+// be read. Uses SFTP instead of `openclaw config get` because the
+// CLI redacts secret values.
+func ReadGatewayAuthToken(client *xssh.Client) string {
+	home, err := bash.RunOutput(client, `echo $HOME`)
+	if err != nil {
+		return ""
+	}
+	// Import is in the gateway package; call the SFTP-based reader
+	// that already handles gateway.auth.token correctly.
+	raw, err := sshfile.ReadFile(client, strings.TrimSpace(home)+"/.openclaw/openclaw.json")
+	if err != nil {
+		return ""
+	}
+	var cfg struct {
+		Gateway struct {
+			Auth struct {
+				Token string `json:"token"`
+			} `json:"auth"`
+		} `json:"gateway"`
+	}
+	if err := json.Unmarshal(raw, &cfg); err != nil {
+		return ""
+	}
+	return cfg.Gateway.Auth.Token
+}
+
 func extractJSON(s string, startChar byte) string {
 	idx := strings.IndexByte(s, startChar)
 	if idx < 0 {

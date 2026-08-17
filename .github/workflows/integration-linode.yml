@@ -11,12 +11,20 @@ on:
         required: false
         type: string
         default: ''
+      openclaw_version:
+        description: 'Pin OpenClaw version (e.g., 2026.6.34). Leave empty for latest.'
+        required: false
+        type: string
+        default: ''
 
 permissions:
   contents: read
 
 env:
   LINODE_TOKEN: ${{ secrets.LINODE_TOKEN }}
+  # Pin to last known working version (June 5, 2026 test passed with 2026.6.1)
+  # The pairing flow changed in 2026.8.x and needs investigation.
+  OPENCLAW_VERSION: ${{ inputs.openclaw_version || '2026.6.1' }}
 
 jobs:
   integration:
