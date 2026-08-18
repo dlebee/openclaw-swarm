@@ -41,6 +41,14 @@ type ConfigReader interface {
 	// Fallbacks is nil (not empty) when no fallbacks are configured.
 	AgentModelFull(ctx context.Context, client *xssh.Client, h ConfigHost, agentID string) (primary string, fallbacks []string, exists bool, err error)
 
+	// AgentModelEntries returns cfg.agents.list[i].models — per-model-ref
+	// policy keyed by the fully-qualified model ref. Entries are returned
+	// as decoded generic objects so callers can merge into them without
+	// dropping keys claws does not own (aliases, thinking policy, …).
+	// Returns exists=false if the agent is not in agents.list[]; a present
+	// agent with no models map yields an empty (non-nil) map.
+	AgentModelEntries(ctx context.Context, client *xssh.Client, h ConfigHost, agentID string) (entries map[string]map[string]any, exists bool, err error)
+
 	// AgentTools returns the tools.exec portion of
 	// cfg.agents.list[idx].tools. Returns a zero-value struct when the
 	// path is absent, never nil unless an error is returned.
@@ -181,4 +189,38 @@ func HasPairedLocalDevice(dl *DeviceList) bool {
 		return false
 	}
 	return len(dl.Paired) > 0
+}
+
+// ModelRuntimeID reads the agent-runtime id out of one
+// `agents.list[].models[<ref>]` entry — i.e. `entry.agentRuntime.id`.
+// Returns "" when the entry does not pin a runtime, which is also what a
+// nil entry yields.
+func ModelRuntimeID(entry map[string]any) string {
+	rt, ok := entry["agentRuntime"].(map[string]any)
+	if !ok {
+		return ""
+	}
+	id, _ := rt["id"].(string)
+	return id
+}
+
+// WithModelRuntimeID returns a copy of entry with `agentRuntime.id` set to
+// id, preserving every other key — both on the entry itself and inside the
+// nested agentRuntime object. openclaw model entries carry policy claws
+// does not own (aliases, thinking levels, …); a runtime pin must not drop
+// it. A nil entry yields a fresh one.
+func WithModelRuntimeID(entry map[string]any, id string) map[string]any {
+	out := make(map[string]any, len(entry)+1)
+	for k, v := range entry {
+		out[k] = v
+	}
+	rt := make(map[string]any, 1)
+	if existing, ok := entry["agentRuntime"].(map[string]any); ok {
+		for k, v := range existing {
+			rt[k] = v
+		}
+	}
+	rt["id"] = id
+	out["agentRuntime"] = rt
+	return out
 }

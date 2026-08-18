@@ -150,6 +150,20 @@ func TestAgentModelSwap(t *testing.T) {
 	}
 	t.Logf("verified initial config: primary=%q fallbacks=%v", model, fallbacks)
 
+	// Verify the per-model runtime pin landed on the primary only.
+	initialPin := ag.Models[initialPrimary].Runtime
+	if initialPin == "" {
+		t.Fatalf("fixture sanity: agent %q pins no runtime for primary %q", ag.ID, initialPrimary)
+	}
+	runtimes := fetchAgentModelRuntimes(t, dial, host, mc, ag.ID)
+	if runtimes[initialPrimary] != initialPin {
+		t.Errorf("initial runtime for %q = %q, want %q", initialPrimary, runtimes[initialPrimary], initialPin)
+	}
+	if got := runtimes[initialFallbacks[0]]; got != "" {
+		t.Errorf("fallback %q runtime = %q, want unpinned", initialFallbacks[0], got)
+	}
+	t.Logf("verified initial runtime pins: %v", runtimes)
+
 	// --- swap model and fallbacks ------------------------------------------
 
 	// Swap: primary becomes first fallback, first fallback becomes primary
@@ -163,6 +177,10 @@ func TestAgentModelSwap(t *testing.T) {
 
 	ag.Model.Primary = swappedPrimary
 	ag.Model.Fallbacks = swappedFallbacks
+	// Move the runtime pin to the new primary. The old pin is deliberately
+	// left in the manifest's shadow: claws is additive on the models map,
+	// so dropping a ref here must NOT unpin it on the gateway.
+	ag.Models = manifestdata.AgentModels{swappedPrimary: {Runtime: initialPin}}
 
 	// --- second apply: only agents phase -----------------------------------
 
@@ -199,6 +217,16 @@ func TestAgentModelSwap(t *testing.T) {
 		t.Errorf("swapped fallbacks = %v, want %v", fallbacks2, swappedFallbacks)
 	}
 	t.Logf("verified swapped config: primary=%q fallbacks=%v", model2, fallbacks2)
+
+	runtimes2 := fetchAgentModelRuntimes(t, dial, host, mc, ag.ID)
+	if runtimes2[swappedPrimary] != initialPin {
+		t.Errorf("swapped runtime for %q = %q, want %q", swappedPrimary, runtimes2[swappedPrimary], initialPin)
+	}
+	if runtimes2[initialPrimary] != initialPin {
+		t.Errorf("runtime for %q = %q, want %q preserved (claws is additive on the models map)",
+			initialPrimary, runtimes2[initialPrimary], initialPin)
+	}
+	t.Logf("verified swapped runtime pins: %v", runtimes2)
 
 	// --- teardown ----------------------------------------------------------
 
@@ -279,4 +307,50 @@ func stringSlicesEqual(a, b []string) bool {
 		}
 	}
 	return true
+}
+
+// fetchAgentModelRuntimes retrieves the per-model runtime pins
+// (agents.list[].models[<ref>].agentRuntime.id) for one agent, keyed by
+// model ref. Refs with no pin are absent from the returned map.
+func fetchAgentModelRuntimes(t *testing.T, dial provisioning.SSHDialFunc, host string, mc manifestdata.Machine, agentID string) map[string]string {
+	t.Helper()
+
+	cmd := `openclaw config get agents.list --json 2>/dev/null`
+	out, err := sshRunAsGatewayAgent(t, dial, host, mc, cmd)
+	if err != nil {
+		t.Fatalf("[%s] openclaw config get: %v\n%s", mc.Name, err, out)
+	}
+
+	idx := strings.Index(out, "[")
+	if idx < 0 {
+		t.Fatalf("[%s] config get output had no JSON array:\n%s", mc.Name, out)
+	}
+	raw := out[idx:]
+
+	var agents []struct {
+		ID     string `json:"id"`
+		Models map[string]struct {
+			AgentRuntime struct {
+				ID string `json:"id"`
+			} `json:"agentRuntime"`
+		} `json:"models"`
+	}
+	if err := json.Unmarshal([]byte(raw), &agents); err != nil {
+		t.Fatalf("[%s] parse agents list: %v\nraw:\n%s", mc.Name, err, raw)
+	}
+
+	pins := map[string]string{}
+	for _, a := range agents {
+		if !strings.EqualFold(a.ID, agentID) {
+			continue
+		}
+		for ref, entry := range a.Models {
+			if entry.AgentRuntime.ID != "" {
+				pins[ref] = entry.AgentRuntime.ID
+			}
+		}
+		return pins
+	}
+	t.Fatalf("[%s] agent %q not found in config", mc.Name, agentID)
+	return nil
 }

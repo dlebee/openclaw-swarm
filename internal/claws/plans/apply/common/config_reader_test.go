@@ -87,7 +87,8 @@ func sampleSnapshot(t *testing.T) *openclawSnapshot {
 	    "defaults": {"model": "default-model"},
 	    "list": [
 	      {"id": "Main", "model": "sonnet-4", "tools": {"exec": {"host":"h","node":"n","security":"sandbox"}}},
-	      {"id": "second", "model": {"primary":"opus-3","fallbacks":["sonnet-4"]}},
+	      {"id": "second", "model": {"primary":"opus-3","fallbacks":["sonnet-4"]},
+	       "models": {"opus-3": {"alias":"Opus","agentRuntime":{"id":"claude-cli"}}, "sonnet-4": {}}},
 	      {"id": "third"}
 	    ]
 	  },
@@ -143,6 +144,10 @@ func (c *countingReader) AgentModel(ctx context.Context, _ *xssh.Client, h Confi
 func (c *countingReader) AgentModelFull(ctx context.Context, _ *xssh.Client, h ConfigHost, id string) (string, []string, bool, error) {
 	c.calls++
 	return "", nil, false, nil
+}
+func (c *countingReader) AgentModelEntries(ctx context.Context, _ *xssh.Client, h ConfigHost, id string) (map[string]map[string]any, bool, error) {
+	c.calls++
+	return nil, false, nil
 }
 func (c *countingReader) AgentTools(ctx context.Context, _ *xssh.Client, h ConfigHost, idx int) (*RemoteToolsConfig, error) {
 	c.calls++
@@ -465,5 +470,74 @@ func TestSnapshotReader_ExecutePhase_delegatesToFallback(t *testing.T) {
 
 	if fb.calls != 9 {
 		t.Fatalf("fallback call count = %d, want 9 (one per method)", fb.calls)
+	}
+}
+
+func TestSnapshotReader_AgentModelEntries(t *testing.T) {
+	host := ConfigHost{Addr: "h", Port: 22, User: "u"}
+	snap := sampleSnapshot(t)
+	ctx := cachingProbeCtx(t, host, snap)
+	fb := &countingReader{}
+	r := NewSnapshotConfigReader(fb).(*snapshotConfigReader)
+
+	entries, exists, err := r.AgentModelEntries(ctx, nil, host, "SECOND")
+	if err != nil || !exists {
+		t.Fatalf("second: got (exists=%v, err=%v), want (true, nil)", exists, err)
+	}
+	if got := ModelRuntimeID(entries["opus-3"]); got != "claude-cli" {
+		t.Fatalf("opus-3 runtime: got %q, want claude-cli", got)
+	}
+	if got := ModelRuntimeID(entries["sonnet-4"]); got != "" {
+		t.Fatalf("sonnet-4 runtime: got %q, want \"\" (entry pins none)", got)
+	}
+	if got := ModelRuntimeID(entries["absent"]); got != "" {
+		t.Fatalf("absent ref runtime: got %q, want \"\"", got)
+	}
+
+	// Agent with no models map at all → present, empty.
+	entries, exists, _ = r.AgentModelEntries(ctx, nil, host, "main")
+	if !exists {
+		t.Fatalf("main: exists = false, want true")
+	}
+	if len(entries) != 0 {
+		t.Fatalf("main entries: got %v, want empty", entries)
+	}
+
+	// Absent agent.
+	if _, exists, _ = r.AgentModelEntries(ctx, nil, host, "nope"); exists {
+		t.Fatalf("absent agent: exists = true, want false")
+	}
+
+	if fb.calls != 0 {
+		t.Fatalf("fallback called %d times; should be 0 inside probe with primed cache", fb.calls)
+	}
+}
+
+func TestWithModelRuntimeID_preservesForeignKeys(t *testing.T) {
+	entry := map[string]any{
+		"alias":        "Opus",
+		"agentRuntime": map[string]any{"id": "openclaw", "someFutureKey": true},
+	}
+	out := WithModelRuntimeID(entry, "claude-cli")
+
+	if got := ModelRuntimeID(out); got != "claude-cli" {
+		t.Fatalf("runtime: got %q, want claude-cli", got)
+	}
+	if out["alias"] != "Opus" {
+		t.Fatalf("alias dropped: %v", out)
+	}
+	rt := out["agentRuntime"].(map[string]any)
+	if rt["someFutureKey"] != true {
+		t.Fatalf("nested runtime key dropped: %v", rt)
+	}
+	// Input must not be mutated — Check runs against it after Execute
+	// builds the merged value.
+	if ModelRuntimeID(entry) != "openclaw" {
+		t.Fatalf("input mutated: %v", entry)
+	}
+
+	// nil entry is a valid starting point.
+	if got := ModelRuntimeID(WithModelRuntimeID(nil, "claude-cli")); got != "claude-cli" {
+		t.Fatalf("nil entry: runtime = %q, want claude-cli", got)
 	}
 }

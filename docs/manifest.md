@@ -217,6 +217,9 @@ agents:
     model:
       primary:   "anthropic/claude-opus-4-6"
       fallbacks: ["anthropic/claude-sonnet-4-6"]
+    models:                     # optional; per-model-ref policy
+      "anthropic/claude-opus-4-6":
+        runtime: claude-cli     # execute this model through the local Claude CLI
     tools:
       exec:
         host: node              # gateway | node
@@ -247,6 +250,8 @@ agents:
 | `workspace` | Absolute path (or `~/…`) on the gateway host. The workspace is where `SOUL.md`, `IDENTITY.md`, `AGENTS.md`, and agent state live. Two agents MUST NOT share a workspace. |
 | `model.primary` | Fully-qualified model ref (`provider/id`). Custom providers (anything outside the built-in catalog) need a matching entry in `openclaw.json` — usually installed by an automation. |
 | `model.fallbacks` | Tried in order when primary fails. |
+| `models` | Optional map of **model ref → policy**, mirroring openclaw's `agents.list[].models`. Keys are fully-qualified refs (`anthropic/claude-opus-5`); a ref does not have to appear in `model.primary`/`model.fallbacks`. |
+| `models[ref].runtime` | Agent runtime that executes turns for **this model** — written to `agents.list[].models[<ref>].agentRuntime.id`. Omit to leave openclaw's default runtime selection alone. |
 | `tools.exec.host` | `gateway` (run on the gateway box) or `node` (run on a paired node). |
 | `tools.exec.node` | Required when `host: node`. Must match a `nodes[].name` paired to the same gateway. |
 | `tools.exec.security` | Overrides the node's `exec_policy.security` for this agent. |
@@ -256,6 +261,41 @@ agents:
 | `agents_md` | Runtime instructions (tools available, etiquette, hand-off rules). Written to `AGENTS.md`. |
 | `identity.name`, `identity.emoji` | Display name / emoji rendered by channel integrations. |
 | `bindings[]` | Wires the agent to channels. `channel` matches `channels[].kind`; `account` matches `channels[].name`. Omit `account` to inherit the kind's default. |
+
+### Per-model agent runtimes
+
+The runtime that executes a turn is a property of the **model**, not of the
+agent — which is why `models:` is a map keyed by model ref rather than a
+single field on the agent. One agent can run its primary through a local
+CLI and its fallback through the provider API:
+
+```yaml
+    model:
+      primary:   "anthropic/claude-opus-5"
+      fallbacks: ["anthropic/claude-sonnet-5"]
+    models:
+      "anthropic/claude-opus-5":
+        runtime: claude-cli     # local Claude Code process
+      # sonnet-5 is left unpinned → normal Anthropic API path
+```
+
+The model ref stays canonical (`anthropic/…`) either way; `runtime` only
+changes *how* the turn is executed. `claude-cli` requires Claude Code to be
+installed **and logged in as the agent user** on the gateway host — claws
+does not install or authenticate it. A `models:` entry is only applied to a
+model the agent actually uses; pinning a ref reachable through an in-chat
+`/model` switch is allowed.
+
+Two behaviours worth knowing:
+
+- **Additive.** claws writes the refs the manifest declares and preserves
+  everything else in the remote `models` map (aliases, entries added by an
+  automation or by openclaw itself). Removing a `models:` entry from the
+  manifest does **not** unpin it on the gateway — clear it by hand, or pin
+  it back to the runtime you want.
+- **Drift-checked per ref.** A ref whose remote `agentRuntime.id` differs
+  from the manifest makes the `ensure-model` step report unsatisfied and
+  get rewritten on the next `claws apply`.
 
 ---
 

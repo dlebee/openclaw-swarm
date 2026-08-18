@@ -94,6 +94,14 @@ func TestLoadDavidArmyExample(t *testing.T) {
 	if len(techWriter.Model.Fallbacks) != 1 || techWriter.Model.Fallbacks[0] != "anthropic/claude-sonnet-4-6" {
 		t.Errorf("tech-writer fallbacks: %#v", techWriter.Model.Fallbacks)
 	}
+	// Runtime pins are per model ref, so only the primary is pinned here
+	// while the fallback keeps openclaw's default runtime selection.
+	if got := techWriter.Models["anthropic/claude-opus-4-6"].Runtime; got != "claude-cli" {
+		t.Errorf("tech-writer opus runtime: got %q want claude-cli", got)
+	}
+	if _, pinned := techWriter.Models["anthropic/claude-sonnet-4-6"]; pinned {
+		t.Errorf("tech-writer sonnet should not be pinned: %#v", techWriter.Models)
+	}
 
 	if len(m.Nodes) != 2 {
 		t.Fatalf("nodes: got %d want 2", len(m.Nodes))

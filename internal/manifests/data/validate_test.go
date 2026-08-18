@@ -353,3 +353,55 @@ func TestParseMode(t *testing.T) {
 		}
 	}
 }
+
+func TestValidateManifest_AgentModels(t *testing.T) {
+	t.Parallel()
+
+	agentWith := func(models AgentModels) *Manifest {
+		return &Manifest{Agents: []Agent{{
+			ID:      "dev",
+			Gateway: "gateway",
+			Model:   AgentModel{Primary: "anthropic/claude-opus-5"},
+			Models:  models,
+		}}}
+	}
+
+	t.Run("accepts a runtime pin", func(t *testing.T) {
+		t.Parallel()
+		m := agentWith(AgentModels{"anthropic/claude-opus-5": {Runtime: "claude-cli"}})
+		if err := ValidateManifest(m); err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+	})
+
+	t.Run("accepts a ref outside primary/fallbacks", func(t *testing.T) {
+		t.Parallel()
+		// Legitimate: the agent can reach this model via an in-chat
+		// /model switch, and the pin should apply when it does.
+		m := agentWith(AgentModels{"anthropic/claude-haiku-4-5": {Runtime: "claude-cli"}})
+		if err := ValidateManifest(m); err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+	})
+
+	t.Run("rejects a blank ref", func(t *testing.T) {
+		t.Parallel()
+		m := agentWith(AgentModels{"  ": {Runtime: "claude-cli"}})
+		err := ValidateManifest(m)
+		if err == nil || !strings.Contains(err.Error(), "blank model ref") {
+			t.Fatalf("want blank ref error, got %v", err)
+		}
+	})
+
+	t.Run("rejects an entry with no fields", func(t *testing.T) {
+		t.Parallel()
+		m := agentWith(AgentModels{"anthropic/claude-opus-5": {}})
+		err := ValidateManifest(m)
+		if err == nil || !strings.Contains(err.Error(), "sets no fields") {
+			t.Fatalf("want empty-entry error, got %v", err)
+		}
+		if !strings.Contains(err.Error(), `agent "dev"`) {
+			t.Fatalf("error should name the agent, got %v", err)
+		}
+	})
+}

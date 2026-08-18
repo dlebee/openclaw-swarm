@@ -143,6 +143,39 @@ func (r *cliConfigReader) AgentModelFull(ctx context.Context, client *xssh.Clien
 	return model, fallbacks, exists, err
 }
 
+func (r *cliConfigReader) AgentModelEntries(ctx context.Context, client *xssh.Client, h ConfigHost, agentID string) (map[string]map[string]any, bool, error) {
+	entries := map[string]map[string]any{}
+	var exists bool
+	err := r.withClient(ctx, client, h, func(c *xssh.Client) error {
+		raw, err := r.runJSON(c, `openclaw config get agents.list --json 2>/dev/null || echo "[]"`, '[')
+		if err != nil {
+			return fmt.Errorf("agents list: %w", err)
+		}
+		var agents []struct {
+			ID     string                    `json:"id"`
+			Models map[string]map[string]any `json:"models"`
+		}
+		if err := json.Unmarshal([]byte(raw), &agents); err != nil {
+			return fmt.Errorf("agents list: parse %q: %w", raw, err)
+		}
+		for _, a := range agents {
+			if a.ID != agentID {
+				continue
+			}
+			exists = true
+			for ref, entry := range a.Models {
+				entries[ref] = entry
+			}
+			return nil
+		}
+		return nil
+	})
+	if !exists {
+		return nil, false, err
+	}
+	return entries, true, err
+}
+
 func (r *cliConfigReader) AgentTools(ctx context.Context, client *xssh.Client, h ConfigHost, idx int) (*RemoteToolsConfig, error) {
 	cfg := &RemoteToolsConfig{}
 	err := r.withClient(ctx, client, h, func(c *xssh.Client) error {

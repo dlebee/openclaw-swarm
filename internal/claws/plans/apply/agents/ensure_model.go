@@ -4,14 +4,18 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"sort"
+	"strings"
 
 	"github.com/gluwa/openclaw-swarm2/internal/claws/plans/apply/common"
+	manifestdata "github.com/gluwa/openclaw-swarm2/internal/manifests/data"
 	"github.com/gluwa/openclaw-swarm2/internal/platformutil/bash"
 	"github.com/gluwa/openclaw-swarm2/internal/scaffold"
 )
 
 // EnsureModelStep ensures the agent's model config (primary + fallbacks)
-// matches the manifest. Drift-repairs via `openclaw config set --batch-json`.
+// and its per-model runtime pins match the manifest. Drift-repairs via
+// `openclaw config set --batch-json`.
 type EnsureModelStep struct {
 	dial   SSHDialFunc
 	reader common.ConfigReader
@@ -56,7 +60,37 @@ func (s *EnsureModelStep) Check(ctx context.Context, t scaffold.Target) (bool, e
 	if !stringSlicesEqual(fallbacks, at.Spec.Model.Fallbacks) {
 		return false, nil
 	}
+	// Check per-model runtime pins match
+	if len(at.Spec.Models) > 0 {
+		entries, entriesExist, err := s.reader.AgentModelEntries(ctx, client, common.MachineConfigHost(m, host), at.Spec.ID)
+		if err != nil {
+			return false, fmt.Errorf("read model entries for agent %q: %w", at.Spec.ID, err)
+		}
+		if !entriesExist || len(modelRuntimeDrift(at.Spec.Models, entries)) > 0 {
+			return false, nil
+		}
+	}
 	return true, nil
+}
+
+// modelRuntimeDrift reports every manifest-declared model ref whose remote
+// `agentRuntime.id` differs from the manifest. Refs present remotely but
+// absent from the manifest are ignored: claws only owns what the manifest
+// declares, and an agent's models map legitimately carries entries written
+// by openclaw itself or by an automation.
+func modelRuntimeDrift(desired manifestdata.AgentModels, remote map[string]map[string]any) []string {
+	var drifted []string
+	for ref, entry := range desired {
+		want := strings.TrimSpace(entry.Runtime)
+		if want == "" {
+			continue
+		}
+		if common.ModelRuntimeID(remote[ref]) != want {
+			drifted = append(drifted, ref)
+		}
+	}
+	sort.Strings(drifted)
+	return drifted
 }
 
 // stringSlicesEqual compares two string slices for equality.
@@ -111,6 +145,39 @@ func (s *EnsureModelStep) Execute(ctx context.Context, t scaffold.Target) error 
 	}
 	batch := []batchEntry{{Path: modelPath, Value: modelValue}}
 
+	// Per-model runtime pins live in a sibling map, not inside `model` —
+	// openclaw keys agent-runtime policy by model ref
+	// (`agents.list[].models[<ref>].agentRuntime.id`), because the runtime
+	// that executes a turn is a property of the model, not of the agent.
+	//
+	// The whole map is rewritten in one value rather than one dotted path
+	// per ref: model refs contain "/" and may contain "." (e.g. gpt-4.1),
+	// which a dotted config path cannot express. Merging on top of what
+	// the gateway already has keeps refs and sibling keys claws does not
+	// own (aliases, thinking policy, …).
+	if len(at.Spec.Models) > 0 {
+		host := common.MachineConfigHost(m, common.ResolveMachineHost(ctx, m))
+		existing, _, err := s.reader.AgentModelEntries(ctx, client, host, at.Spec.ID)
+		if err != nil {
+			return fmt.Errorf("ensure-model: read model entries: %w", err)
+		}
+		merged := make(map[string]any, len(existing)+len(at.Spec.Models))
+		for ref, entry := range existing {
+			merged[ref] = entry
+		}
+		for ref, entry := range at.Spec.Models {
+			runtime := strings.TrimSpace(entry.Runtime)
+			if runtime == "" {
+				continue
+			}
+			merged[ref] = common.WithModelRuntimeID(existing[ref], runtime)
+		}
+		batch = append(batch, batchEntry{
+			Path:  fmt.Sprintf("agents.list[%d].models", idx),
+			Value: merged,
+		})
+	}
+
 	batchJSON, err := json.Marshal(batch)
 	if err != nil {
 		return fmt.Errorf("ensure-model: marshal: %w", err)
@@ -149,6 +216,22 @@ func (s *EnsureModelStep) Verify(ctx context.Context, t scaffold.Target) error {
 	}
 	if !stringSlicesEqual(fallbacks, at.Spec.Model.Fallbacks) {
 		return fmt.Errorf("ensure-model verify: fallbacks %v, want %v", fallbacks, at.Spec.Model.Fallbacks)
+	}
+	if len(at.Spec.Models) > 0 {
+		entries, entriesExist, err := s.reader.AgentModelEntries(ctx, client, common.MachineConfigHost(m, host), at.Spec.ID)
+		if err != nil {
+			return fmt.Errorf("ensure-model verify: %w", err)
+		}
+		if !entriesExist {
+			return fmt.Errorf("ensure-model verify: agent %q not found", at.Spec.ID)
+		}
+		if drifted := modelRuntimeDrift(at.Spec.Models, entries); len(drifted) > 0 {
+			ref := drifted[0]
+			return fmt.Errorf(
+				"ensure-model verify: model %q runtime %q, want %q",
+				ref, common.ModelRuntimeID(entries[ref]), at.Spec.Models[ref].Runtime,
+			)
+		}
 	}
 	return nil
 }

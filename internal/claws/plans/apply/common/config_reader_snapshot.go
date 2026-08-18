@@ -164,7 +164,11 @@ type snapshotAgentDefs struct {
 type snapshotAgent struct {
 	ID    string          `json:"id"`
 	Model json.RawMessage `json:"model"`
-	Tools *snapshotTools  `json:"tools"`
+	// Models is openclaw's per-model-ref policy map. Decoded generically
+	// so a runtime pin can be merged in without dropping sibling keys we
+	// do not model (aliases, thinking policy, …).
+	Models map[string]map[string]any `json:"models"`
+	Tools  *snapshotTools            `json:"tools"`
 }
 
 type snapshotTools struct {
@@ -318,6 +322,28 @@ func (r *snapshotConfigReader) AgentModelFull(ctx context.Context, client *xssh.
 		return m, f, true, nil
 	}
 	return "", nil, false, nil
+}
+
+func (r *snapshotConfigReader) AgentModelEntries(ctx context.Context, client *xssh.Client, h ConfigHost, agentID string) (map[string]map[string]any, bool, error) {
+	snap, err := r.loadSnapshot(ctx, client, h)
+	if err != nil {
+		return nil, false, err
+	}
+	if snap == nil {
+		return r.fallback.AgentModelEntries(ctx, client, h, agentID)
+	}
+	target := normalizeAgentID(agentID)
+	for _, a := range snap.Agents.List {
+		if normalizeAgentID(a.ID) != target {
+			continue
+		}
+		out := make(map[string]map[string]any, len(a.Models))
+		for ref, entry := range a.Models {
+			out[ref] = entry
+		}
+		return out, true, nil
+	}
+	return nil, false, nil
 }
 
 func (r *snapshotConfigReader) AgentTools(ctx context.Context, client *xssh.Client, h ConfigHost, idx int) (*RemoteToolsConfig, error) {

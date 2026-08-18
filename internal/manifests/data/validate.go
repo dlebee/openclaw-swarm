@@ -22,6 +22,8 @@ const reservedMainAgentID = "main"
 //     target).
 //   - Unknown step kinds (easier to catch here than at dispatch time with
 //     "no matching case" silently skipping work).
+//   - An agent `models:` entry with a blank ref or a blank runtime (a
+//     silent no-op otherwise, and almost always a typo).
 //   - A workspace override on the reserved "main" agent (the gateway phase
 //     bootstraps the default workspace before the agents phase runs; setting
 //     a different path here produces an incomplete second workspace while the
@@ -52,6 +54,9 @@ func ValidateManifest(m *Manifest) error {
 					"remove the workspace field to use the openclaw default (~/.openclaw/workspace)",
 				agent.ID,
 			)
+		}
+		if err := validateAgentModels(agent.Models); err != nil {
+			return fmt.Errorf("agent %q: %w", agent.ID, err)
 		}
 	}
 
@@ -89,6 +94,32 @@ func validateNodeGatewayColocation(m *Manifest) error {
 				"node %q and its gateway %q both reference machine %q; "+
 					"nodes and gateways must run on separate machines",
 				n.Name, n.Gateway, nodeRef,
+			)
+		}
+	}
+	return nil
+}
+
+// validateAgentModels rejects per-model entries that cannot do anything.
+// Both failure modes are typos rather than deliberate config:
+//
+//   - a blank ref is not a model openclaw can key policy on;
+//   - an entry with no fields set writes nothing, so it silently pretends
+//     to pin a runtime that was never pinned.
+//
+// A ref that is absent from `model.primary`/`model.fallbacks` is NOT an
+// error: pinning the runtime for a model the agent only reaches through an
+// in-chat `/model` switch is legitimate.
+func validateAgentModels(models AgentModels) error {
+	for ref, entry := range models {
+		if strings.TrimSpace(ref) == "" {
+			return fmt.Errorf("models: blank model ref")
+		}
+		if strings.TrimSpace(entry.Runtime) == "" {
+			return fmt.Errorf(
+				"models[%q]: entry sets no fields; drop it, or set runtime "+
+					"(e.g. runtime: \"claude-cli\")",
+				ref,
 			)
 		}
 	}
