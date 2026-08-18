@@ -260,7 +260,7 @@ agents:
 | `soul` | Free-form personality prose. Written verbatim to `SOUL.md`. |
 | `agents_md` | Runtime instructions (tools available, etiquette, hand-off rules). Written to `AGENTS.md`. |
 | `identity.name`, `identity.emoji` | Display name / emoji rendered by channel integrations. |
-| `bindings[]` | Wires the agent to channels. `channel` matches `channels[].kind`; `account` matches `channels[].name`. Omit `account` to inherit the kind's default. |
+| `bindings[]` | Wires the agent to channels. `channel` matches `channels[].kind`; `account` matches `channels[].name`. Omit `account` to inherit the kind's default. Validated at parse time: a binding whose account isn't declared on the agent's gateway is rejected, because the bindings step would otherwise write a live route to an account that has no bot token. |
 
 ### Per-model agent runtimes
 

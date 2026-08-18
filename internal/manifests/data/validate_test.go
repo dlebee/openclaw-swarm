@@ -405,3 +405,69 @@ func TestValidateManifest_AgentModels(t *testing.T) {
 		}
 	})
 }
+
+func TestValidateManifest_AgentBindingAccounts(t *testing.T) {
+	t.Parallel()
+
+	manifest := func(channels []Channel, bindings []AgentBinding) *Manifest {
+		return &Manifest{
+			Gateways: []Gateway{{Name: "gateway", Reference: "host", Channels: channels}},
+			Agents: []Agent{{
+				ID:       "dev",
+				Gateway:  "gateway",
+				Model:    AgentModel{Primary: "anthropic/claude-opus-5"},
+				Bindings: bindings,
+			}},
+		}
+	}
+	declared := []Channel{{Kind: "telegram", Name: "telegram-main", Default: true}}
+
+	t.Run("accepts a declared account", func(t *testing.T) {
+		t.Parallel()
+		m := manifest(declared, []AgentBinding{{Channel: "telegram", Account: "telegram-main"}})
+		if err := ValidateManifest(m); err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+	})
+
+	t.Run("accepts an omitted account when the kind is declared", func(t *testing.T) {
+		t.Parallel()
+		// Empty account inherits the kind's default.
+		m := manifest(declared, []AgentBinding{{Channel: "telegram"}})
+		if err := ValidateManifest(m); err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+	})
+
+	t.Run("rejects an undeclared account", func(t *testing.T) {
+		t.Parallel()
+		// The exact trap this catches: the binding was uncommented but the
+		// channel it points at was left commented out.
+		m := manifest(declared, []AgentBinding{{Channel: "telegram", Account: "telegram-qa"}})
+		err := ValidateManifest(m)
+		if err == nil || !strings.Contains(err.Error(), `"telegram-qa"`) {
+			t.Fatalf("want undeclared-account error, got %v", err)
+		}
+		if !strings.Contains(err.Error(), "no bot token") {
+			t.Fatalf("error should explain the consequence, got %v", err)
+		}
+	})
+
+	t.Run("rejects an undeclared kind", func(t *testing.T) {
+		t.Parallel()
+		m := manifest(declared, []AgentBinding{{Channel: "slack", Account: "ops"}})
+		err := ValidateManifest(m)
+		if err == nil || !strings.Contains(err.Error(), "channel kind") {
+			t.Fatalf("want undeclared-kind error, got %v", err)
+		}
+	})
+
+	t.Run("skips agents whose gateway is unknown", func(t *testing.T) {
+		t.Parallel()
+		m := manifest(declared, []AgentBinding{{Channel: "telegram", Account: "telegram-qa"}})
+		m.Agents[0].Gateway = "nope"
+		if err := ValidateManifest(m); err != nil {
+			t.Fatalf("unknown gateway is the phase builder's error, got %v", err)
+		}
+	})
+}
