@@ -246,42 +246,37 @@ func (r *cliConfigReader) AgentBindings(ctx context.Context, client *xssh.Client
 	return out, err
 }
 
-// channelEntry is the new JSON structure for each channel in `openclaw channels list --json`.
-// The format changed from map[string][]string to map[string]{ accounts: []string, ... }.
-type channelEntry struct {
-	Accounts  []string `json:"accounts"`
-	Installed bool     `json:"installed"`
-	Origin    string   `json:"origin"`
-}
-
+// ChannelAccounts reads cfg.channels.<kind>.accounts directly via
+// `openclaw config get channels --json`, not `openclaw channels list
+// --json`. The two disagree: `channels list` synthesizes/reports entries
+// beyond what's actually persisted (observed live — an account referenced
+// only by a route binding showed up in `channels list` while genuinely
+// absent from `config get` and from the config file itself). This step's
+// only use of ChannelAccounts is "does this account already exist so I can
+// skip adding it" — trusting the inflated view made add-channels silently
+// no-op on a real missing account. `config get` is the same source the
+// snapshot reader uses (an SFTP read of the config file), so both readers
+// now agree by construction.
 func (r *cliConfigReader) ChannelAccounts(ctx context.Context, client *xssh.Client, h ConfigHost) (map[string][]string, error) {
 	out := map[string][]string{}
 	err := r.withClient(ctx, client, h, func(c *xssh.Client) error {
-		raw, err := r.runJSON(c, `openclaw channels list --json 2>/dev/null || echo "{}"`, '{')
+		raw, err := r.runJSON(c, `openclaw config get channels --json 2>/dev/null || echo "{}"`, '{')
 		if err != nil {
 			return nil // matches prior behavior: soft-fail to empty
 		}
 
-		// New format: { "chat": { "telegram": { "accounts": [...], "installed": true, "origin": "configured" } } }
-		var newPayload struct {
-			Chat map[string]channelEntry `json:"chat"`
+		var payload map[string]struct {
+			Accounts map[string]json.RawMessage `json:"accounts"`
 		}
-		if err := json.Unmarshal([]byte(raw), &newPayload); err == nil && newPayload.Chat != nil {
-			for kind, entry := range newPayload.Chat {
-				out[kind] = entry.Accounts
+		if err := json.Unmarshal([]byte(raw), &payload); err != nil {
+			return nil
+		}
+		for kind, entry := range payload {
+			ids := make([]string, 0, len(entry.Accounts))
+			for id := range entry.Accounts {
+				ids = append(ids, id)
 			}
-			return nil
-		}
-
-		// Legacy format fallback: { "chat": { "telegram": ["account1", "account2"] } }
-		var legacyPayload struct {
-			Chat map[string][]string `json:"chat"`
-		}
-		if err := json.Unmarshal([]byte(raw), &legacyPayload); err != nil {
-			return nil
-		}
-		if legacyPayload.Chat != nil {
-			out = legacyPayload.Chat
+			out[kind] = ids
 		}
 		return nil
 	})
