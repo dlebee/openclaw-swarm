@@ -281,9 +281,20 @@ func agentsTable(rows []data.Agent, w int) string {
 		Headers("ID", "Gateway", "Primary model", "Workspace").
 		Width(w)
 	for _, r := range rows {
-		t.Row(r.ID, r.Gateway, r.Model.Primary, truncate(r.Workspace, 48))
+		t.Row(r.ID, r.Gateway, primaryModelCell(r), truncate(r.Workspace, 48))
 	}
 	return t.String()
+}
+
+// primaryModelCell renders the primary model ref, annotated with its
+// runtime pin when one is declared. Runtimes are per model ref, so a
+// dedicated column would be lossy for agents that pin more than the
+// primary — the full picture lives in the manifest.
+func primaryModelCell(a data.Agent) string {
+	if rt := strings.TrimSpace(a.Models[a.Model.Primary].Runtime); rt != "" {
+		return a.Model.Primary + " (" + rt + ")"
+	}
+	return a.Model.Primary
 }
 
 func automationsTable(rows []data.Automation, w int) string {

@@ -22,6 +22,11 @@ const reservedMainAgentID = "main"
 //     target).
 //   - Unknown step kinds (easier to catch here than at dispatch time with
 //     "no matching case" silently skipping work).
+//   - An agent `models:` entry with a blank ref or a blank runtime (a
+//     silent no-op otherwise, and almost always a typo).
+//   - An agent binding pointing at a channel account its gateway does not
+//     declare (the bindings step writes the route regardless, leaving a
+//     route to an account that has no bot token).
 //   - A workspace override on the reserved "main" agent (the gateway phase
 //     bootstraps the default workspace before the agents phase runs; setting
 //     a different path here produces an incomplete second workspace while the
@@ -53,6 +58,13 @@ func ValidateManifest(m *Manifest) error {
 				agent.ID,
 			)
 		}
+		if err := validateAgentModels(agent.Models); err != nil {
+			return fmt.Errorf("agent %q: %w", agent.ID, err)
+		}
+	}
+
+	if err := validateAgentBindingAccounts(m); err != nil {
+		return err
 	}
 
 	if err := validateNodeGatewayColocation(m); err != nil {
@@ -90,6 +102,99 @@ func validateNodeGatewayColocation(m *Manifest) error {
 					"nodes and gateways must run on separate machines",
 				n.Name, n.Gateway, nodeRef,
 			)
+		}
+	}
+	return nil
+}
+
+// validateAgentModels rejects per-model entries that cannot do anything.
+// Both failure modes are typos rather than deliberate config:
+//
+//   - a blank ref is not a model openclaw can key policy on;
+//   - an entry with no fields set writes nothing, so it silently pretends
+//     to pin a runtime that was never pinned.
+//
+// A ref that is absent from `model.primary`/`model.fallbacks` is NOT an
+// error: pinning the runtime for a model the agent only reaches through an
+// in-chat `/model` switch is legitimate.
+func validateAgentModels(models AgentModels) error {
+	for ref, entry := range models {
+		if strings.TrimSpace(ref) == "" {
+			return fmt.Errorf("models: blank model ref")
+		}
+		if strings.TrimSpace(entry.Runtime) == "" {
+			return fmt.Errorf(
+				"models[%q]: entry sets no fields; drop it, or set runtime "+
+					"(e.g. runtime: \"claude-cli\")",
+				ref,
+			)
+		}
+	}
+	return nil
+}
+
+// validateAgentBindingAccounts rejects bindings that reference a channel
+// account the agent's gateway does not declare.
+//
+// Nothing downstream catches this: the bindings step's Applicable is just
+// "does this agent have bindings", and its Check only diffs routes against
+// the manifest, so it happily writes a route whose accountId matches no
+// channel. The channels phase, meanwhile, only registers accounts it was
+// told about. The result is a live route pointing at an account with no
+// bot token — the agent looks wired up but can never receive a message.
+//
+// Skipped when the agent's gateway is unknown: that's the phase builders'
+// error to report, and their tolerance varies by command.
+func validateAgentBindingAccounts(m *Manifest) error {
+	gwByName := make(map[string]Gateway, len(m.Gateways))
+	for _, gw := range m.Gateways {
+		gwByName[strings.TrimSpace(gw.Name)] = gw
+	}
+
+	for _, agent := range m.Agents {
+		gw, ok := gwByName[strings.TrimSpace(agent.Gateway)]
+		if !ok {
+			continue // unknown gateway reference — left to the phase builder
+		}
+		for _, b := range agent.Bindings {
+			kind := strings.TrimSpace(b.Channel)
+			account := strings.TrimSpace(b.Account)
+
+			var kindDeclared bool
+			var names []string
+			for _, ch := range gw.Channels {
+				if !strings.EqualFold(strings.TrimSpace(string(ch.Kind)), kind) {
+					continue
+				}
+				kindDeclared = true
+				names = append(names, strings.TrimSpace(ch.Name))
+			}
+			if !kindDeclared {
+				return fmt.Errorf(
+					"agent %q: binding references channel kind %q, but gateway %q declares no %s channel; "+
+						"add it under gateways[].channels or remove the binding",
+					agent.ID, kind, gw.Name, kind,
+				)
+			}
+			// An empty account inherits the kind's default account, which
+			// exists as long as the kind is declared at all.
+			if account == "" {
+				continue
+			}
+			found := false
+			for _, n := range names {
+				if n == account {
+					found = true
+					break
+				}
+			}
+			if !found {
+				return fmt.Errorf(
+					"agent %q: binding references channel account %q, but gateway %q declares only %v for kind %q; "+
+						"the route would be written against an account that has no bot token",
+					agent.ID, account, gw.Name, names, kind,
+				)
+			}
 		}
 	}
 	return nil

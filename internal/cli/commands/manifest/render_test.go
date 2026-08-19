@@ -33,3 +33,29 @@ func TestOptionalInt(t *testing.T) {
 		t.Fatalf("non-zero: %q", optionalInt(22))
 	}
 }
+
+func TestPrimaryModelCell(t *testing.T) {
+	t.Parallel()
+
+	plain := data.Agent{Model: data.AgentModel{Primary: "anthropic/claude-opus-5"}}
+	if got := primaryModelCell(plain); got != "anthropic/claude-opus-5" {
+		t.Fatalf("unpinned: got %q", got)
+	}
+
+	pinned := data.Agent{
+		Model:  data.AgentModel{Primary: "anthropic/claude-opus-5", Fallbacks: []string{"anthropic/claude-sonnet-5"}},
+		Models: data.AgentModels{"anthropic/claude-opus-5": {Runtime: "claude-cli"}},
+	}
+	if got := primaryModelCell(pinned); got != "anthropic/claude-opus-5 (claude-cli)" {
+		t.Fatalf("pinned: got %q", got)
+	}
+
+	// A pin on a fallback only must not leak into the primary cell.
+	fallbackOnly := data.Agent{
+		Model:  data.AgentModel{Primary: "anthropic/claude-opus-5", Fallbacks: []string{"anthropic/claude-sonnet-5"}},
+		Models: data.AgentModels{"anthropic/claude-sonnet-5": {Runtime: "claude-cli"}},
+	}
+	if got := primaryModelCell(fallbackOnly); got != "anthropic/claude-opus-5" {
+		t.Fatalf("fallback-only pin: got %q", got)
+	}
+}

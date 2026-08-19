@@ -43,6 +43,11 @@ agents:
       primary: "anthropic/claude-opus-4-5"
       fallbacks:
         - "anthropic/claude-sonnet-4-5"
+    # Runtime pins are per model ref: only the primary runs through the
+    # local Claude CLI here, the fallback keeps openclaw's default runtime.
+    models:
+      "anthropic/claude-opus-4-5":
+        runtime: claude-cli
     tools:
       elevated:
         enabled: true

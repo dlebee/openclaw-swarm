@@ -353,3 +353,121 @@ func TestParseMode(t *testing.T) {
 		}
 	}
 }
+
+func TestValidateManifest_AgentModels(t *testing.T) {
+	t.Parallel()
+
+	agentWith := func(models AgentModels) *Manifest {
+		return &Manifest{Agents: []Agent{{
+			ID:      "dev",
+			Gateway: "gateway",
+			Model:   AgentModel{Primary: "anthropic/claude-opus-5"},
+			Models:  models,
+		}}}
+	}
+
+	t.Run("accepts a runtime pin", func(t *testing.T) {
+		t.Parallel()
+		m := agentWith(AgentModels{"anthropic/claude-opus-5": {Runtime: "claude-cli"}})
+		if err := ValidateManifest(m); err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+	})
+
+	t.Run("accepts a ref outside primary/fallbacks", func(t *testing.T) {
+		t.Parallel()
+		// Legitimate: the agent can reach this model via an in-chat
+		// /model switch, and the pin should apply when it does.
+		m := agentWith(AgentModels{"anthropic/claude-haiku-4-5": {Runtime: "claude-cli"}})
+		if err := ValidateManifest(m); err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+	})
+
+	t.Run("rejects a blank ref", func(t *testing.T) {
+		t.Parallel()
+		m := agentWith(AgentModels{"  ": {Runtime: "claude-cli"}})
+		err := ValidateManifest(m)
+		if err == nil || !strings.Contains(err.Error(), "blank model ref") {
+			t.Fatalf("want blank ref error, got %v", err)
+		}
+	})
+
+	t.Run("rejects an entry with no fields", func(t *testing.T) {
+		t.Parallel()
+		m := agentWith(AgentModels{"anthropic/claude-opus-5": {}})
+		err := ValidateManifest(m)
+		if err == nil || !strings.Contains(err.Error(), "sets no fields") {
+			t.Fatalf("want empty-entry error, got %v", err)
+		}
+		if !strings.Contains(err.Error(), `agent "dev"`) {
+			t.Fatalf("error should name the agent, got %v", err)
+		}
+	})
+}
+
+func TestValidateManifest_AgentBindingAccounts(t *testing.T) {
+	t.Parallel()
+
+	manifest := func(channels []Channel, bindings []AgentBinding) *Manifest {
+		return &Manifest{
+			Gateways: []Gateway{{Name: "gateway", Reference: "host", Channels: channels}},
+			Agents: []Agent{{
+				ID:       "dev",
+				Gateway:  "gateway",
+				Model:    AgentModel{Primary: "anthropic/claude-opus-5"},
+				Bindings: bindings,
+			}},
+		}
+	}
+	declared := []Channel{{Kind: "telegram", Name: "telegram-main", Default: true}}
+
+	t.Run("accepts a declared account", func(t *testing.T) {
+		t.Parallel()
+		m := manifest(declared, []AgentBinding{{Channel: "telegram", Account: "telegram-main"}})
+		if err := ValidateManifest(m); err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+	})
+
+	t.Run("accepts an omitted account when the kind is declared", func(t *testing.T) {
+		t.Parallel()
+		// Empty account inherits the kind's default.
+		m := manifest(declared, []AgentBinding{{Channel: "telegram"}})
+		if err := ValidateManifest(m); err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+	})
+
+	t.Run("rejects an undeclared account", func(t *testing.T) {
+		t.Parallel()
+		// The exact trap this catches: the binding was uncommented but the
+		// channel it points at was left commented out.
+		m := manifest(declared, []AgentBinding{{Channel: "telegram", Account: "telegram-qa"}})
+		err := ValidateManifest(m)
+		if err == nil || !strings.Contains(err.Error(), `"telegram-qa"`) {
+			t.Fatalf("want undeclared-account error, got %v", err)
+		}
+		if !strings.Contains(err.Error(), "no bot token") {
+			t.Fatalf("error should explain the consequence, got %v", err)
+		}
+	})
+
+	t.Run("rejects an undeclared kind", func(t *testing.T) {
+		t.Parallel()
+		m := manifest(declared, []AgentBinding{{Channel: "slack", Account: "ops"}})
+		err := ValidateManifest(m)
+		if err == nil || !strings.Contains(err.Error(), "channel kind") {
+			t.Fatalf("want undeclared-kind error, got %v", err)
+		}
+	})
+
+	t.Run("skips agents whose gateway is unknown", func(t *testing.T) {
+		t.Parallel()
+		m := manifest(declared, []AgentBinding{{Channel: "telegram", Account: "telegram-qa"}})
+		m.Agents[0].Gateway = "nope"
+		if err := ValidateManifest(m); err != nil {
+			t.Fatalf("unknown gateway is the phase builder's error, got %v", err)
+		}
+	})
+}

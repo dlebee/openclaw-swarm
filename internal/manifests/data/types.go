@@ -347,6 +347,7 @@ type Agent struct {
 	Gateway   string         `yaml:"gateway"`
 	Workspace string         `yaml:"workspace"`
 	Model     AgentModel     `yaml:"model"`
+	Models    AgentModels    `yaml:"models,omitempty"`
 	Tools     *AgentTools    `yaml:"tools,omitempty"`
 	Soul      string         `yaml:"soul,omitempty"`
 	AgentsMD  AgentsMDValue  `yaml:"agents_md,omitempty"`
@@ -358,6 +359,25 @@ type Agent struct {
 type AgentModel struct {
 	Primary   string   `yaml:"primary"`
 	Fallbacks []string `yaml:"fallbacks,omitempty"`
+}
+
+// AgentModels is per-model-ref policy, keyed by the fully-qualified model
+// ref ("anthropic/claude-opus-5"). It mirrors openclaw's
+// `agents.list[].models` map: policy that varies model by model, not agent
+// by agent. A ref does not have to appear in AgentModel — pinning a model
+// the agent only reaches through an in-chat `/model` switch is legitimate.
+type AgentModels map[string]AgentModelEntry
+
+// AgentModelEntry is one entry of AgentModels.
+type AgentModelEntry struct {
+	// Runtime is the agent runtime that executes turns for this model,
+	// written to `agents.list[].models[<ref>].agentRuntime.id`. Empty
+	// means "leave openclaw's default runtime selection alone".
+	//
+	// The common case is "claude-cli": keep the canonical
+	// `anthropic/<model>` ref, but execute the turn through a locally
+	// installed, logged-in Claude Code CLI instead of the Anthropic API.
+	Runtime string `yaml:"runtime,omitempty"`
 }
 
 // AgentTools configures tool access for an agent.

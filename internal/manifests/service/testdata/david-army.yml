@@ -171,6 +171,8 @@ agents:
     gateway: gateway
     workspace: ~/.openclaw/workspace-tech-writer
     model: { primary: "anthropic/claude-opus-4-6", fallbacks: ["anthropic/claude-sonnet-4-6"] }
+    models:
+      "anthropic/claude-opus-4-6": { runtime: claude-cli }
     tools:
       exec: { host: node, node: qa-node-1, security: full }
       elevated:
