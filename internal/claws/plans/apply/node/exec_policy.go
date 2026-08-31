@@ -2,6 +2,7 @@ package node
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"strings"
 
@@ -118,7 +119,24 @@ func (s *ExecPolicyStep) Verify(ctx context.Context, t scaffold.Target) error {
 	return nil
 }
 
+// readExecPolicy reads the node's requested exec security + ask.
+//
+// `exec-policy set` (used by Execute) is the local convenience command that
+// keeps `tools.exec.*` config and the local approvals document in sync. On
+// OpenClaw 2026.8.1 the requested value may land under a per-agent path
+// (agents.entries.*.tools.exec.security) rather than the top-level
+// tools.exec.security, so a raw `config get tools.exec.security` can read
+// back empty even though the policy was set correctly — which surfaced as
+// `exec-policy verify: security "", want "full"`.
+//
+// We therefore prefer `exec-policy show --json`, which reports the same
+// requested/host/effective policy facts on both versions, and fall back to
+// the raw config paths only when the JSON surface is unavailable (older
+// CLIs, or a machine where the command errors).
 func readExecPolicy(client *xssh.Client) (security, ask string) {
+	if sec, a, ok := readExecPolicyJSON(client); ok {
+		return sec, a
+	}
 	secOut, err := bash.RunOutput(client, common.OpenclawCLIPreamble()+`openclaw config get tools.exec.security 2>/dev/null || echo ""`)
 	if err == nil {
 		security = strings.TrimSpace(secOut)
@@ -128,4 +146,52 @@ func readExecPolicy(client *xssh.Client) (security, ask string) {
 		ask = strings.TrimSpace(askOut)
 	}
 	return
+}
+
+// readExecPolicyJSON parses `openclaw exec-policy show --json`. The command
+// returns a JSON object carrying requested / host / effective policy facts.
+// We read the *requested* tools.exec policy (what claws asked for via
+// exec-policy set), which is the drift target the verify compares against.
+// Returns ok=false when the command is unavailable or unparseable so the
+// caller can fall back to raw config reads.
+func readExecPolicyJSON(client *xssh.Client) (security, ask string, ok bool) {
+	out, err := bash.RunOutput(client, common.OpenclawCLIPreamble()+`openclaw exec-policy show --json 2>/dev/null`)
+	if err != nil {
+		return "", "", false
+	}
+	raw := strings.TrimSpace(out)
+	if i := strings.IndexByte(raw, '{'); i >= 0 {
+		raw = raw[i:]
+	} else {
+		return "", "", false
+	}
+	// Shape (2026.8.1): {"requested":{"security":"full","ask":"off",...},
+	//                    "host":{...},"effective":{...}}
+	// Be liberal: accept a flat {security,ask} too, in case a version
+	// reports the requested policy at the top level.
+	var parsed struct {
+		Security  string `json:"security"`
+		Ask       string `json:"ask"`
+		Requested struct {
+			Security string `json:"security"`
+			Ask      string `json:"ask"`
+		} `json:"requested"`
+	}
+	if err := json.Unmarshal([]byte(raw), &parsed); err != nil {
+		return "", "", false
+	}
+	security = parsed.Requested.Security
+	ask = parsed.Requested.Ask
+	if security == "" {
+		security = parsed.Security
+	}
+	if ask == "" {
+		ask = parsed.Ask
+	}
+	// Only claim success if we actually got a security value; otherwise let
+	// the caller fall back to raw config reads.
+	if strings.TrimSpace(security) == "" {
+		return "", "", false
+	}
+	return strings.TrimSpace(security), strings.TrimSpace(ask), true
 }

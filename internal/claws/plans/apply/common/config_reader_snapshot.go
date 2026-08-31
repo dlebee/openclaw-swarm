@@ -233,6 +233,23 @@ func (s *openclawSnapshot) normalizeAgents() []snapshotAgent {
 	return s.Agents.List
 }
 
+// toRoster converts the snapshot's decoded agents into the version-agnostic
+// AgentRoster DTO, using the same both-shapes normalisation as
+// normalizeAgents. Used by ReadRoster so probe-phase callers get the same
+// DTO the CLI reader produces outside probe.
+func (s *openclawSnapshot) toRoster() AgentRoster {
+	r := AgentRoster{}
+	r.Defaults.Model = s.Agents.Defaults.Model
+	for _, a := range s.normalizeAgents() {
+		e := AgentEntry{ID: a.ID, Model: a.Model, Models: a.Models}
+		if a.Tools != nil {
+			e.ExecTools = a.Tools.Exec
+		}
+		r.Agents = append(r.Agents, e)
+	}
+	return r
+}
+
 // extractModelPrimary decodes openclaw's two-shape model field into the
 // primary string. Accepts:
 //
@@ -299,6 +316,27 @@ func normalizeAgentID(id string) string {
 // ---------------------------------------------------------------------------
 // ConfigReader impl
 // ---------------------------------------------------------------------------
+
+// ReadRoster serves the version-agnostic roster DTO from the config-file
+// snapshot during probe (parsing whichever shape is on disk), and delegates
+// to the CLI fallback outside probe so Execute sees live writes.
+func (r *snapshotConfigReader) ReadRoster(ctx context.Context, client *xssh.Client, h ConfigHost) (AgentRoster, error) {
+	snap, err := r.loadSnapshot(ctx, client, h)
+	if err != nil {
+		return AgentRoster{}, err
+	}
+	if snap == nil {
+		return r.fallback.ReadRoster(ctx, client, h)
+	}
+	return snap.toRoster(), nil
+}
+
+// RosterAdapter always delegates to the CLI fallback: adapter selection is a
+// function of the remote CLI version, which the snapshot (a static file
+// read) cannot determine on its own. The fallback caches detection per host.
+func (r *snapshotConfigReader) RosterAdapter(ctx context.Context, client *xssh.Client, h ConfigHost) (RosterAdapter, error) {
+	return r.fallback.RosterAdapter(ctx, client, h)
+}
 
 func (r *snapshotConfigReader) AgentConfigIndex(ctx context.Context, client *xssh.Client, h ConfigHost, agentID string) (int, error) {
 	snap, err := r.loadSnapshot(ctx, client, h)

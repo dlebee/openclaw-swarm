@@ -4,11 +4,11 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"sort"
 	"strings"
 
 	"github.com/gluwa/openclaw-swarm2/internal/platformutil/bash"
 	"github.com/gluwa/openclaw-swarm2/internal/platformutil/sshfile"
+	"github.com/gluwa/openclaw-swarm2/internal/scaffold"
 	xssh "golang.org/x/crypto/ssh"
 )
 
@@ -48,89 +48,76 @@ func (r *cliConfigReader) runJSON(client *xssh.Client, script string, startChar 
 	return extractJSON(strings.TrimSpace(out), startChar), nil
 }
 
-// cliAgent is one normalized roster entry, independent of the on-disk
-// shape (legacy agents.list array vs. 2026.8.1+ agents.entries map).
-type cliAgent struct {
-	ID     string                    `json:"id"`
-	Model  json.RawMessage           `json:"model"`
-	Models map[string]map[string]any `json:"models"`
-	Tools  *struct {
-		Exec *RemoteExecConfig `json:"exec"`
-	} `json:"tools"`
+// adapterCacheKey caches the detected RosterAdapter per host for the plan
+// run so version detection (one `openclaw --version` call) happens once.
+func adapterCacheKey(h ConfigHost) string {
+	return fmt.Sprintf("OPENCLAW_ROSTER_ADAPTER|%s|%d|%s", h.Addr, h.Port, h.User)
 }
 
-// fetchAgentRoster reads the agent roster and normalizes both on-disk
-// shapes to an ordered slice.
-//
-// OpenClaw 2026.8.1 reshaped agents.list (array) into agents.entries (map
-// keyed by agent id). Crucially the read side is asymmetric: on 2026.8.1
-// `config get agents.list` returns a hard error ("Unknown config path"),
-// while writes via the legacy indexed path still work through a shim. The
-// old `config get agents.list --json 2>/dev/null || echo "[]"` idiom turned
-// that loud breaking change into a silent empty roster — which made every
-// agent read-back come up empty, breaking add-agent verify and destroying
-// idempotency for the whole agents phase.
-//
-// Strategy: probe agents.entries first (the canonical 2026.8.1 path); if
-// that path is unknown (older CLI), fall back to agents.list. A genuine
-// error on the chosen path propagates instead of being swallowed.
-//
-// The map shape carries the id in the key, so we fold it back into each
-// entry's ID and sort by id for a stable order (index positions are only
-// ever used to build a path for the same agent they were resolved for).
-func (r *cliConfigReader) fetchAgentRoster(c *xssh.Client) ([]cliAgent, error) {
-	// Try the 2026.8.1+ map shape first.
-	entriesRaw, entriesErr := r.runJSON(c, `openclaw config get agents.entries --json`, '{')
-	if entriesErr == nil {
-		var entries map[string]cliAgent
-		if err := json.Unmarshal([]byte(entriesRaw), &entries); err == nil {
-			ids := make([]string, 0, len(entries))
-			for id := range entries {
-				ids = append(ids, id)
-			}
-			sort.Strings(ids)
-			out := make([]cliAgent, 0, len(ids))
-			for _, id := range ids {
-				a := entries[id]
-				if strings.TrimSpace(a.ID) == "" {
-					a.ID = id
-				}
-				out = append(out, a)
-			}
-			return out, nil
+// rosterAdapter returns the cached adapter for h, detecting it via the
+// remote CLI on first use. When ctx carries no plan cache (unit tests
+// calling the CLI reader directly) detection still runs, just uncached.
+func (r *cliConfigReader) rosterAdapter(ctx context.Context, c *xssh.Client, h ConfigHost) (RosterAdapter, error) {
+	key := adapterCacheKey(h)
+	if v, ok := scaffold.PlanCacheGet(ctx, key); ok {
+		if a, ok := v.(RosterAdapter); ok {
+			return a, nil
 		}
-		// entries path answered but didn't parse as a map — fall through to
-		// the legacy shape rather than guessing.
 	}
+	a, err := DetectRosterAdapter(c)
+	if err != nil {
+		return nil, err
+	}
+	scaffold.PlanCacheSet(ctx, key, a)
+	return a, nil
+}
 
-	// Legacy (≤ 2026.7.x) array shape.
-	listRaw, listErr := r.runJSON(c, `openclaw config get agents.list --json`, '[')
-	if listErr != nil {
-		// Both shapes failed. Surface the errors instead of silently
-		// reporting an empty roster (which is what created the original bug).
-		return nil, fmt.Errorf("read agent roster: entries: %v; list: %w", entriesErr, listErr)
+// readRoster reads and decodes the roster via the host's adapter, returning
+// the version-agnostic DTO. A fresh gateway yields an empty roster.
+func (r *cliConfigReader) readRoster(ctx context.Context, c *xssh.Client, h ConfigHost) (AgentRoster, error) {
+	a, err := r.rosterAdapter(ctx, c, h)
+	if err != nil {
+		return AgentRoster{}, fmt.Errorf("read roster: %w", err)
 	}
-	var list []cliAgent
-	if err := json.Unmarshal([]byte(listRaw), &list); err != nil {
-		return nil, fmt.Errorf("parse agents.list %q: %w", listRaw, err)
+	raw, err := bash.RunOutput(c, OpenclawCLIPreamble()+a.RosterReadScript())
+	if err != nil {
+		return AgentRoster{}, fmt.Errorf("read roster (%s): %w", a.Kind(), err)
 	}
-	return list, nil
+	roster, err := a.ParseRosterCLI(strings.TrimSpace(raw))
+	if err != nil {
+		return AgentRoster{}, fmt.Errorf("read roster (%s): %w", a.Kind(), err)
+	}
+	return roster, nil
+}
+
+func (r *cliConfigReader) ReadRoster(ctx context.Context, client *xssh.Client, h ConfigHost) (AgentRoster, error) {
+	var roster AgentRoster
+	err := r.withClient(ctx, client, h, func(c *xssh.Client) error {
+		var e error
+		roster, e = r.readRoster(ctx, c, h)
+		return e
+	})
+	return roster, err
+}
+
+func (r *cliConfigReader) RosterAdapter(ctx context.Context, client *xssh.Client, h ConfigHost) (RosterAdapter, error) {
+	var a RosterAdapter
+	err := r.withClient(ctx, client, h, func(c *xssh.Client) error {
+		var e error
+		a, e = r.rosterAdapter(ctx, c, h)
+		return e
+	})
+	return a, err
 }
 
 func (r *cliConfigReader) AgentConfigIndex(ctx context.Context, client *xssh.Client, h ConfigHost, agentID string) (int, error) {
 	idx := -1
-	target := normalizeAgentID(agentID)
 	err := r.withClient(ctx, client, h, func(c *xssh.Client) error {
-		agents, err := r.fetchAgentRoster(c)
+		roster, err := r.readRoster(ctx, c, h)
 		if err != nil {
 			return fmt.Errorf("agent config index: %w", err)
 		}
-		for i, entry := range agents {
-			if normalizeAgentID(entry.ID) == target {
-				idx = i
-				return nil
-			}
-		}
+		idx = roster.IndexOf(agentID)
 		return nil
 	})
 	return idx, err
@@ -139,20 +126,17 @@ func (r *cliConfigReader) AgentConfigIndex(ctx context.Context, client *xssh.Cli
 func (r *cliConfigReader) AgentModel(ctx context.Context, client *xssh.Client, h ConfigHost, agentID string) (string, bool, error) {
 	var model string
 	var exists bool
-	target := normalizeAgentID(agentID)
 	err := r.withClient(ctx, client, h, func(c *xssh.Client) error {
-		agents, err := r.fetchAgentRoster(c)
+		roster, err := r.readRoster(ctx, c, h)
 		if err != nil {
 			return fmt.Errorf("agent model: %w", err)
 		}
-		for _, a := range agents {
-			if normalizeAgentID(a.ID) != target {
-				continue
-			}
-			exists = true
-			model = extractModelPrimary(a.Model)
+		a, ok := roster.Find(agentID)
+		if !ok {
 			return nil
 		}
+		exists = true
+		model = a.ModelPrimary()
 		return nil
 	})
 	return model, exists, err
@@ -162,21 +146,18 @@ func (r *cliConfigReader) AgentModelFull(ctx context.Context, client *xssh.Clien
 	var model string
 	var fallbacks []string
 	var exists bool
-	target := normalizeAgentID(agentID)
 	err := r.withClient(ctx, client, h, func(c *xssh.Client) error {
-		agents, err := r.fetchAgentRoster(c)
+		roster, err := r.readRoster(ctx, c, h)
 		if err != nil {
-			return fmt.Errorf("agent model: %w", err)
+			return fmt.Errorf("agent model full: %w", err)
 		}
-		for _, a := range agents {
-			if normalizeAgentID(a.ID) != target {
-				continue
-			}
-			exists = true
-			model = extractModelPrimary(a.Model)
-			fallbacks = extractModelFallbacks(a.Model)
+		a, ok := roster.Find(agentID)
+		if !ok {
 			return nil
 		}
+		exists = true
+		model = a.ModelPrimary()
+		fallbacks = a.ModelFallbacks()
 		return nil
 	})
 	return model, fallbacks, exists, err
@@ -185,21 +166,18 @@ func (r *cliConfigReader) AgentModelFull(ctx context.Context, client *xssh.Clien
 func (r *cliConfigReader) AgentModelEntries(ctx context.Context, client *xssh.Client, h ConfigHost, agentID string) (map[string]map[string]any, bool, error) {
 	entries := map[string]map[string]any{}
 	var exists bool
-	target := normalizeAgentID(agentID)
 	err := r.withClient(ctx, client, h, func(c *xssh.Client) error {
-		agents, err := r.fetchAgentRoster(c)
+		roster, err := r.readRoster(ctx, c, h)
 		if err != nil {
 			return fmt.Errorf("agent model entries: %w", err)
 		}
-		for _, a := range agents {
-			if normalizeAgentID(a.ID) != target {
-				continue
-			}
-			exists = true
-			for ref, entry := range a.Models {
-				entries[ref] = entry
-			}
+		a, ok := roster.Find(agentID)
+		if !ok {
 			return nil
+		}
+		exists = true
+		for ref, entry := range a.Models {
+			entries[ref] = entry
 		}
 		return nil
 	})
@@ -209,25 +187,21 @@ func (r *cliConfigReader) AgentModelEntries(ctx context.Context, client *xssh.Cl
 	return entries, true, err
 }
 
-// AgentTools resolves tools.exec for the agent at roster index idx. It
-// reads the roster (entries-first) and indexes into the normalized slice
-// rather than building an `agents.list[%d].tools` path directly — that
-// indexed config path is a legacy shim on 2026.8.1 and, for reads,
-// `agents.list` is entirely unknown there. The index is produced by
-// AgentConfigIndex against the same normalized roster, so positions line up.
+// AgentTools resolves tools.exec for the agent at roster index idx, reading
+// the roster via the host's adapter and indexing into the version-agnostic
+// DTO. The index is produced by AgentConfigIndex against the same roster, so
+// positions line up regardless of on-disk shape.
 func (r *cliConfigReader) AgentTools(ctx context.Context, client *xssh.Client, h ConfigHost, idx int) (*RemoteToolsConfig, error) {
 	cfg := &RemoteToolsConfig{}
 	err := r.withClient(ctx, client, h, func(c *xssh.Client) error {
-		agents, err := r.fetchAgentRoster(c)
+		roster, err := r.readRoster(ctx, c, h)
 		if err != nil {
 			return fmt.Errorf("agent tools: %w", err)
 		}
-		if idx < 0 || idx >= len(agents) {
+		if idx < 0 || idx >= len(roster.Agents) {
 			return nil // out of range → unset, matches prior behavior
 		}
-		if t := agents[idx].Tools; t != nil {
-			cfg.Exec = t.Exec
-		}
+		cfg.Exec = roster.Agents[idx].ExecTools
 		return nil
 	})
 	return cfg, err

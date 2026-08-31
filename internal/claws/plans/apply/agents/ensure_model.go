@@ -126,23 +126,19 @@ func (s *EnsureModelStep) Execute(ctx context.Context, t scaffold.Target) error 
 		Value interface{} `json:"value"`
 	}
 
-	// openclaw's schema (src/config/types.agents.ts) accepts
-	// `agents.list[].model` as either a bare string OR the object form
-	// `{primary, fallbacks}` — fallbacks lives INSIDE model, never as a
-	// sibling on the agent entry. Writing `agents.list[].fallbacks`
-	// would be rejected with "Unrecognized key: fallbacks". We therefore
-	// collapse to a single batch entry: object form when fallbacks are
-	// set, string form otherwise. One atomic write also sidesteps the
-	// intermediate state where a scalar `model` would need promoting to
-	// an object before a sibling `model.fallbacks` write could land.
-	modelPath := fmt.Sprintf("agents.list[%d].model", idx)
-	var modelValue interface{} = at.Spec.Model.Primary
-	if len(at.Spec.Model.Fallbacks) > 0 {
-		modelValue = map[string]interface{}{
-			"primary":   at.Spec.Model.Primary,
-			"fallbacks": at.Spec.Model.Fallbacks,
-		}
+	// The model write path + value shape is version-specific and comes from
+	// the RosterAdapter:
+	//   7.x → agents.list[idx].model, bare string or {primary,fallbacks}
+	//   8.1 → agents.entries.<id>.model, ALWAYS the object form (a bare
+	//         string write of an authored ref is rejected with "Unable to
+	//         resolve authored model reference").
+	// fallbacks lives INSIDE model, never as a sibling. One atomic write
+	// also sidesteps the scalar→object promotion race.
+	adapter, err := s.reader.RosterAdapter(ctx, client, common.MachineConfigHost(m, common.ResolveMachineHost(ctx, m)))
+	if err != nil {
+		return fmt.Errorf("ensure-model: detect roster adapter: %w", err)
 	}
+	modelPath, modelValue := adapter.ModelWrite(idx, at.Spec.ID, at.Spec.Model.Primary, at.Spec.Model.Fallbacks)
 	batch := []batchEntry{{Path: modelPath, Value: modelValue}}
 
 	// Per-model runtime pins live in a sibling map, not inside `model` —
@@ -173,7 +169,7 @@ func (s *EnsureModelStep) Execute(ctx context.Context, t scaffold.Target) error 
 			merged[ref] = common.WithModelRuntimeID(existing[ref], runtime)
 		}
 		batch = append(batch, batchEntry{
-			Path:  fmt.Sprintf("agents.list[%d].models", idx),
+			Path:  adapter.ModelEntriesWritePath(idx, at.Spec.ID),
 			Value: merged,
 		})
 	}

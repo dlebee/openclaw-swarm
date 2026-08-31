@@ -95,7 +95,12 @@ func (s *ConfigureToolsStep) Execute(ctx context.Context, t scaffold.Target) err
 		return fmt.Errorf("configure-tools: agent %q not found in config", at.Spec.ID)
 	}
 
-	batch := buildExecBatch(idx, at.Spec.Tools)
+	adapter, err := s.reader.RosterAdapter(ctx, client, ch)
+	if err != nil {
+		return fmt.Errorf("configure-tools: detect roster adapter: %w", err)
+	}
+
+	batch := buildExecBatch(adapter, idx, at.Spec.ID, at.Spec.Tools)
 	batch = append(batch, buildElevatedBatch(at.Spec.Tools.Elevated)...)
 	if len(batch) == 0 {
 		return nil
@@ -164,20 +169,20 @@ type batchEntry struct {
 	Value interface{} `json:"value"`
 }
 
-func buildExecBatch(idx int, tools *manifestdata.AgentTools) []batchEntry {
+func buildExecBatch(adapter common.RosterAdapter, idx int, id string, tools *manifestdata.AgentTools) []batchEntry {
 	if tools == nil || tools.Exec == nil {
 		return nil
 	}
+	hostPath, nodePath, securityPath := adapter.ExecWritePaths(idx, id)
 	var batch []batchEntry
-	prefix := fmt.Sprintf("agents.list[%d].tools.exec", idx)
 	if tools.Exec.Host != "" {
-		batch = append(batch, batchEntry{prefix + ".host", tools.Exec.Host})
+		batch = append(batch, batchEntry{hostPath, tools.Exec.Host})
 	}
 	if tools.Exec.Node != "" {
-		batch = append(batch, batchEntry{prefix + ".node", tools.Exec.Node})
+		batch = append(batch, batchEntry{nodePath, tools.Exec.Node})
 	}
 	if tools.Exec.Security != "" {
-		batch = append(batch, batchEntry{prefix + ".security", tools.Exec.Security})
+		batch = append(batch, batchEntry{securityPath, tools.Exec.Security})
 	}
 	return batch
 }

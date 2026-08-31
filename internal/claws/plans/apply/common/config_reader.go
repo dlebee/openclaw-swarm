@@ -26,8 +26,22 @@ import (
 //     call MUST observe the live config, so Execute sees writes made by
 //     preceding steps in the same run.
 type ConfigReader interface {
+	// ReadRoster returns the whole agent roster as a version-agnostic DTO,
+	// decoded via the RosterAdapter matching the host's OpenClaw version.
+	// A fresh gateway with no agents yields an empty roster, never an error.
+	// This is the single read entry point the agents-phase steps should
+	// prefer; the per-field helpers below are kept for callers that only
+	// need one datum.
+	ReadRoster(ctx context.Context, client *xssh.Client, h ConfigHost) (AgentRoster, error)
+
+	// RosterAdapter returns the adapter for the host's OpenClaw version, so
+	// write-path steps (ensure-model, configure-tools, add-agent) build the
+	// correct config paths/values for that version. Detection is cached per
+	// host for the plan run.
+	RosterAdapter(ctx context.Context, client *xssh.Client, h ConfigHost) (RosterAdapter, error)
+
 	// AgentConfigIndex returns the 0-based index of agentID within
-	// cfg.agents.list[]. Returns (-1, nil) if the agent is absent.
+	// the roster. Returns (-1, nil) if the agent is absent.
 	AgentConfigIndex(ctx context.Context, client *xssh.Client, h ConfigHost, agentID string) (int, error)
 
 	// AgentModel returns the effective primary model for agentID (as

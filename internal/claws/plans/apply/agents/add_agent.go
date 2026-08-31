@@ -76,7 +76,11 @@ func (s *AddAgentStep) Execute(ctx context.Context, t scaffold.Target) error {
 	defer common.ReturnSSH(ctx, key, client)
 
 	if at.Spec.ID == defaultAgentID {
-		return s.seedDefaultAgent(client, at.Spec.Workspace)
+		adapter, err := s.reader.RosterAdapter(ctx, client, common.MachineConfigHost(m, common.ResolveMachineHost(ctx, m)))
+		if err != nil {
+			return fmt.Errorf("add-agent: detect roster adapter: %w", err)
+		}
+		return s.seedDefaultAgent(client, adapter, at.Spec.Workspace)
 	}
 
 	script := common.OpenclawCLIPreamble() + fmt.Sprintf(
@@ -96,16 +100,17 @@ func (s *AddAgentStep) Execute(ctx context.Context, t scaffold.Target) error {
 // against the remote $HOME here because `agents add` (which we can't use
 // for id="main") is the normal place where ~ expansion happens. Model is
 // left to ensure-model.
-func (s *AddAgentStep) seedDefaultAgent(client *xssh.Client, workspace string) error {
+func (s *AddAgentStep) seedDefaultAgent(client *xssh.Client, adapter common.RosterAdapter, workspace string) error {
 	resolved, err := resolveRemoteWorkspace(client, workspace)
 	if err != nil {
 		return fmt.Errorf("add-agent: resolve workspace for %q: %w", defaultAgentID, err)
 	}
-	entry := map[string]any{"id": defaultAgentID}
-	if resolved != "" {
-		entry["workspace"] = resolved
-	}
-	batch := []map[string]any{{"path": "agents.list", "value": []map[string]any{entry}}}
+	// The seed path + value shape is version-specific (agents.list on 7.x,
+	// agents.entries.<id> on 8.1) and comes from the adapter. Writing the
+	// 7.x array shape on 8.1 goes through a lossy shim that drops the id
+	// (it's the map key there) and leaves the roster read-empty.
+	seedPath, seedValue := adapter.SeedAgentWrite(defaultAgentID, resolved)
+	batch := []map[string]any{{"path": seedPath, "value": seedValue}}
 	batchJSON, err := json.Marshal(batch)
 	if err != nil {
 		return fmt.Errorf("add-agent: marshal seed for %q: %w", defaultAgentID, err)
