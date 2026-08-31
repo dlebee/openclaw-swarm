@@ -258,7 +258,96 @@ func loadTestManifest(t *testing.T, name string) *manifestdata.Manifest {
 	if err != nil {
 		t.Fatalf("load manifest %s: %v", name, err)
 	}
+	retargetManifestModels(t, m)
 	return m
+}
+
+// modelRefRewrites maps a canonical (2026.7.x-era) Anthropic model ref to
+// the id that the target OpenClaw major actually ships. The 8.1 catalog
+// dropped the claude-*-4-5 / claude-sonnet-4-6 generation, so a manifest
+// authored against 7.x names fails `config set` with "Unable to resolve
+// authored model reference" on 8.1. This is a TEST-FIXTURE concern, not a
+// claws concern: claws deliberately passes model refs through verbatim and
+// lets the CLI reject unknown ones (a model ref is user intent, not a
+// config-shape detail). So we retarget the fixtures per version here rather
+// than translating inside claws.
+//
+// Verified against `openclaw models list --all` on 2026.8.1 (ea80657):
+//
+//	anthropic/claude-opus-4-8    (present)
+//	anthropic/claude-sonnet-5    (present)
+//
+// ollama/* refs are intentionally NOT rewritten: the cron/phases tiers
+// serve qwen2.5:0.5b via a fake-ollama stub whose provider is registered at
+// runtime, so the ref resolves on both versions once the provider exists.
+var modelRefRewrites8x = map[string]string{
+	"anthropic/claude-opus-4-5":   "anthropic/claude-opus-4-8",
+	"anthropic/claude-sonnet-4-5": "anthropic/claude-sonnet-5",
+	"anthropic/claude-sonnet-4-6": "anthropic/claude-sonnet-5",
+}
+
+// retargetManifestModels rewrites Anthropic model refs in-place to match the
+// OpenClaw major named by OPENCLAW_VERSION (the same env the CI matrix sets
+// per leg). On 7.x, or when the version is unset/unparseable, the fixtures
+// are left untouched (their authored refs are the 7.x refs).
+func retargetManifestModels(t *testing.T, m *manifestdata.Manifest) {
+	t.Helper()
+	rewrites := modelRewritesForVersion(os.Getenv("OPENCLAW_VERSION"))
+	if len(rewrites) == 0 {
+		return
+	}
+	remap := func(ref string) string {
+		if to, ok := rewrites[strings.TrimSpace(ref)]; ok {
+			return to
+		}
+		return ref
+	}
+	for i := range m.Agents {
+		ag := &m.Agents[i]
+		if before := ag.Model.Primary; before != "" {
+			if after := remap(before); after != before {
+				t.Logf("retarget model: agent %q primary %q -> %q (OPENCLAW_VERSION=%s)",
+					ag.ID, before, after, os.Getenv("OPENCLAW_VERSION"))
+				ag.Model.Primary = after
+			}
+		}
+		for j, fb := range ag.Model.Fallbacks {
+			if after := remap(fb); after != fb {
+				t.Logf("retarget model: agent %q fallback[%d] %q -> %q", ag.ID, j, fb, after)
+				ag.Model.Fallbacks[j] = after
+			}
+		}
+		if len(ag.Models) > 0 {
+			remapped := make(map[string]manifestdata.AgentModelEntry, len(ag.Models))
+			for ref, entry := range ag.Models {
+				remapped[remap(ref)] = entry
+			}
+			ag.Models = remapped
+		}
+	}
+}
+
+// modelRewritesForVersion returns the ref-rewrite table for the given
+// OPENCLAW_VERSION string, or nil when no rewrites apply (7.x, empty, or
+// unparseable). The reshape landed in 2026.8.0.
+func modelRewritesForVersion(version string) map[string]string {
+	version = strings.TrimSpace(version)
+	if version == "" {
+		return nil
+	}
+	parts := strings.SplitN(strings.TrimPrefix(version, "v"), ".", 3)
+	if len(parts) < 2 {
+		return nil
+	}
+	year, err1 := strconv.Atoi(parts[0])
+	minor, err2 := strconv.Atoi(parts[1])
+	if err1 != nil || err2 != nil {
+		return nil
+	}
+	if year > 2026 || (year == 2026 && minor >= 8) {
+		return modelRefRewrites8x
+	}
+	return nil
 }
 
 func generateEphemeralKey(t *testing.T) (privPath, pubKey string) {
