@@ -22,25 +22,48 @@ permissions:
 
 env:
   LINODE_TOKEN: ${{ secrets.LINODE_TOKEN }}
-  # Pin to last known working version (2026.7.1).
-  #
-  # 2026.8.1 introduced two breaking contract changes that claws must adapt to
-  # (both handled in the config reader + node install steps):
-  #   1. Agent roster reshaped from agents.list (array) to agents.entries (map).
-  #      Legacy indexed paths still work for set/patch/unset but NOT get.
-  #   2. New systemd install-identity gate: `openclaw node/gateway install`
-  #      refuses to publish a user-scope service when ~/.config (or
-  #      ~/.config/systemd/user) is group/world-writable; --force does not
-  #      bypass it.
-  # Pairing is NOT the blocker — TestGatewaySmoke and TestChannelsSmoke pass on
-  # 2026.8.1. Bump this default to 2026.8.1 once a dispatch run is green.
-  OPENCLAW_VERSION: ${{ inputs.openclaw_version || '2026.7.1' }}
 
 jobs:
+  # Resolve which OpenClaw versions to exercise. claws supports BOTH the
+  # last 2026.7.x and 2026.8.1 (the roster reshape agents.list -> agents.entries
+  # and the systemd install-identity gate are both handled in the apply steps),
+  # so the default is a matrix over both. A workflow_dispatch run may pin a
+  # single version via the openclaw_version input, in which case only that
+  # version runs.
+  select-versions:
+    name: Select OpenClaw versions
+    runs-on: ubuntu-latest
+    outputs:
+      versions: ${{ steps.pick.outputs.versions }}
+    steps:
+      - name: Pick versions
+        id: pick
+        run: |
+          set -euo pipefail
+          PINNED="${{ inputs.openclaw_version }}"
+          if [ -n "$PINNED" ]; then
+            # Explicit override from workflow_dispatch: run just that version.
+            VERSIONS="[\"$PINNED\"]"
+          else
+            # Default: exercise both supported versions.
+            VERSIONS='["2026.7.1","2026.8.1"]'
+          fi
+          echo "versions=$VERSIONS" >> "$GITHUB_OUTPUT"
+          echo "Selected versions: $VERSIONS"
+
   integration:
-    name: Linode Integration
+    name: Linode Integration (${{ matrix.openclaw_version }})
+    needs: select-versions
     runs-on: ubuntu-latest
     timeout-minutes: 45
+    strategy:
+      # Don't cancel the 2026.7.1 leg just because 2026.8.1 fails (or vice
+      # versa) — we want to see the status of both versions in one run.
+      fail-fast: false
+      matrix:
+        openclaw_version: ${{ fromJSON(needs.select-versions.outputs.versions) }}
+    env:
+      OPENCLAW_VERSION: ${{ matrix.openclaw_version }}
 
     steps:
       - name: Checkout
@@ -58,10 +81,14 @@ jobs:
       - name: Generate unique prefix
         id: prefix
         run: |
-          # Use run ID + attempt for unique prefix to avoid collisions
-          PREFIX="ci-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          # Use run ID + attempt + a version-derived suffix for a unique
+          # prefix. The matrix legs share GITHUB_RUN_ID/ATTEMPT and run
+          # concurrently, so the version suffix is what keeps their Linode
+          # instance labels/tags from colliding.
+          VER_TAG=$(echo "${OPENCLAW_VERSION}" | tr -c 'A-Za-z0-9' '-' )
+          PREFIX="ci-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}-${VER_TAG}"
           echo "prefix=$PREFIX" >> $GITHUB_OUTPUT
-          echo "Using prefix: $PREFIX"
+          echo "Using prefix: $PREFIX (OpenClaw ${OPENCLAW_VERSION})"
 
       - name: Run integration tests
         id: tests
@@ -144,7 +171,7 @@ jobs:
       - name: Summary
         if: always()
         run: |
-          echo "## Integration Test Results" >> $GITHUB_STEP_SUMMARY
+          echo "## Integration Test Results — OpenClaw ${{ matrix.openclaw_version }}" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           if [ "${{ steps.tests.outcome }}" == "success" ]; then
             echo "✅ Tests passed" >> $GITHUB_STEP_SUMMARY
@@ -152,6 +179,7 @@ jobs:
             echo "❌ Tests failed or were cancelled" >> $GITHUB_STEP_SUMMARY
           fi
           echo "" >> $GITHUB_STEP_SUMMARY
+          echo "- OpenClaw version: ${{ matrix.openclaw_version }}" >> $GITHUB_STEP_SUMMARY
           echo "- Run ID: ${{ github.run_id }}" >> $GITHUB_STEP_SUMMARY
           echo "- Trigger: ${{ github.event_name }}" >> $GITHUB_STEP_SUMMARY
           if [ -n "${{ inputs.test_filter }}" ]; then
