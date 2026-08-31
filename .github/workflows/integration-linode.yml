@@ -22,8 +22,18 @@ permissions:
 
 env:
   LINODE_TOKEN: ${{ secrets.LINODE_TOKEN }}
-  # Pin to last known working version (June 5, 2026 test passed with 2026.7.1)
-  # The pairing flow changed in 2026.8.x and needs investigation.
+  # Pin to last known working version (2026.7.1).
+  #
+  # 2026.8.1 introduced two breaking contract changes that claws must adapt to
+  # (both handled in the config reader + node install steps):
+  #   1. Agent roster reshaped from agents.list (array) to agents.entries (map).
+  #      Legacy indexed paths still work for set/patch/unset but NOT get.
+  #   2. New systemd install-identity gate: `openclaw node/gateway install`
+  #      refuses to publish a user-scope service when ~/.config (or
+  #      ~/.config/systemd/user) is group/world-writable; --force does not
+  #      bypass it.
+  # Pairing is NOT the blocker — TestGatewaySmoke and TestChannelsSmoke pass on
+  # 2026.8.1. Bump this default to 2026.8.1 once a dispatch run is green.
   OPENCLAW_VERSION: ${{ inputs.openclaw_version || '2026.7.1' }}
 
 jobs:
@@ -70,38 +80,58 @@ jobs:
       - name: Cleanup Linode instances
         if: always()
         run: |
+          set -euo pipefail
           echo "=== Cleaning up any leaked Linode instances ==="
-          
-          # Install linode-cli if not present
-          pip install linode-cli --quiet
-          
+
+          # Install linode-cli if not present. Send its output to stderr so a
+          # chatty pip run can never contaminate the JSON we parse below.
+          pip install linode-cli --quiet 1>&2
+
           # The tests tag Linode instances with "claws/<prefix>" where prefix
           # is like "it-lin-node-abc123". We look for any instances tagged
           # with the "claws/it-lin-*" pattern from integration tests.
           #
           # Note: Tests should clean up after themselves, but this catches
-          # leaked instances from crashes, timeouts, or cancellations.
-          
+          # leaked instances from crashes, timeouts, or cancellations. This
+          # is the safety net for money-costing leaks, so it must fail loudly
+          # rather than silently report "nothing found" on a broken invocation
+          # (the old `--json 2>/dev/null || echo []` idiom swallowed a
+          # non-JSON payload from linode-cli and jq then choked on it).
+
           echo "Listing all Linode instances..."
-          ALL_INSTANCES=$(linode-cli linodes list --json 2>/dev/null || echo "[]")
-          
+          # --json emits a JSON array; --no-headers suppresses the human table
+          # header line that otherwise prefixes the payload and breaks jq.
+          # No `|| echo []` fallback: if the list call fails we want a red step,
+          # not a false "all clear".
+          ALL_INSTANCES=$(linode-cli linodes list --json --no-headers)
+
+          # Validate it actually parses as JSON before trusting it. If not,
+          # surface the raw output and fail so the leak net isn't silently dead.
+          if ! echo "$ALL_INSTANCES" | jq -e 'type == "array"' >/dev/null 2>&1; then
+            echo "::error::linode-cli did not return a JSON array; cleanup cannot run safely"
+            echo "--- raw linode-cli output ---"
+            echo "$ALL_INSTANCES"
+            echo "-----------------------------"
+            exit 1
+          fi
+
           # Find instances with integration test tags (claws/it-lin-*)
           INSTANCES=$(echo "$ALL_INSTANCES" | jq -r '
-            .[] | 
-            select(.tags | any(startswith("claws/it-lin-"))) | 
-            "\(.id) \(.label) [\(.tags | join(", "))]"' || true)
-          
+            .[] |
+            select(.tags | any(startswith("claws/it-lin-"))) |
+            "\(.id) \(.label) [\(.tags | join(", "))]"')
+
           if [ -n "$INSTANCES" ]; then
             echo "Found integration test instances:"
             echo "$INSTANCES"
             echo ""
-            
+
             # Extract just the IDs and delete
             IDS=$(echo "$ALL_INSTANCES" | jq -r '
-              .[] | 
-              select(.tags | any(startswith("claws/it-lin-"))) | 
-              .id' || true)
-            
+              .[] |
+              select(.tags | any(startswith("claws/it-lin-"))) |
+              .id')
+
             for ID in $IDS; do
               echo "Deleting instance $ID..."
               linode-cli linodes delete "$ID" || true

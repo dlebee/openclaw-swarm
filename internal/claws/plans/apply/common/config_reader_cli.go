@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"sort"
 	"strings"
 
 	"github.com/gluwa/openclaw-swarm2/internal/platformutil/bash"
@@ -47,21 +48,85 @@ func (r *cliConfigReader) runJSON(client *xssh.Client, script string, startChar 
 	return extractJSON(strings.TrimSpace(out), startChar), nil
 }
 
+// cliAgent is one normalized roster entry, independent of the on-disk
+// shape (legacy agents.list array vs. 2026.8.1+ agents.entries map).
+type cliAgent struct {
+	ID     string                    `json:"id"`
+	Model  json.RawMessage           `json:"model"`
+	Models map[string]map[string]any `json:"models"`
+	Tools  *struct {
+		Exec *RemoteExecConfig `json:"exec"`
+	} `json:"tools"`
+}
+
+// fetchAgentRoster reads the agent roster and normalizes both on-disk
+// shapes to an ordered slice.
+//
+// OpenClaw 2026.8.1 reshaped agents.list (array) into agents.entries (map
+// keyed by agent id). Crucially the read side is asymmetric: on 2026.8.1
+// `config get agents.list` returns a hard error ("Unknown config path"),
+// while writes via the legacy indexed path still work through a shim. The
+// old `config get agents.list --json 2>/dev/null || echo "[]"` idiom turned
+// that loud breaking change into a silent empty roster — which made every
+// agent read-back come up empty, breaking add-agent verify and destroying
+// idempotency for the whole agents phase.
+//
+// Strategy: probe agents.entries first (the canonical 2026.8.1 path); if
+// that path is unknown (older CLI), fall back to agents.list. A genuine
+// error on the chosen path propagates instead of being swallowed.
+//
+// The map shape carries the id in the key, so we fold it back into each
+// entry's ID and sort by id for a stable order (index positions are only
+// ever used to build a path for the same agent they were resolved for).
+func (r *cliConfigReader) fetchAgentRoster(c *xssh.Client) ([]cliAgent, error) {
+	// Try the 2026.8.1+ map shape first.
+	entriesRaw, entriesErr := r.runJSON(c, `openclaw config get agents.entries --json`, '{')
+	if entriesErr == nil {
+		var entries map[string]cliAgent
+		if err := json.Unmarshal([]byte(entriesRaw), &entries); err == nil {
+			ids := make([]string, 0, len(entries))
+			for id := range entries {
+				ids = append(ids, id)
+			}
+			sort.Strings(ids)
+			out := make([]cliAgent, 0, len(ids))
+			for _, id := range ids {
+				a := entries[id]
+				if strings.TrimSpace(a.ID) == "" {
+					a.ID = id
+				}
+				out = append(out, a)
+			}
+			return out, nil
+		}
+		// entries path answered but didn't parse as a map — fall through to
+		// the legacy shape rather than guessing.
+	}
+
+	// Legacy (≤ 2026.7.x) array shape.
+	listRaw, listErr := r.runJSON(c, `openclaw config get agents.list --json`, '[')
+	if listErr != nil {
+		// Both shapes failed. Surface the errors instead of silently
+		// reporting an empty roster (which is what created the original bug).
+		return nil, fmt.Errorf("read agent roster: entries: %v; list: %w", entriesErr, listErr)
+	}
+	var list []cliAgent
+	if err := json.Unmarshal([]byte(listRaw), &list); err != nil {
+		return nil, fmt.Errorf("parse agents.list %q: %w", listRaw, err)
+	}
+	return list, nil
+}
+
 func (r *cliConfigReader) AgentConfigIndex(ctx context.Context, client *xssh.Client, h ConfigHost, agentID string) (int, error) {
 	idx := -1
+	target := normalizeAgentID(agentID)
 	err := r.withClient(ctx, client, h, func(c *xssh.Client) error {
-		raw, err := r.runJSON(c, `openclaw config get agents.list --json 2>/dev/null || echo "[]"`, '[')
+		agents, err := r.fetchAgentRoster(c)
 		if err != nil {
 			return fmt.Errorf("agent config index: %w", err)
 		}
-		var list []struct {
-			ID string `json:"id"`
-		}
-		if err := json.Unmarshal([]byte(raw), &list); err != nil {
-			return nil // treat parse failure as "not found" — matches prior behavior
-		}
-		for i, entry := range list {
-			if entry.ID == agentID {
+		for i, entry := range agents {
+			if normalizeAgentID(entry.ID) == target {
 				idx = i
 				return nil
 			}
@@ -74,24 +139,19 @@ func (r *cliConfigReader) AgentConfigIndex(ctx context.Context, client *xssh.Cli
 func (r *cliConfigReader) AgentModel(ctx context.Context, client *xssh.Client, h ConfigHost, agentID string) (string, bool, error) {
 	var model string
 	var exists bool
+	target := normalizeAgentID(agentID)
 	err := r.withClient(ctx, client, h, func(c *xssh.Client) error {
-		raw, err := r.runJSON(c, `openclaw agents list --json 2>/dev/null || echo "[]"`, '[')
+		agents, err := r.fetchAgentRoster(c)
 		if err != nil {
-			return fmt.Errorf("agents list: %w", err)
-		}
-		var agents []struct {
-			ID    string `json:"id"`
-			Model string `json:"model"`
-		}
-		if err := json.Unmarshal([]byte(raw), &agents); err != nil {
-			return fmt.Errorf("agents list: parse %q: %w", raw, err)
+			return fmt.Errorf("agent model: %w", err)
 		}
 		for _, a := range agents {
-			if a.ID == agentID {
-				model = a.Model
-				exists = true
-				return nil
+			if normalizeAgentID(a.ID) != target {
+				continue
 			}
+			exists = true
+			model = extractModelPrimary(a.Model)
+			return nil
 		}
 		return nil
 	})
@@ -102,41 +162,20 @@ func (r *cliConfigReader) AgentModelFull(ctx context.Context, client *xssh.Clien
 	var model string
 	var fallbacks []string
 	var exists bool
+	target := normalizeAgentID(agentID)
 	err := r.withClient(ctx, client, h, func(c *xssh.Client) error {
-		// Read from config directly to get the full model object including fallbacks
-		raw, err := r.runJSON(c, `openclaw config get agents.list --json 2>/dev/null || echo "[]"`, '[')
+		agents, err := r.fetchAgentRoster(c)
 		if err != nil {
-			return fmt.Errorf("agents list: %w", err)
-		}
-		var agents []struct {
-			ID    string          `json:"id"`
-			Model json.RawMessage `json:"model"`
-		}
-		if err := json.Unmarshal([]byte(raw), &agents); err != nil {
-			return fmt.Errorf("agents list: parse %q: %w", raw, err)
+			return fmt.Errorf("agent model: %w", err)
 		}
 		for _, a := range agents {
-			if a.ID == agentID {
-				exists = true
-				// Try object form first
-				var modelObj struct {
-					Primary   string   `json:"primary"`
-					Fallbacks []string `json:"fallbacks"`
-				}
-				if err := json.Unmarshal(a.Model, &modelObj); err == nil && modelObj.Primary != "" {
-					model = modelObj.Primary
-					fallbacks = modelObj.Fallbacks
-					return nil
-				}
-				// Try string form
-				var modelStr string
-				if err := json.Unmarshal(a.Model, &modelStr); err == nil {
-					model = modelStr
-					fallbacks = nil
-					return nil
-				}
-				return nil
+			if normalizeAgentID(a.ID) != target {
+				continue
 			}
+			exists = true
+			model = extractModelPrimary(a.Model)
+			fallbacks = extractModelFallbacks(a.Model)
+			return nil
 		}
 		return nil
 	})
@@ -146,20 +185,14 @@ func (r *cliConfigReader) AgentModelFull(ctx context.Context, client *xssh.Clien
 func (r *cliConfigReader) AgentModelEntries(ctx context.Context, client *xssh.Client, h ConfigHost, agentID string) (map[string]map[string]any, bool, error) {
 	entries := map[string]map[string]any{}
 	var exists bool
+	target := normalizeAgentID(agentID)
 	err := r.withClient(ctx, client, h, func(c *xssh.Client) error {
-		raw, err := r.runJSON(c, `openclaw config get agents.list --json 2>/dev/null || echo "[]"`, '[')
+		agents, err := r.fetchAgentRoster(c)
 		if err != nil {
-			return fmt.Errorf("agents list: %w", err)
-		}
-		var agents []struct {
-			ID     string                    `json:"id"`
-			Models map[string]map[string]any `json:"models"`
-		}
-		if err := json.Unmarshal([]byte(raw), &agents); err != nil {
-			return fmt.Errorf("agents list: parse %q: %w", raw, err)
+			return fmt.Errorf("agent model entries: %w", err)
 		}
 		for _, a := range agents {
-			if a.ID != agentID {
+			if normalizeAgentID(a.ID) != target {
 				continue
 			}
 			exists = true
@@ -176,21 +209,25 @@ func (r *cliConfigReader) AgentModelEntries(ctx context.Context, client *xssh.Cl
 	return entries, true, err
 }
 
+// AgentTools resolves tools.exec for the agent at roster index idx. It
+// reads the roster (entries-first) and indexes into the normalized slice
+// rather than building an `agents.list[%d].tools` path directly — that
+// indexed config path is a legacy shim on 2026.8.1 and, for reads,
+// `agents.list` is entirely unknown there. The index is produced by
+// AgentConfigIndex against the same normalized roster, so positions line up.
 func (r *cliConfigReader) AgentTools(ctx context.Context, client *xssh.Client, h ConfigHost, idx int) (*RemoteToolsConfig, error) {
 	cfg := &RemoteToolsConfig{}
 	err := r.withClient(ctx, client, h, func(c *xssh.Client) error {
-		key := fmt.Sprintf("agents.list[%d].tools", idx)
-		raw, err := r.runJSON(c, fmt.Sprintf(`openclaw config get %s --json 2>/dev/null || echo "{}"`, key), '{')
+		agents, err := r.fetchAgentRoster(c)
 		if err != nil {
-			return err
+			return fmt.Errorf("agent tools: %w", err)
 		}
-		var parsed struct {
-			Exec *RemoteExecConfig `json:"exec"`
+		if idx < 0 || idx >= len(agents) {
+			return nil // out of range → unset, matches prior behavior
 		}
-		if err := json.Unmarshal([]byte(raw), &parsed); err != nil {
-			return nil // treat parse failure as unset — matches prior behavior
+		if t := agents[idx].Tools; t != nil {
+			cfg.Exec = t.Exec
 		}
-		cfg.Exec = parsed.Exec
 		return nil
 	})
 	return cfg, err
