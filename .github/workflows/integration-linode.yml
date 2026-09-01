@@ -106,9 +106,23 @@ jobs:
       # Always cleanup Linode instances, even if tests fail or are cancelled
       - name: Cleanup Linode instances
         if: always()
+        env:
+          # linode-cli reads its token from LINODE_CLI_TOKEN (NOT LINODE_TOKEN,
+          # which is what the Go tests use). Without it, the CLI drops into an
+          # interactive `linode-cli configure` prompt and dies on the
+          # non-interactive CI stdin with `EOFError: EOF when reading a line`,
+          # so the whole leak-net safety step crashed (exit 1) and never ran.
+          # Setting LINODE_CLI_TOKEN makes the CLI fully non-interactive.
+          LINODE_CLI_TOKEN: ${{ secrets.LINODE_TOKEN }}
         run: |
           set -euo pipefail
           echo "=== Cleaning up any leaked Linode instances ==="
+
+          # Guard: without a token the CLI would prompt interactively and EOF.
+          if [ -z "${LINODE_CLI_TOKEN:-}" ]; then
+            echo "::error::LINODE_CLI_TOKEN is empty; cannot run leak cleanup non-interactively"
+            exit 1
+          fi
 
           # Install linode-cli if not present. Send its output to stderr so a
           # chatty pip run can never contaminate the JSON we parse below.
