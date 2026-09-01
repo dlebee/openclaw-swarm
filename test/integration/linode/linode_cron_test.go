@@ -515,14 +515,45 @@ func verifyFakeOllamaReachable(t *testing.T, dial provisioning.SSHDialFunc, host
 // hitting a stale real-ollama daemon.
 func configureLinodeOllamaProvider(t *testing.T, dial provisioning.SSHDialFunc, host string, mc manifestdata.Machine) {
 	t.Helper()
+	// Point the Ollama provider at the fake-ollama stub, at BOTH the top-level
+	// models.providers.ollama AND every per-agent scope (agents.list[].models
+	// .providers on 7.x, agents.entries.<id>.models.providers on 8.x).
+	//
+	// Why the per-agent write matters on 8.1: OpenClaw only mints the synthetic
+	// local auth key for a provider when THAT agent's resolved config has a
+	// non-default provider baseUrl (resolveSyntheticLocalProviderAuth reads
+	// from the agent's cfg, model-auth-runtime.ts). On 7.x provider config
+	// resolves globally, so the top-level write is enough and the reporter
+	// agent's isolated cron turn sees the stub. On 8.1 a non-default agent
+	// (here: `reporter`) resolves auth from its own scope; without the provider
+	// in that scope it never trips the "non-default baseUrl -> synthesize local
+	// key" branch and the cron run 500s with:
+	//   No API key found for provider 'ollama' ... | missing-provider-auth
+	//
+	// Writing the same fake baseUrl into each agent's models.providers.ollama
+	// makes 8.1 mint the synthetic key per-agent — no real key, no plugin, just
+	// the local-server no-auth path OpenClaw already supports. The top-level
+	// entry stays for the gateway's own discovery + the 7.x global path. The
+	// node -e below is version-agnostic: it walks whichever of agents.list
+	// (array) or agents.entries (object map) exists on disk.
 	script := fmt.Sprintf(`set -e
 node -e '
 const fs = require("fs"), os = require("os");
 const p = os.homedir() + "/.openclaw/openclaw.json";
 const c = JSON.parse(fs.readFileSync(p, "utf8"));
+const provider = { baseUrl: "http://localhost:%d", models: [] };
 if (!c.models) c.models = {};
 if (!c.models.providers) c.models.providers = {};
-c.models.providers.ollama = { baseUrl: "http://localhost:%d", models: [] };
+c.models.providers.ollama = provider;
+const setAgentProvider = (a) => {
+  if (!a || typeof a !== "object") return;
+  if (!a.models) a.models = {};
+  if (!a.models.providers) a.models.providers = {};
+  a.models.providers.ollama = { baseUrl: provider.baseUrl, models: [] };
+};
+const ag = (c.agents = c.agents || {});
+if (Array.isArray(ag.list)) ag.list.forEach(setAgentProvider);
+if (ag.entries && typeof ag.entries === "object") Object.values(ag.entries).forEach(setAgentProvider);
 fs.writeFileSync(p, JSON.stringify(c, null, 2) + "\n");
 '
 `, linodeFakeOllamaPort)
