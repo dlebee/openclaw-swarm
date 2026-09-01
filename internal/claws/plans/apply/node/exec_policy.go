@@ -149,49 +149,94 @@ func readExecPolicy(client *xssh.Client) (security, ask string) {
 }
 
 // readExecPolicyJSON parses `openclaw exec-policy show --json`. The command
-// returns a JSON object carrying requested / host / effective policy facts.
-// We read the *requested* tools.exec policy (what claws asked for via
+// returns a JSON object carrying the effective exec policy across scopes. We
+// read the *requested* tools.exec policy (what claws asked for via
 // exec-policy set), which is the drift target the verify compares against.
 // Returns ok=false when the command is unavailable or unparseable so the
 // caller can fall back to raw config reads.
+//
+// The real shape (verified on 2026.7.1 and 2026.8.1) is nested under
+// effectivePolicy.scopes[], NOT a flat/`requested` top level:
+//
+//	{"effectivePolicy":{"scopes":[{
+//	   "scopeLabel":"tools.exec","configPath":"tools.exec",
+//	   "security":{"requested":"full","host":"full","effective":"full"},
+//	   "ask":{"requested":"off","host":"off","effective":"off"}
+//	}]}}
+//
+// We select the tools.exec scope (by configPath/scopeLabel) and read its
+// requested value, falling back to effective when requested is empty. The
+// prior version of this parser looked for `.requested.security` / a flat
+// top-level `.security`, neither of which exists — so it always returned
+// ok=false and fell through to the raw config read, which reads back empty
+// on 8.1 (the value lives under a per-agent path). That is the regression
+// that surfaced as `exec-policy verify: security "", want "full"`.
 func readExecPolicyJSON(client *xssh.Client) (security, ask string, ok bool) {
 	out, err := bash.RunOutput(client, common.OpenclawCLIPreamble()+`openclaw exec-policy show --json 2>/dev/null`)
 	if err != nil {
 		return "", "", false
 	}
+	return parseExecPolicyJSON(out)
+}
+
+// parseExecPolicyJSON is the pure (SSH-free) parser for
+// `openclaw exec-policy show --json` output, split out so it can be unit
+// tested against captured fixtures. See readExecPolicyJSON for the shape.
+func parseExecPolicyJSON(out string) (security, ask string, ok bool) {
 	raw := strings.TrimSpace(out)
 	if i := strings.IndexByte(raw, '{'); i >= 0 {
 		raw = raw[i:]
 	} else {
 		return "", "", false
 	}
-	// Shape (2026.8.1): {"requested":{"security":"full","ask":"off",...},
-	//                    "host":{...},"effective":{...}}
-	// Be liberal: accept a flat {security,ask} too, in case a version
-	// reports the requested policy at the top level.
+
+	// field is one exec-policy fact (security or ask): a nested object
+	// carrying requested/host/effective values.
+	type field struct {
+		Requested string `json:"requested"`
+		Effective string `json:"effective"`
+	}
+	pick := func(f field) string {
+		if v := strings.TrimSpace(f.Requested); v != "" {
+			return v
+		}
+		return strings.TrimSpace(f.Effective)
+	}
+
 	var parsed struct {
-		Security  string `json:"security"`
-		Ask       string `json:"ask"`
-		Requested struct {
-			Security string `json:"security"`
-			Ask      string `json:"ask"`
-		} `json:"requested"`
+		EffectivePolicy struct {
+			Scopes []struct {
+				ScopeLabel string `json:"scopeLabel"`
+				ConfigPath string `json:"configPath"`
+				Security   field  `json:"security"`
+				Ask        field  `json:"ask"`
+			} `json:"scopes"`
+		} `json:"effectivePolicy"`
 	}
 	if err := json.Unmarshal([]byte(raw), &parsed); err != nil {
 		return "", "", false
 	}
-	security = parsed.Requested.Security
-	ask = parsed.Requested.Ask
-	if security == "" {
-		security = parsed.Security
-	}
-	if ask == "" {
-		ask = parsed.Ask
-	}
-	// Only claim success if we actually got a security value; otherwise let
-	// the caller fall back to raw config reads.
-	if strings.TrimSpace(security) == "" {
+
+	scopes := parsed.EffectivePolicy.Scopes
+	if len(scopes) == 0 {
 		return "", "", false
 	}
-	return strings.TrimSpace(security), strings.TrimSpace(ask), true
+	// Prefer the tools.exec scope; fall back to the first scope so a future
+	// relabel doesn't silently break the read.
+	sel := scopes[0]
+	for _, sc := range scopes {
+		if sc.ConfigPath == "tools.exec" || sc.ScopeLabel == "tools.exec" {
+			sel = sc
+			break
+		}
+	}
+
+	security = pick(sel.Security)
+	ask = pick(sel.Ask)
+	// Only claim success if we actually got a security value; otherwise let
+	// the caller fall back to raw config reads.
+	if security == "" {
+		return "", "", false
+	}
+	return security, ask, true
 }

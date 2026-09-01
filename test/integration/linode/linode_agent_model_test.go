@@ -244,36 +244,76 @@ func TestAgentModelSwap(t *testing.T) {
 	}
 }
 
-// fetchAgentModelConfig retrieves the model primary and fallbacks from
-// the remote openclaw config via `openclaw config get`.
-func fetchAgentModelConfig(t *testing.T, dial provisioning.SSHDialFunc, host string, mc manifestdata.Machine, agentID string) (primary string, fallbacks []string) {
+// rosterModelEntry is the normalized shape this test needs from one agent's
+// roster entry, regardless of the 7.x (agents.list[]) vs 8.x
+// (agents.entries.<id>) config layout.
+type rosterModelEntry struct {
+	ID    string          `json:"id"`
+	Model json.RawMessage `json:"model"`
+	// Models is the per-model runtime-pin map:
+	// agents.entries.<id>.models[<ref>].agentRuntime.id (8.x) /
+	// agents.list[].models[<ref>].agentRuntime.id (7.x).
+	Models map[string]struct {
+		AgentRuntime struct {
+			ID string `json:"id"`
+		} `json:"agentRuntime"`
+	} `json:"models"`
+}
+
+// fetchAgentRoster reads the agents roster from the remote openclaw config in
+// a version-agnostic way. On 2026.8.x the roster lives at agents.entries as an
+// object map keyed by agent id; on 2026.7.x it lives at agents.list as an
+// array. `openclaw config get agents.list` HARD-ERRORS on 8.1 with
+// "Unknown config path: agents.list", which is exactly what made
+// TestAgentModelSwap fast-fail on the 8.1 leg. So we probe entries first,
+// then fall back to list, and normalize both to []rosterModelEntry.
+func fetchAgentRoster(t *testing.T, dial provisioning.SSHDialFunc, host string, mc manifestdata.Machine) []rosterModelEntry {
 	t.Helper()
 
-	// Get the raw model config - can be string or object
-	cmd := `openclaw config get agents.list --json 2>/dev/null`
-	out, err := sshRunAsGatewayAgent(t, dial, host, mc, cmd)
-	if err != nil {
-		t.Fatalf("[%s] openclaw config get: %v\n%s", mc.Name, err, out)
+	// 8.x first: agents.entries is an object map { "<id>": { model, models, ... } }.
+	if out, err := sshRunAsGatewayAgent(t, dial, host, mc,
+		`openclaw config get agents.entries --json 2>/dev/null`); err == nil {
+		if idx := strings.IndexByte(out, '{'); idx >= 0 {
+			raw := out[idx:]
+			var entries map[string]rosterModelEntry
+			if json.Unmarshal([]byte(raw), &entries) == nil && len(entries) > 0 {
+				roster := make([]rosterModelEntry, 0, len(entries))
+				for id, e := range entries {
+					if e.ID == "" {
+						e.ID = id // entries map key is the id
+					}
+					roster = append(roster, e)
+				}
+				return roster
+			}
+		}
 	}
 
-	// Find JSON start
-	idx := strings.Index(out, "[")
+	// 7.x fallback: agents.list is an array.
+	out, err := sshRunAsGatewayAgent(t, dial, host, mc,
+		`openclaw config get agents.list --json 2>/dev/null`)
+	if err != nil {
+		t.Fatalf("[%s] openclaw config get agents.entries/agents.list: %v\n%s", mc.Name, err, out)
+	}
+	idx := strings.IndexByte(out, '[')
 	if idx < 0 {
 		t.Fatalf("[%s] config get output had no JSON array:\n%s", mc.Name, out)
 	}
-	raw := out[idx:]
-
-	// Parse agents list
-	var agents []struct {
-		ID    string          `json:"id"`
-		Model json.RawMessage `json:"model"`
+	var roster []rosterModelEntry
+	if err := json.Unmarshal([]byte(out[idx:]), &roster); err != nil {
+		t.Fatalf("[%s] parse agents.list: %v\nraw:\n%s", mc.Name, err, out[idx:])
 	}
-	if err := json.Unmarshal([]byte(raw), &agents); err != nil {
-		t.Fatalf("[%s] parse agents list: %v\nraw:\n%s", mc.Name, err, raw)
-	}
+	return roster
+}
 
-	// Find our agent
-	for _, a := range agents {
+// fetchAgentModelConfig retrieves the model primary and fallbacks from
+// the remote openclaw config, version-agnostically (7.x agents.list /
+// 8.x agents.entries).
+func fetchAgentModelConfig(t *testing.T, dial provisioning.SSHDialFunc, host string, mc manifestdata.Machine, agentID string) (primary string, fallbacks []string) {
+	t.Helper()
+
+	roster := fetchAgentRoster(t, dial, host, mc)
+	for _, a := range roster {
 		if strings.EqualFold(a.ID, agentID) {
 			// Try object form first
 			var modelObj struct {
@@ -310,37 +350,15 @@ func stringSlicesEqual(a, b []string) bool {
 }
 
 // fetchAgentModelRuntimes retrieves the per-model runtime pins
-// (agents.list[].models[<ref>].agentRuntime.id) for one agent, keyed by
-// model ref. Refs with no pin are absent from the returned map.
+// (models[<ref>].agentRuntime.id) for one agent, keyed by model ref. Refs
+// with no pin are absent from the returned map. Version-agnostic (7.x
+// agents.list / 8.x agents.entries) via fetchAgentRoster.
 func fetchAgentModelRuntimes(t *testing.T, dial provisioning.SSHDialFunc, host string, mc manifestdata.Machine, agentID string) map[string]string {
 	t.Helper()
 
-	cmd := `openclaw config get agents.list --json 2>/dev/null`
-	out, err := sshRunAsGatewayAgent(t, dial, host, mc, cmd)
-	if err != nil {
-		t.Fatalf("[%s] openclaw config get: %v\n%s", mc.Name, err, out)
-	}
-
-	idx := strings.Index(out, "[")
-	if idx < 0 {
-		t.Fatalf("[%s] config get output had no JSON array:\n%s", mc.Name, out)
-	}
-	raw := out[idx:]
-
-	var agents []struct {
-		ID     string `json:"id"`
-		Models map[string]struct {
-			AgentRuntime struct {
-				ID string `json:"id"`
-			} `json:"agentRuntime"`
-		} `json:"models"`
-	}
-	if err := json.Unmarshal([]byte(raw), &agents); err != nil {
-		t.Fatalf("[%s] parse agents list: %v\nraw:\n%s", mc.Name, err, raw)
-	}
-
+	roster := fetchAgentRoster(t, dial, host, mc)
 	pins := map[string]string{}
-	for _, a := range agents {
+	for _, a := range roster {
 		if !strings.EqualFold(a.ID, agentID) {
 			continue
 		}
