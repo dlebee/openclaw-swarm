@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"sort"
 	"strings"
 	"sync"
 
@@ -136,8 +137,13 @@ func fetchSnapshot(ctx context.Context, client *xssh.Client, h ConfigHost) (*ope
 // reader.
 type openclawSnapshot struct {
 	Agents struct {
-		List     []snapshotAgent   `json:"list"`
-		Defaults snapshotAgentDefs `json:"defaults"`
+		// List is the legacy (≤ 2026.7.x) array-shaped roster.
+		List []snapshotAgent `json:"list"`
+		// Entries is the 2026.8.1+ map-shaped roster, keyed by agent id.
+		// The id is the map key and is no longer carried inside the value,
+		// so normalizeAgents() folds the key back into each agent's ID.
+		Entries  map[string]snapshotAgent `json:"entries"`
+		Defaults snapshotAgentDefs        `json:"defaults"`
 	} `json:"agents"`
 	Bindings []snapshotBinding                `json:"bindings"`
 	Channels map[string]snapshotChannelConfig `json:"channels"`
@@ -192,6 +198,56 @@ type snapshotBinding struct {
 type snapshotChannelConfig struct {
 	DefaultAccount string                     `json:"defaultAccount"`
 	Accounts       map[string]json.RawMessage `json:"accounts"`
+}
+
+// normalizeAgents returns the roster as a single ordered slice regardless
+// of which on-disk shape produced it. OpenClaw 2026.8.1 migrated the
+// roster from agents.list (array) to agents.entries (map keyed by id);
+// both shapes may appear depending on the CLI version that last wrote the
+// config. When entries is present it wins (a migrated config keeps only
+// entries); otherwise we fall back to the legacy list. For the map shape
+// the id lives in the key, so we fold it back into each agent's ID field.
+//
+// Ordering: map iteration is unordered, so entries-derived agents are
+// sorted by id for a stable AgentConfigIndex. The index is only ever used
+// to build `agents.list[%d]` / `agents.entries.%s` config paths for the
+// *same* agent it was looked up for, so absolute position does not matter
+// across shapes — only that it is stable within one read.
+func (s *openclawSnapshot) normalizeAgents() []snapshotAgent {
+	if len(s.Agents.Entries) > 0 {
+		ids := make([]string, 0, len(s.Agents.Entries))
+		for id := range s.Agents.Entries {
+			ids = append(ids, id)
+		}
+		sort.Strings(ids)
+		out := make([]snapshotAgent, 0, len(ids))
+		for _, id := range ids {
+			a := s.Agents.Entries[id]
+			if strings.TrimSpace(a.ID) == "" {
+				a.ID = id
+			}
+			out = append(out, a)
+		}
+		return out
+	}
+	return s.Agents.List
+}
+
+// toRoster converts the snapshot's decoded agents into the version-agnostic
+// AgentRoster DTO, using the same both-shapes normalisation as
+// normalizeAgents. Used by ReadRoster so probe-phase callers get the same
+// DTO the CLI reader produces outside probe.
+func (s *openclawSnapshot) toRoster() AgentRoster {
+	r := AgentRoster{}
+	r.Defaults.Model = s.Agents.Defaults.Model
+	for _, a := range s.normalizeAgents() {
+		e := AgentEntry{ID: a.ID, Model: a.Model, Models: a.Models}
+		if a.Tools != nil {
+			e.ExecTools = a.Tools.Exec
+		}
+		r.Agents = append(r.Agents, e)
+	}
+	return r
 }
 
 // extractModelPrimary decodes openclaw's two-shape model field into the
@@ -261,6 +317,27 @@ func normalizeAgentID(id string) string {
 // ConfigReader impl
 // ---------------------------------------------------------------------------
 
+// ReadRoster serves the version-agnostic roster DTO from the config-file
+// snapshot during probe (parsing whichever shape is on disk), and delegates
+// to the CLI fallback outside probe so Execute sees live writes.
+func (r *snapshotConfigReader) ReadRoster(ctx context.Context, client *xssh.Client, h ConfigHost) (AgentRoster, error) {
+	snap, err := r.loadSnapshot(ctx, client, h)
+	if err != nil {
+		return AgentRoster{}, err
+	}
+	if snap == nil {
+		return r.fallback.ReadRoster(ctx, client, h)
+	}
+	return snap.toRoster(), nil
+}
+
+// RosterAdapter always delegates to the CLI fallback: adapter selection is a
+// function of the remote CLI version, which the snapshot (a static file
+// read) cannot determine on its own. The fallback caches detection per host.
+func (r *snapshotConfigReader) RosterAdapter(ctx context.Context, client *xssh.Client, h ConfigHost) (RosterAdapter, error) {
+	return r.fallback.RosterAdapter(ctx, client, h)
+}
+
 func (r *snapshotConfigReader) AgentConfigIndex(ctx context.Context, client *xssh.Client, h ConfigHost, agentID string) (int, error) {
 	snap, err := r.loadSnapshot(ctx, client, h)
 	if err != nil {
@@ -270,7 +347,7 @@ func (r *snapshotConfigReader) AgentConfigIndex(ctx context.Context, client *xss
 		return r.fallback.AgentConfigIndex(ctx, client, h, agentID)
 	}
 	target := normalizeAgentID(agentID)
-	for i, a := range snap.Agents.List {
+	for i, a := range snap.normalizeAgents() {
 		if normalizeAgentID(a.ID) == target {
 			return i, nil
 		}
@@ -287,7 +364,7 @@ func (r *snapshotConfigReader) AgentModel(ctx context.Context, client *xssh.Clie
 		return r.fallback.AgentModel(ctx, client, h, agentID)
 	}
 	target := normalizeAgentID(agentID)
-	for _, a := range snap.Agents.List {
+	for _, a := range snap.normalizeAgents() {
 		if normalizeAgentID(a.ID) != target {
 			continue
 		}
@@ -309,7 +386,7 @@ func (r *snapshotConfigReader) AgentModelFull(ctx context.Context, client *xssh.
 		return r.fallback.AgentModelFull(ctx, client, h, agentID)
 	}
 	target := normalizeAgentID(agentID)
-	for _, a := range snap.Agents.List {
+	for _, a := range snap.normalizeAgents() {
 		if normalizeAgentID(a.ID) != target {
 			continue
 		}
@@ -333,7 +410,7 @@ func (r *snapshotConfigReader) AgentModelEntries(ctx context.Context, client *xs
 		return r.fallback.AgentModelEntries(ctx, client, h, agentID)
 	}
 	target := normalizeAgentID(agentID)
-	for _, a := range snap.Agents.List {
+	for _, a := range snap.normalizeAgents() {
 		if normalizeAgentID(a.ID) != target {
 			continue
 		}
@@ -355,10 +432,11 @@ func (r *snapshotConfigReader) AgentTools(ctx context.Context, client *xssh.Clie
 		return r.fallback.AgentTools(ctx, client, h, idx)
 	}
 	out := &RemoteToolsConfig{}
-	if idx < 0 || idx >= len(snap.Agents.List) {
+	agents := snap.normalizeAgents()
+	if idx < 0 || idx >= len(agents) {
 		return out, nil
 	}
-	if a := snap.Agents.List[idx]; a.Tools != nil {
+	if a := agents[idx]; a.Tools != nil {
 		out.Exec = a.Tools.Exec
 	}
 	return out, nil

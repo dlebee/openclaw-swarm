@@ -98,9 +98,18 @@ func (s *StubGatewayUnitStep) Execute(ctx context.Context, t scaffold.Target) er
 	// `systemctl --user` refuses to talk to the user manager without it.
 	// linger (enabled for the agent user by ensure-agent-user) keeps
 	// /run/user/<uid> populated, so exporting it explicitly is safe.
+	// OpenClaw 2026.8.1 added a systemd install-identity gate: `openclaw
+	// gateway/node install` refuses to publish a user-scope service when
+	// ~/.config/systemd/user — or its nearest existing ancestor (typically
+	// ~/.config) — is group/world-writable. On the provisioned agent user
+	// the default umask leaves ~/.config group-writable, which trips the
+	// gate. Tighten the specific chain with a targeted (non-recursive,
+	// non-sudo) `chmod go-w` before any openclaw install runs, per the
+	// upstream recovery guidance.
 	script := fmt.Sprintf(`set -euo pipefail
 export XDG_RUNTIME_DIR=/run/user/$(id -u)
 mkdir -p ~/.config/systemd/user
+chmod go-w ~ ~/.config ~/.config/systemd ~/.config/systemd/user
 cat > ~/.config/systemd/user/openclaw-gateway.service <<'OPENCLAW_GATEWAY_STUB_EOF'
 %sOPENCLAW_GATEWAY_STUB_EOF
 systemctl --user daemon-reload

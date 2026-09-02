@@ -99,6 +99,60 @@ class Handler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(line)
 
+    def _handle_openai_chat(self, body: dict) -> None:
+        # OpenAI /v1/chat/completions non-streaming response. Same
+        # deterministic two-step rule as /api/chat: if a prior tool
+        # result is already in context, emit final assistant text;
+        # otherwise emit a single exec tool call. Wrapped in the
+        # chat.completion shape OpenClaw's openai-completions adapter
+        # expects. We answer non-streamed (one JSON object) even when
+        # the client sends stream:true; the adapter tolerates a plain
+        # JSON completion for these short turns, which keeps the stub
+        # stdlib-only (no SSE framing needed).
+        messages = body.get("messages") or []
+        has_tool_result = any(
+            isinstance(m, dict) and m.get("role") == "tool" for m in messages
+        )
+        if has_tool_result:
+            message = {"role": "assistant", "content": FINAL_TEXT}
+            finish_reason = "stop"
+        else:
+            # OpenAI tool_calls require: an id, type="function", and
+            # arguments as a JSON *string* (not an object).
+            message = {
+                "role": "assistant",
+                "content": None,
+                "tool_calls": [
+                    {
+                        "id": "call_fake_exec_1",
+                        "type": "function",
+                        "function": {
+                            "name": "exec",
+                            "arguments": json.dumps({"command": EXEC_CMD}),
+                        },
+                    }
+                ],
+            }
+            finish_reason = "tool_calls"
+        payload = {
+            "id": "chatcmpl-fake-0",
+            "object": "chat.completion",
+            "model": MODEL,
+            "choices": [
+                {
+                    "index": 0,
+                    "message": message,
+                    "finish_reason": finish_reason,
+                }
+            ],
+            "usage": {
+                "prompt_tokens": 0,
+                "completion_tokens": 0,
+                "total_tokens": 0,
+            },
+        }
+        self._send_json(200, payload)
+
     def do_GET(self) -> None:  # noqa: N802 — stdlib naming
         path = self.path.rstrip("/") or "/"
         if path == "/api/tags":
@@ -113,6 +167,23 @@ class Handler(BaseHTTPRequestHandler):
                             "size": 1,
                         }
                     ]
+                },
+            )
+        if path == "/v1/models":
+            # OpenAI-compatible discovery for the openai-completions
+            # adapter. Mirrors /api/tags but in OpenAI list shape.
+            return self._send_json(
+                200,
+                {
+                    "object": "list",
+                    "data": [
+                        {
+                            "id": MODEL,
+                            "object": "model",
+                            "created": 1735689600,
+                            "owned_by": "fake-ollama",
+                        }
+                    ],
                 },
             )
         if path in ("/", "/healthz"):
@@ -153,6 +224,15 @@ class Handler(BaseHTTPRequestHandler):
                 200,
                 {"model": MODEL, "response": FINAL_TEXT, "done": True},
             )
+        if path == "/v1/chat/completions":
+            # OpenAI-compatible adapter (openai-completions). OpenClaw's
+            # openai-completions provider POSTs here instead of /api/chat.
+            # We reuse the same deterministic two-step rule (inspect prior
+            # messages for a tool result) but wrap the payload in the
+            # OpenAI chat.completion response shape. Tool-call arguments
+            # are a JSON *string* in OpenAI's schema (vs a raw object in
+            # Ollama's), so we json.dumps them here.
+            return self._handle_openai_chat(body)
         if path == "/api/chat":
             messages = body.get("messages") or []
             has_tool_result = any(

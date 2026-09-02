@@ -330,7 +330,7 @@ func TestCronAgentWithNodeExec(t *testing.T) {
 	t.Log("milestone: sanity-checking fake-ollama on loopback")
 	verifyFakeOllamaReachable(t, dial, gwPublicIP, gwMachine)
 
-	t.Log("milestone: configuring models.providers.ollama.baseUrl")
+	t.Log("milestone: configuring models.providers.ollama (openai-completions shim)")
 	configureLinodeOllamaProvider(t, dial, gwPublicIP, gwMachine)
 
 	// --- Cron job lifecycle -------------------------------------------------
@@ -515,6 +515,32 @@ func verifyFakeOllamaReachable(t *testing.T, dial provisioning.SSHDialFunc, host
 // hitting a stale real-ollama daemon.
 func configureLinodeOllamaProvider(t *testing.T, dial provisioning.SSHDialFunc, host string, mc manifestdata.Machine) {
 	t.Helper()
+	// Register the fake-ollama stub as a single top-level OpenAI-compatible
+	// provider (api: "openai-completions") keyed "ollama", with a concrete
+	// dummy apiKey. This replaces the earlier approach that wrote
+	// models.providers.ollama into every per-agent scope.
+	//
+	// Why the per-agent write was wrong: agents.list[].models.providers is not
+	// a schema-legal shape. OpenClaw 8.1's config schema rejected it with
+	//   agents.list.0.models.providers: Invalid input
+	// so `cron add` 500'd before the reporter agent ever ran. models.providers
+	// is only valid at the top level (a first-class provider map).
+	//
+	// Why the OpenAI shim fixes it cleanly on BOTH 7.1 and 8.1: the old design
+	// relied on OpenClaw auto-minting a *synthetic local auth key* for a
+	// local-baseUrl ollama provider (resolveSyntheticLocalProviderAuth,
+	// model-auth-runtime.ts). That branch reads the agent's OWN resolved cfg,
+	// so on 8.1 a non-default agent (`reporter`) never tripped it and cron runs
+	// died with "No API key found for provider 'ollama' | missing-provider-auth".
+	// A concrete apiKey string on a top-level provider satisfies the auth check
+	// globally for every agent — default and reporter alike — with no dependency
+	// on the synthetic-local branch at all. The key is a dummy: the stub's
+	// /v1/chat/completions handler ignores Authorization entirely.
+	//
+	// The provider key stays "ollama" so the cron manifest's model ref
+	// ("ollama/qwen2.5:0.5b") keeps resolving unchanged — only the adapter
+	// (openai-completions) and auth path change. The stub serves the matching
+	// /v1/models + /v1/chat/completions OpenAI surface (see fake-ollama.py).
 	script := fmt.Sprintf(`set -e
 node -e '
 const fs = require("fs"), os = require("os");
@@ -522,7 +548,12 @@ const p = os.homedir() + "/.openclaw/openclaw.json";
 const c = JSON.parse(fs.readFileSync(p, "utf8"));
 if (!c.models) c.models = {};
 if (!c.models.providers) c.models.providers = {};
-c.models.providers.ollama = { baseUrl: "http://localhost:%d", models: [] };
+c.models.providers.ollama = {
+  api: "openai-completions",
+  baseUrl: "http://localhost:%d/v1",
+  apiKey: "sk-fake-local-openai-shim",
+  models: [{ id: "qwen2.5:0.5b", name: "qwen2.5:0.5b" }],
+};
 fs.writeFileSync(p, JSON.stringify(c, null, 2) + "\n");
 '
 `, linodeFakeOllamaPort)

@@ -8,6 +8,7 @@ import (
 
 	"github.com/gluwa/openclaw-swarm2/internal/platformutil/bash"
 	"github.com/gluwa/openclaw-swarm2/internal/platformutil/sshfile"
+	"github.com/gluwa/openclaw-swarm2/internal/scaffold"
 	xssh "golang.org/x/crypto/ssh"
 )
 
@@ -47,25 +48,76 @@ func (r *cliConfigReader) runJSON(client *xssh.Client, script string, startChar 
 	return extractJSON(strings.TrimSpace(out), startChar), nil
 }
 
+// adapterCacheKey caches the detected RosterAdapter per host for the plan
+// run so version detection (one `openclaw --version` call) happens once.
+func adapterCacheKey(h ConfigHost) string {
+	return fmt.Sprintf("OPENCLAW_ROSTER_ADAPTER|%s|%d|%s", h.Addr, h.Port, h.User)
+}
+
+// rosterAdapter returns the cached adapter for h, detecting it via the
+// remote CLI on first use. When ctx carries no plan cache (unit tests
+// calling the CLI reader directly) detection still runs, just uncached.
+func (r *cliConfigReader) rosterAdapter(ctx context.Context, c *xssh.Client, h ConfigHost) (RosterAdapter, error) {
+	key := adapterCacheKey(h)
+	if v, ok := scaffold.PlanCacheGet(ctx, key); ok {
+		if a, ok := v.(RosterAdapter); ok {
+			return a, nil
+		}
+	}
+	a, err := DetectRosterAdapter(c)
+	if err != nil {
+		return nil, err
+	}
+	scaffold.PlanCacheSet(ctx, key, a)
+	return a, nil
+}
+
+// readRoster reads and decodes the roster via the host's adapter, returning
+// the version-agnostic DTO. A fresh gateway yields an empty roster.
+func (r *cliConfigReader) readRoster(ctx context.Context, c *xssh.Client, h ConfigHost) (AgentRoster, error) {
+	a, err := r.rosterAdapter(ctx, c, h)
+	if err != nil {
+		return AgentRoster{}, fmt.Errorf("read roster: %w", err)
+	}
+	raw, err := bash.RunOutput(c, OpenclawCLIPreamble()+a.RosterReadScript())
+	if err != nil {
+		return AgentRoster{}, fmt.Errorf("read roster (%s): %w", a.Kind(), err)
+	}
+	roster, err := a.ParseRosterCLI(strings.TrimSpace(raw))
+	if err != nil {
+		return AgentRoster{}, fmt.Errorf("read roster (%s): %w", a.Kind(), err)
+	}
+	return roster, nil
+}
+
+func (r *cliConfigReader) ReadRoster(ctx context.Context, client *xssh.Client, h ConfigHost) (AgentRoster, error) {
+	var roster AgentRoster
+	err := r.withClient(ctx, client, h, func(c *xssh.Client) error {
+		var e error
+		roster, e = r.readRoster(ctx, c, h)
+		return e
+	})
+	return roster, err
+}
+
+func (r *cliConfigReader) RosterAdapter(ctx context.Context, client *xssh.Client, h ConfigHost) (RosterAdapter, error) {
+	var a RosterAdapter
+	err := r.withClient(ctx, client, h, func(c *xssh.Client) error {
+		var e error
+		a, e = r.rosterAdapter(ctx, c, h)
+		return e
+	})
+	return a, err
+}
+
 func (r *cliConfigReader) AgentConfigIndex(ctx context.Context, client *xssh.Client, h ConfigHost, agentID string) (int, error) {
 	idx := -1
 	err := r.withClient(ctx, client, h, func(c *xssh.Client) error {
-		raw, err := r.runJSON(c, `openclaw config get agents.list --json 2>/dev/null || echo "[]"`, '[')
+		roster, err := r.readRoster(ctx, c, h)
 		if err != nil {
 			return fmt.Errorf("agent config index: %w", err)
 		}
-		var list []struct {
-			ID string `json:"id"`
-		}
-		if err := json.Unmarshal([]byte(raw), &list); err != nil {
-			return nil // treat parse failure as "not found" — matches prior behavior
-		}
-		for i, entry := range list {
-			if entry.ID == agentID {
-				idx = i
-				return nil
-			}
-		}
+		idx = roster.IndexOf(agentID)
 		return nil
 	})
 	return idx, err
@@ -75,24 +127,16 @@ func (r *cliConfigReader) AgentModel(ctx context.Context, client *xssh.Client, h
 	var model string
 	var exists bool
 	err := r.withClient(ctx, client, h, func(c *xssh.Client) error {
-		raw, err := r.runJSON(c, `openclaw agents list --json 2>/dev/null || echo "[]"`, '[')
+		roster, err := r.readRoster(ctx, c, h)
 		if err != nil {
-			return fmt.Errorf("agents list: %w", err)
+			return fmt.Errorf("agent model: %w", err)
 		}
-		var agents []struct {
-			ID    string `json:"id"`
-			Model string `json:"model"`
+		a, ok := roster.Find(agentID)
+		if !ok {
+			return nil
 		}
-		if err := json.Unmarshal([]byte(raw), &agents); err != nil {
-			return fmt.Errorf("agents list: parse %q: %w", raw, err)
-		}
-		for _, a := range agents {
-			if a.ID == agentID {
-				model = a.Model
-				exists = true
-				return nil
-			}
-		}
+		exists = true
+		model = a.ModelPrimary()
 		return nil
 	})
 	return model, exists, err
@@ -103,41 +147,17 @@ func (r *cliConfigReader) AgentModelFull(ctx context.Context, client *xssh.Clien
 	var fallbacks []string
 	var exists bool
 	err := r.withClient(ctx, client, h, func(c *xssh.Client) error {
-		// Read from config directly to get the full model object including fallbacks
-		raw, err := r.runJSON(c, `openclaw config get agents.list --json 2>/dev/null || echo "[]"`, '[')
+		roster, err := r.readRoster(ctx, c, h)
 		if err != nil {
-			return fmt.Errorf("agents list: %w", err)
+			return fmt.Errorf("agent model full: %w", err)
 		}
-		var agents []struct {
-			ID    string          `json:"id"`
-			Model json.RawMessage `json:"model"`
+		a, ok := roster.Find(agentID)
+		if !ok {
+			return nil
 		}
-		if err := json.Unmarshal([]byte(raw), &agents); err != nil {
-			return fmt.Errorf("agents list: parse %q: %w", raw, err)
-		}
-		for _, a := range agents {
-			if a.ID == agentID {
-				exists = true
-				// Try object form first
-				var modelObj struct {
-					Primary   string   `json:"primary"`
-					Fallbacks []string `json:"fallbacks"`
-				}
-				if err := json.Unmarshal(a.Model, &modelObj); err == nil && modelObj.Primary != "" {
-					model = modelObj.Primary
-					fallbacks = modelObj.Fallbacks
-					return nil
-				}
-				// Try string form
-				var modelStr string
-				if err := json.Unmarshal(a.Model, &modelStr); err == nil {
-					model = modelStr
-					fallbacks = nil
-					return nil
-				}
-				return nil
-			}
-		}
+		exists = true
+		model = a.ModelPrimary()
+		fallbacks = a.ModelFallbacks()
 		return nil
 	})
 	return model, fallbacks, exists, err
@@ -147,26 +167,17 @@ func (r *cliConfigReader) AgentModelEntries(ctx context.Context, client *xssh.Cl
 	entries := map[string]map[string]any{}
 	var exists bool
 	err := r.withClient(ctx, client, h, func(c *xssh.Client) error {
-		raw, err := r.runJSON(c, `openclaw config get agents.list --json 2>/dev/null || echo "[]"`, '[')
+		roster, err := r.readRoster(ctx, c, h)
 		if err != nil {
-			return fmt.Errorf("agents list: %w", err)
+			return fmt.Errorf("agent model entries: %w", err)
 		}
-		var agents []struct {
-			ID     string                    `json:"id"`
-			Models map[string]map[string]any `json:"models"`
-		}
-		if err := json.Unmarshal([]byte(raw), &agents); err != nil {
-			return fmt.Errorf("agents list: parse %q: %w", raw, err)
-		}
-		for _, a := range agents {
-			if a.ID != agentID {
-				continue
-			}
-			exists = true
-			for ref, entry := range a.Models {
-				entries[ref] = entry
-			}
+		a, ok := roster.Find(agentID)
+		if !ok {
 			return nil
+		}
+		exists = true
+		for ref, entry := range a.Models {
+			entries[ref] = entry
 		}
 		return nil
 	})
@@ -176,21 +187,21 @@ func (r *cliConfigReader) AgentModelEntries(ctx context.Context, client *xssh.Cl
 	return entries, true, err
 }
 
+// AgentTools resolves tools.exec for the agent at roster index idx, reading
+// the roster via the host's adapter and indexing into the version-agnostic
+// DTO. The index is produced by AgentConfigIndex against the same roster, so
+// positions line up regardless of on-disk shape.
 func (r *cliConfigReader) AgentTools(ctx context.Context, client *xssh.Client, h ConfigHost, idx int) (*RemoteToolsConfig, error) {
 	cfg := &RemoteToolsConfig{}
 	err := r.withClient(ctx, client, h, func(c *xssh.Client) error {
-		key := fmt.Sprintf("agents.list[%d].tools", idx)
-		raw, err := r.runJSON(c, fmt.Sprintf(`openclaw config get %s --json 2>/dev/null || echo "{}"`, key), '{')
+		roster, err := r.readRoster(ctx, c, h)
 		if err != nil {
-			return err
+			return fmt.Errorf("agent tools: %w", err)
 		}
-		var parsed struct {
-			Exec *RemoteExecConfig `json:"exec"`
+		if idx < 0 || idx >= len(roster.Agents) {
+			return nil // out of range → unset, matches prior behavior
 		}
-		if err := json.Unmarshal([]byte(raw), &parsed); err != nil {
-			return nil // treat parse failure as unset — matches prior behavior
-		}
-		cfg.Exec = parsed.Exec
+		cfg.Exec = roster.Agents[idx].ExecTools
 		return nil
 	})
 	return cfg, err

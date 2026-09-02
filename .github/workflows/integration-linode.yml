@@ -22,15 +22,48 @@ permissions:
 
 env:
   LINODE_TOKEN: ${{ secrets.LINODE_TOKEN }}
-  # Pin to last known working version (June 5, 2026 test passed with 2026.7.1)
-  # The pairing flow changed in 2026.8.x and needs investigation.
-  OPENCLAW_VERSION: ${{ inputs.openclaw_version || '2026.7.1' }}
 
 jobs:
+  # Resolve which OpenClaw versions to exercise. claws supports BOTH the
+  # last 2026.7.x and 2026.8.1 (the roster reshape agents.list -> agents.entries
+  # and the systemd install-identity gate are both handled in the apply steps),
+  # so the default is a matrix over both. A workflow_dispatch run may pin a
+  # single version via the openclaw_version input, in which case only that
+  # version runs.
+  select-versions:
+    name: Select OpenClaw versions
+    runs-on: ubuntu-latest
+    outputs:
+      versions: ${{ steps.pick.outputs.versions }}
+    steps:
+      - name: Pick versions
+        id: pick
+        run: |
+          set -euo pipefail
+          PINNED="${{ inputs.openclaw_version }}"
+          if [ -n "$PINNED" ]; then
+            # Explicit override from workflow_dispatch: run just that version.
+            VERSIONS="[\"$PINNED\"]"
+          else
+            # Default: exercise both supported versions.
+            VERSIONS='["2026.7.1","2026.8.1"]'
+          fi
+          echo "versions=$VERSIONS" >> "$GITHUB_OUTPUT"
+          echo "Selected versions: $VERSIONS"
+
   integration:
-    name: Linode Integration
+    name: Linode Integration (${{ matrix.openclaw_version }})
+    needs: select-versions
     runs-on: ubuntu-latest
     timeout-minutes: 45
+    strategy:
+      # Don't cancel the 2026.7.1 leg just because 2026.8.1 fails (or vice
+      # versa) — we want to see the status of both versions in one run.
+      fail-fast: false
+      matrix:
+        openclaw_version: ${{ fromJSON(needs.select-versions.outputs.versions) }}
+    env:
+      OPENCLAW_VERSION: ${{ matrix.openclaw_version }}
 
     steps:
       - name: Checkout
@@ -48,10 +81,14 @@ jobs:
       - name: Generate unique prefix
         id: prefix
         run: |
-          # Use run ID + attempt for unique prefix to avoid collisions
-          PREFIX="ci-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          # Use run ID + attempt + a version-derived suffix for a unique
+          # prefix. The matrix legs share GITHUB_RUN_ID/ATTEMPT and run
+          # concurrently, so the version suffix is what keeps their Linode
+          # instance labels/tags from colliding.
+          VER_TAG=$(echo "${OPENCLAW_VERSION}" | tr -c 'A-Za-z0-9' '-' )
+          PREFIX="ci-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}-${VER_TAG}"
           echo "prefix=$PREFIX" >> $GITHUB_OUTPUT
-          echo "Using prefix: $PREFIX"
+          echo "Using prefix: $PREFIX (OpenClaw ${OPENCLAW_VERSION})"
 
       - name: Run integration tests
         id: tests
@@ -69,39 +106,73 @@ jobs:
       # Always cleanup Linode instances, even if tests fail or are cancelled
       - name: Cleanup Linode instances
         if: always()
+        env:
+          # linode-cli reads its token from LINODE_CLI_TOKEN (NOT LINODE_TOKEN,
+          # which is what the Go tests use). Without it, the CLI drops into an
+          # interactive `linode-cli configure` prompt and dies on the
+          # non-interactive CI stdin with `EOFError: EOF when reading a line`,
+          # so the whole leak-net safety step crashed (exit 1) and never ran.
+          # Setting LINODE_CLI_TOKEN makes the CLI fully non-interactive.
+          LINODE_CLI_TOKEN: ${{ secrets.LINODE_TOKEN }}
         run: |
+          set -euo pipefail
           echo "=== Cleaning up any leaked Linode instances ==="
-          
-          # Install linode-cli if not present
-          pip install linode-cli --quiet
-          
+
+          # Guard: without a token the CLI would prompt interactively and EOF.
+          if [ -z "${LINODE_CLI_TOKEN:-}" ]; then
+            echo "::error::LINODE_CLI_TOKEN is empty; cannot run leak cleanup non-interactively"
+            exit 1
+          fi
+
+          # Install linode-cli if not present. Send its output to stderr so a
+          # chatty pip run can never contaminate the JSON we parse below.
+          pip install linode-cli --quiet 1>&2
+
           # The tests tag Linode instances with "claws/<prefix>" where prefix
           # is like "it-lin-node-abc123". We look for any instances tagged
           # with the "claws/it-lin-*" pattern from integration tests.
           #
           # Note: Tests should clean up after themselves, but this catches
-          # leaked instances from crashes, timeouts, or cancellations.
-          
+          # leaked instances from crashes, timeouts, or cancellations. This
+          # is the safety net for money-costing leaks, so it must fail loudly
+          # rather than silently report "nothing found" on a broken invocation
+          # (the old `--json 2>/dev/null || echo []` idiom swallowed a
+          # non-JSON payload from linode-cli and jq then choked on it).
+
           echo "Listing all Linode instances..."
-          ALL_INSTANCES=$(linode-cli linodes list --json 2>/dev/null || echo "[]")
-          
+          # --json emits a JSON array; --no-headers suppresses the human table
+          # header line that otherwise prefixes the payload and breaks jq.
+          # No `|| echo []` fallback: if the list call fails we want a red step,
+          # not a false "all clear".
+          ALL_INSTANCES=$(linode-cli linodes list --json --no-headers)
+
+          # Validate it actually parses as JSON before trusting it. If not,
+          # surface the raw output and fail so the leak net isn't silently dead.
+          if ! echo "$ALL_INSTANCES" | jq -e 'type == "array"' >/dev/null 2>&1; then
+            echo "::error::linode-cli did not return a JSON array; cleanup cannot run safely"
+            echo "--- raw linode-cli output ---"
+            echo "$ALL_INSTANCES"
+            echo "-----------------------------"
+            exit 1
+          fi
+
           # Find instances with integration test tags (claws/it-lin-*)
           INSTANCES=$(echo "$ALL_INSTANCES" | jq -r '
-            .[] | 
-            select(.tags | any(startswith("claws/it-lin-"))) | 
-            "\(.id) \(.label) [\(.tags | join(", "))]"' || true)
-          
+            .[] |
+            select(.tags | any(startswith("claws/it-lin-"))) |
+            "\(.id) \(.label) [\(.tags | join(", "))]"')
+
           if [ -n "$INSTANCES" ]; then
             echo "Found integration test instances:"
             echo "$INSTANCES"
             echo ""
-            
+
             # Extract just the IDs and delete
             IDS=$(echo "$ALL_INSTANCES" | jq -r '
-              .[] | 
-              select(.tags | any(startswith("claws/it-lin-"))) | 
-              .id' || true)
-            
+              .[] |
+              select(.tags | any(startswith("claws/it-lin-"))) |
+              .id')
+
             for ID in $IDS; do
               echo "Deleting instance $ID..."
               linode-cli linodes delete "$ID" || true
@@ -114,7 +185,7 @@ jobs:
       - name: Summary
         if: always()
         run: |
-          echo "## Integration Test Results" >> $GITHUB_STEP_SUMMARY
+          echo "## Integration Test Results — OpenClaw ${{ matrix.openclaw_version }}" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           if [ "${{ steps.tests.outcome }}" == "success" ]; then
             echo "✅ Tests passed" >> $GITHUB_STEP_SUMMARY
@@ -122,6 +193,7 @@ jobs:
             echo "❌ Tests failed or were cancelled" >> $GITHUB_STEP_SUMMARY
           fi
           echo "" >> $GITHUB_STEP_SUMMARY
+          echo "- OpenClaw version: ${{ matrix.openclaw_version }}" >> $GITHUB_STEP_SUMMARY
           echo "- Run ID: ${{ github.run_id }}" >> $GITHUB_STEP_SUMMARY
           echo "- Trigger: ${{ github.event_name }}" >> $GITHUB_STEP_SUMMARY
           if [ -n "${{ inputs.test_filter }}" ]; then

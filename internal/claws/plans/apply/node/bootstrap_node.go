@@ -116,9 +116,19 @@ func (s *BootstrapNodeStep) Execute(ctx context.Context, t scaffold.Target) erro
 	// `openclaw node install` invokes `systemctl --user enable` internally,
 	// which requires XDG_RUNTIME_DIR on non-interactive SSH sessions.
 	// linger (enabled by ensure-agent-user) keeps /run/user/<uid> alive.
+	// OpenClaw 2026.8.1's install-identity gate refuses to publish a
+	// user-scope systemd service when ~/.config/systemd/user (or its
+	// nearest existing ancestor, typically ~/.config) is group/world-
+	// writable, and --force does NOT bypass it. Tighten the specific
+	// chain with a targeted, non-recursive chmod go-w before the install
+	// runs (stub-gateway-unit does this too, but harden here in case that
+	// step is skipped/reordered). Per upstream guidance: no recursive
+	// chmod, no sudo.
 	script := fmt.Sprintf(`set -euo pipefail
 export XDG_RUNTIME_DIR=/run/user/$(id -u)
 export OPENCLAW_GATEWAY_TOKEN=%q
+mkdir -p ~/.config/systemd/user
+chmod go-w ~ ~/.config ~/.config/systemd ~/.config/systemd/user
 %s%sopenclaw node install --host %q --port 18789 --display-name %q --runtime node --force
 `, token, common.OpenclawCLIPreamble(), envPrefix, gwHost, nt.Spec.Name)
 

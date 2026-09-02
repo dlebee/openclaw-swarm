@@ -75,6 +75,98 @@ func TestNormalizeAgentID(t *testing.T) {
 	}
 }
 
+// ----- unit: roster shape normalization (agents.list vs agents.entries) -----
+
+// OpenClaw 2026.8.1 reshaped the roster from agents.list (array) to
+// agents.entries (map keyed by id). normalizeAgents() must produce an
+// equivalent ordered slice from either shape, folding the map key back
+// into each agent's ID, and prefer entries when both are present.
+func TestNormalizeAgents_entriesShape(t *testing.T) {
+	raw := `{
+	  "agents": {
+	    "entries": {
+	      "main": {"model": "sonnet-4"},
+	      "reviewer": {"model": {"primary":"opus-3"}}
+	    }
+	  }
+	}`
+	var snap openclawSnapshot
+	if err := json.Unmarshal([]byte(raw), &snap); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	agents := snap.normalizeAgents()
+	if len(agents) != 2 {
+		t.Fatalf("len = %d, want 2", len(agents))
+	}
+	// Sorted by id: main, reviewer. ID folded in from the map key.
+	if agents[0].ID != "main" || agents[1].ID != "reviewer" {
+		t.Fatalf("ids = [%q %q], want [main reviewer]", agents[0].ID, agents[1].ID)
+	}
+	if got := extractModelPrimary(agents[0].Model); got != "sonnet-4" {
+		t.Fatalf("main model = %q, want sonnet-4", got)
+	}
+	if got := extractModelPrimary(agents[1].Model); got != "opus-3" {
+		t.Fatalf("reviewer model = %q, want opus-3", got)
+	}
+}
+
+func TestNormalizeAgents_listShape(t *testing.T) {
+	raw := `{"agents":{"list":[{"id":"main","model":"sonnet-4"},{"id":"second"}]}}`
+	var snap openclawSnapshot
+	if err := json.Unmarshal([]byte(raw), &snap); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	agents := snap.normalizeAgents()
+	if len(agents) != 2 || agents[0].ID != "main" || agents[1].ID != "second" {
+		t.Fatalf("agents = %+v, want [main second]", agents)
+	}
+}
+
+func TestNormalizeAgents_entriesWinsOverList(t *testing.T) {
+	// A migrated config keeps only entries, but if both are ever present
+	// entries must win (it's the canonical 2026.8.1 shape).
+	raw := `{"agents":{
+	  "list":[{"id":"stale"}],
+	  "entries":{"fresh":{}}
+	}}`
+	var snap openclawSnapshot
+	if err := json.Unmarshal([]byte(raw), &snap); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	agents := snap.normalizeAgents()
+	if len(agents) != 1 || agents[0].ID != "fresh" {
+		t.Fatalf("agents = %+v, want [fresh] (entries wins)", agents)
+	}
+}
+
+// AgentConfigIndex must resolve the same agent regardless of on-disk shape,
+// which is what keeps the agents phase idempotent across the version bump.
+func TestSnapshotReader_AgentConfigIndex_entriesShape(t *testing.T) {
+	host := ConfigHost{Addr: "h", Port: 22, User: "u"}
+	raw := `{"agents":{"entries":{"Main":{},"zeta":{}}}}`
+	var snap openclawSnapshot
+	if err := json.Unmarshal([]byte(raw), &snap); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	ctx := cachingProbeCtx(t, host, &snap)
+	fb := &countingReader{}
+	r := NewSnapshotConfigReader(fb).(*snapshotConfigReader)
+
+	// Sorted order is [Main, zeta]; case-insensitive match on MAIN.
+	if idx, err := r.AgentConfigIndex(ctx, nil, host, "MAIN"); err != nil || idx != 0 {
+		t.Fatalf("main idx = %d err=%v, want 0", idx, err)
+	}
+	if idx, _ := r.AgentConfigIndex(ctx, nil, host, "zeta"); idx != 1 {
+		t.Fatalf("zeta idx = %d, want 1", idx)
+	}
+	if idx, _ := r.AgentConfigIndex(ctx, nil, host, "absent"); idx != -1 {
+		t.Fatalf("absent idx = %d, want -1", idx)
+	}
+	if fb.calls != 0 {
+		t.Fatalf("fallback called %d times; want 0", fb.calls)
+	}
+}
+
 // ----- unit: snapshot-backed reads against a hand-authored config -----
 
 // sampleSnapshot seeds a snapshot with the shapes the apply steps care

@@ -49,7 +49,12 @@ func agentWorkspaceForAssertions(ag manifestdata.Agent) string {
 // to duplicate; re-evaluate if we add a third provider tier.
 type agentsPhaseConfig struct {
 	Agents struct {
-		List []configAgent `json:"list"`
+		// List is the 2026.7.x on-disk shape (array of entries with an id
+		// field). Entries is the 2026.8.x shape (object map keyed by id).
+		// Exactly one is populated depending on the OpenClaw version that
+		// wrote openclaw.json; agentEntries() normalizes both.
+		List    []configAgent          `json:"list"`
+		Entries map[string]configAgent `json:"entries"`
 	} `json:"agents"`
 	Tools struct {
 		Elevated configElevated `json:"elevated"`
@@ -61,10 +66,50 @@ type agentsPhaseConfig struct {
 	} `json:"channels"`
 }
 
+// agentEntries normalizes the version-specific on-disk roster shape
+// (agents.list array on 7.x, agents.entries object map on 8.x) into a single
+// slice. On 8.x the map key is the agent id and the model is stored as an
+// object ({primary,fallbacks}) rather than a bare string, so configAgent's
+// Model field is a RawMessage decoded on demand.
+func (c agentsPhaseConfig) agentEntries() []configAgent {
+	if len(c.Agents.Entries) > 0 {
+		out := make([]configAgent, 0, len(c.Agents.Entries))
+		for id, a := range c.Agents.Entries {
+			if a.ID == "" {
+				a.ID = id // map key is the id on 8.x
+			}
+			out = append(out, a)
+		}
+		return out
+	}
+	return c.Agents.List
+}
+
 type configAgent struct {
-	ID        string `json:"id"`
-	Model     string `json:"model"`
-	Workspace string `json:"workspace"`
+	ID string `json:"id"`
+	// Model is a bare string on 7.x and an object {primary,fallbacks} on
+	// 8.x; primaryModel() extracts the primary ref from either.
+	Model     json.RawMessage `json:"model"`
+	Workspace string          `json:"workspace"`
+}
+
+// primaryModel returns the agent's primary model ref, tolerating both the
+// 7.x bare-string form and the 8.x object form.
+func (a configAgent) primaryModel() string {
+	if len(a.Model) == 0 {
+		return ""
+	}
+	var s string
+	if err := json.Unmarshal(a.Model, &s); err == nil {
+		return s
+	}
+	var obj struct {
+		Primary string `json:"primary"`
+	}
+	if err := json.Unmarshal(a.Model, &obj); err == nil {
+		return obj.Primary
+	}
+	return ""
 }
 
 // configElevated matches the shape `openclaw config get tools.
@@ -437,10 +482,13 @@ func TestAgentsSmoke(t *testing.T) {
 
 	// --- teardown -----------------------------------------------------------
 
-	insts, err := prov.ListByTag(ctx, "claws/"+prefix)
-	if err != nil {
-		t.Fatalf("ListByTag after apply: %v", err)
-	}
+	// Poll rather than single-shot: Linode's tag search index is eventually
+	// consistent, so a just-created instance can be provably running (asserted
+	// above) yet not yet appear in ListByTag for a few seconds — longer under
+	// the 429 backpressure these runs hit. waitForListByTagCount gives the
+	// index time to catch up; it still fails loudly below if the count never
+	// reaches want within budget.
+	insts := waitForListByTagCount(ctx, t, prov, "claws/"+prefix, len(m.Machines), 60*time.Second)
 	if len(insts) != len(m.Machines) {
 		t.Errorf("ListByTag returned %d instances, want %d", len(insts), len(m.Machines))
 	}
@@ -573,17 +621,18 @@ func fetchAgentsPhaseConfig(t *testing.T, dial provisioning.SSHDialFunc, host st
 
 func assertAgentInConfig(t *testing.T, machineName string, cfg agentsPhaseConfig, wantID, wantModel, wantWorkspace string) {
 	t.Helper()
-	for _, a := range cfg.Agents.List {
+	entries := cfg.agentEntries()
+	for _, a := range entries {
 		if a.ID == wantID {
-			if a.Model != wantModel {
-				t.Errorf("[%s] agents.list entry for %q: model = %q, want %q",
-					machineName, wantID, a.Model, wantModel)
+			if got := a.primaryModel(); got != wantModel {
+				t.Errorf("[%s] roster entry for %q: model = %q, want %q",
+					machineName, wantID, got, wantModel)
 			}
 			if a.Workspace == "" {
 				if wantID == "main" && wantWorkspace == defaultMainWorkspacePath {
 					return
 				}
-				t.Errorf("[%s] agents.list entry for %q: workspace is empty", machineName, wantID)
+				t.Errorf("[%s] roster entry for %q: workspace is empty", machineName, wantID)
 				return
 			}
 			// Accept either "~/.openclaw/workspace" or the
@@ -591,17 +640,17 @@ func assertAgentInConfig(t *testing.T, machineName string, cfg agentsPhaseConfig
 			// whichever the CLI chose to persist.
 			suffix := strings.TrimPrefix(wantWorkspace, "~")
 			if !strings.HasSuffix(a.Workspace, suffix) {
-				t.Errorf("[%s] agents.list entry for %q: workspace = %q, want suffix %q",
+				t.Errorf("[%s] roster entry for %q: workspace = %q, want suffix %q",
 					machineName, wantID, a.Workspace, suffix)
 			}
 			return
 		}
 	}
-	ids := make([]string, 0, len(cfg.Agents.List))
-	for _, a := range cfg.Agents.List {
+	ids := make([]string, 0, len(entries))
+	for _, a := range entries {
 		ids = append(ids, a.ID)
 	}
-	t.Errorf("[%s] agents.list missing entry for %q; got ids=%v", machineName, wantID, ids)
+	t.Errorf("[%s] roster missing entry for %q; got ids=%v", machineName, wantID, ids)
 }
 
 // resolveWorkspaceDir mirrors the in-tree resolveWorkspace
