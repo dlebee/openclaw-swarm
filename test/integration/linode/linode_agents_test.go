@@ -482,10 +482,13 @@ func TestAgentsSmoke(t *testing.T) {
 
 	// --- teardown -----------------------------------------------------------
 
-	insts, err := prov.ListByTag(ctx, "claws/"+prefix)
-	if err != nil {
-		t.Fatalf("ListByTag after apply: %v", err)
-	}
+	// Poll rather than single-shot: Linode's tag search index is eventually
+	// consistent, so a just-created instance can be provably running (asserted
+	// above) yet not yet appear in ListByTag for a few seconds — longer under
+	// the 429 backpressure these runs hit. waitForListByTagCount gives the
+	// index time to catch up; it still fails loudly below if the count never
+	// reaches want within budget.
+	insts := waitForListByTagCount(ctx, t, prov, "claws/"+prefix, len(m.Machines), 60*time.Second)
 	if len(insts) != len(m.Machines) {
 		t.Errorf("ListByTag returned %d instances, want %d", len(insts), len(m.Machines))
 	}

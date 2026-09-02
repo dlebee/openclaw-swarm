@@ -476,3 +476,45 @@ func waitForEmptyListByTag(ctx context.Context, t *testing.T, prov *linode.Provi
 	}
 	return last
 }
+
+// waitForListByTagCount polls ListByTag until it returns exactly want
+// instances or the budget expires, returning the last slice seen. It is
+// the apply-side counterpart to waitForEmptyListByTag: Linode's tag
+// search index is eventually consistent, so a freshly-created instance
+// can be provably running (listener up, agent registered) yet not yet
+// appear in GET /linode/instances?tags=... for a few seconds — longer
+// under API rate-limit backpressure. A single-shot ListByTag right after
+// apply therefore flakes with "returned 0 instances, want 1" even though
+// the instance exists. Polling until the index catches up removes that
+// flake without weakening the assertion: if the count never reaches want
+// within budget, the caller still fails loudly on the returned slice.
+//
+// Same 3s cadence rationale as waitForEmptyListByTag: fast enough to not
+// stall green paths, slow enough to respect per-account rate limits.
+func waitForListByTagCount(ctx context.Context, t *testing.T, prov *linode.Provider, tag string, want int, budget time.Duration) []hosting.Instance {
+	t.Helper()
+	deadline := time.Now().Add(budget)
+	var last []hosting.Instance
+	for time.Now().Before(deadline) {
+		insts, err := prov.ListByTag(ctx, tag)
+		if err != nil {
+			t.Logf("waitForListByTagCount: %v", err)
+			select {
+			case <-ctx.Done():
+				return last
+			case <-time.After(3 * time.Second):
+			}
+			continue
+		}
+		last = insts
+		if len(insts) == want {
+			return insts
+		}
+		select {
+		case <-ctx.Done():
+			return last
+		case <-time.After(3 * time.Second):
+		}
+	}
+	return last
+}
