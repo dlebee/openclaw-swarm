@@ -330,7 +330,7 @@ func TestCronAgentWithNodeExec(t *testing.T) {
 	t.Log("milestone: sanity-checking fake-ollama on loopback")
 	verifyFakeOllamaReachable(t, dial, gwPublicIP, gwMachine)
 
-	t.Log("milestone: configuring models.providers.ollama.baseUrl")
+	t.Log("milestone: configuring models.providers.ollama (openai-completions shim)")
 	configureLinodeOllamaProvider(t, dial, gwPublicIP, gwMachine)
 
 	// --- Cron job lifecycle -------------------------------------------------
@@ -515,45 +515,45 @@ func verifyFakeOllamaReachable(t *testing.T, dial provisioning.SSHDialFunc, host
 // hitting a stale real-ollama daemon.
 func configureLinodeOllamaProvider(t *testing.T, dial provisioning.SSHDialFunc, host string, mc manifestdata.Machine) {
 	t.Helper()
-	// Point the Ollama provider at the fake-ollama stub, at BOTH the top-level
-	// models.providers.ollama AND every per-agent scope (agents.list[].models
-	// .providers on 7.x, agents.entries.<id>.models.providers on 8.x).
+	// Register the fake-ollama stub as a single top-level OpenAI-compatible
+	// provider (api: "openai-completions") keyed "ollama", with a concrete
+	// dummy apiKey. This replaces the earlier approach that wrote
+	// models.providers.ollama into every per-agent scope.
 	//
-	// Why the per-agent write matters on 8.1: OpenClaw only mints the synthetic
-	// local auth key for a provider when THAT agent's resolved config has a
-	// non-default provider baseUrl (resolveSyntheticLocalProviderAuth reads
-	// from the agent's cfg, model-auth-runtime.ts). On 7.x provider config
-	// resolves globally, so the top-level write is enough and the reporter
-	// agent's isolated cron turn sees the stub. On 8.1 a non-default agent
-	// (here: `reporter`) resolves auth from its own scope; without the provider
-	// in that scope it never trips the "non-default baseUrl -> synthesize local
-	// key" branch and the cron run 500s with:
-	//   No API key found for provider 'ollama' ... | missing-provider-auth
+	// Why the per-agent write was wrong: agents.list[].models.providers is not
+	// a schema-legal shape. OpenClaw 8.1's config schema rejected it with
+	//   agents.list.0.models.providers: Invalid input
+	// so `cron add` 500'd before the reporter agent ever ran. models.providers
+	// is only valid at the top level (a first-class provider map).
 	//
-	// Writing the same fake baseUrl into each agent's models.providers.ollama
-	// makes 8.1 mint the synthetic key per-agent — no real key, no plugin, just
-	// the local-server no-auth path OpenClaw already supports. The top-level
-	// entry stays for the gateway's own discovery + the 7.x global path. The
-	// node -e below is version-agnostic: it walks whichever of agents.list
-	// (array) or agents.entries (object map) exists on disk.
+	// Why the OpenAI shim fixes it cleanly on BOTH 7.1 and 8.1: the old design
+	// relied on OpenClaw auto-minting a *synthetic local auth key* for a
+	// local-baseUrl ollama provider (resolveSyntheticLocalProviderAuth,
+	// model-auth-runtime.ts). That branch reads the agent's OWN resolved cfg,
+	// so on 8.1 a non-default agent (`reporter`) never tripped it and cron runs
+	// died with "No API key found for provider 'ollama' | missing-provider-auth".
+	// A concrete apiKey string on a top-level provider satisfies the auth check
+	// globally for every agent — default and reporter alike — with no dependency
+	// on the synthetic-local branch at all. The key is a dummy: the stub's
+	// /v1/chat/completions handler ignores Authorization entirely.
+	//
+	// The provider key stays "ollama" so the cron manifest's model ref
+	// ("ollama/qwen2.5:0.5b") keeps resolving unchanged — only the adapter
+	// (openai-completions) and auth path change. The stub serves the matching
+	// /v1/models + /v1/chat/completions OpenAI surface (see fake-ollama.py).
 	script := fmt.Sprintf(`set -e
 node -e '
 const fs = require("fs"), os = require("os");
 const p = os.homedir() + "/.openclaw/openclaw.json";
 const c = JSON.parse(fs.readFileSync(p, "utf8"));
-const provider = { baseUrl: "http://localhost:%d", models: [] };
 if (!c.models) c.models = {};
 if (!c.models.providers) c.models.providers = {};
-c.models.providers.ollama = provider;
-const setAgentProvider = (a) => {
-  if (!a || typeof a !== "object") return;
-  if (!a.models) a.models = {};
-  if (!a.models.providers) a.models.providers = {};
-  a.models.providers.ollama = { baseUrl: provider.baseUrl, models: [] };
+c.models.providers.ollama = {
+  api: "openai-completions",
+  baseUrl: "http://localhost:%d/v1",
+  apiKey: "sk-fake-local-openai-shim",
+  models: [{ id: "qwen2.5:0.5b", name: "qwen2.5:0.5b" }],
 };
-const ag = (c.agents = c.agents || {});
-if (Array.isArray(ag.list)) ag.list.forEach(setAgentProvider);
-if (ag.entries && typeof ag.entries === "object") Object.values(ag.entries).forEach(setAgentProvider);
 fs.writeFileSync(p, JSON.stringify(c, null, 2) + "\n");
 '
 `, linodeFakeOllamaPort)
