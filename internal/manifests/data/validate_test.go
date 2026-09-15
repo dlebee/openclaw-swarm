@@ -471,3 +471,26 @@ func TestValidateManifest_AgentBindingAccounts(t *testing.T) {
 		}
 	})
 }
+
+func TestValidateManifest_NodeMajor(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		major   int
+		wantErr bool
+	}{
+		{0, false},  // unset → default
+		{22, false}, // oldest supported line
+		{24, false},
+		{26, false},
+		{20, true},
+		{-1, true},
+	} {
+		err := ValidateManifest(&Manifest{NodeMajor: tc.major})
+		if tc.wantErr && (err == nil || !strings.Contains(err.Error(), "node_major")) {
+			t.Errorf("node_major %d: want node_major error, got %v", tc.major, err)
+		}
+		if !tc.wantErr && err != nil {
+			t.Errorf("node_major %d: unexpected error: %v", tc.major, err)
+		}
+	}
+}

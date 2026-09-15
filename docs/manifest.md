@@ -37,7 +37,7 @@ automations:        [Automation]   # custom phases of bash/python/scp steps
 | ----- | ---- | -------- | ----- |
 | `prefix` | string | yes | Prepended to every machine name (e.g. `prod` → `prod-gateway-host`). Required so parallel applies (or different users sharing a cloud account) never collide. |
 | `env_file` | string | no | Path to a `.env` file with `KEY=VALUE` lines. Resolved relative to the manifest file. Keys referenced by `*_env` fields and automation `env:` allowlists are looked up here (process env wins on conflict). |
-| `node_major` | int | no | Major Node.js version to install on every gateway/node. Defaults to whatever `internal/claws/plans/apply/common/install_nodejs.go` pins. |
+| `node_major` | int | no | Node.js major line (NodeSource `setup_<major>.x`) installed on every gateway/node. Defaults to `24` (`common.DefaultNodeMajor`), which OpenClaw 2026.9.x requires (`>=24.16.0`). Must be `22` or newer. `install-nodejs` re-runs whenever a host has a different major or is below OpenClaw's floor for that line (22.22.3 / 24.16.0 / 26.1.0), upgrading it in place; apt will not downgrade, so moving a host to an *older* major needs `nodejs` removed first. |
 | `linode_token_env` | string | needed for `type: linode` | Name of an env var that holds a Linode API token. The Linode provisioner reads it from the manifest env. |
 | `allow_self` | bool | no | Opts this manifest into running on the operator's workstation (the "self" target) via local automation steps and `scp.upload` / `scp.download`. Without it, anything referencing `self` is rejected at load time. |
 

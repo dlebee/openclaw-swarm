@@ -12,6 +12,7 @@ import (
 	"time"
 
 	planapply "github.com/gluwa/openclaw-swarm2/internal/claws/plans/apply"
+	"github.com/gluwa/openclaw-swarm2/internal/claws/plans/apply/common"
 	"github.com/gluwa/openclaw-swarm2/internal/claws/plans/apply/provisioning"
 	"github.com/gluwa/openclaw-swarm2/internal/hosting/multipass"
 	manifestdata "github.com/gluwa/openclaw-swarm2/internal/manifests/data"
@@ -297,9 +298,9 @@ func sshRunAsGatewayAgent(t *testing.T, dial provisioning.SSHDialFunc, host stri
 // in the gateway phase. A missing `node` binary means install-nodejs
 // silently no-op'd (its Check short-circuits when `node --version`
 // succeeds, so a prior install that left a broken binary would fool
-// it). We look for a major version ≥ v22 because the NodeSource
-// script is pinned to setup_22.x; v20 here would signal a drift in
-// install-nodejs.
+// it). The fixtures leave node_major unset, so install-nodejs must
+// have landed common.DefaultNodeMajor; any other major signals a drift
+// in install-nodejs.
 func assertNodeInstalled(t *testing.T, dial provisioning.SSHDialFunc, host string, mc manifestdata.Machine) {
 	t.Helper()
 	out, err := sshRunAsGatewayAgent(t, dial, host, mc, `node --version 2>&1`)
@@ -311,10 +312,8 @@ func assertNodeInstalled(t *testing.T, dial provisioning.SSHDialFunc, host strin
 		t.Errorf("[%s] node --version = %q, want v<major>.<minor>.<patch>", mc.Name, out)
 		return
 	}
-	// Soft check: NodeSource setup_22.x should land v22.x. A major-
-	// version regression is a clear install-nodejs fault.
-	if !strings.HasPrefix(out, "v22.") {
-		t.Logf("[%s] node version %q (expected v22.x from NodeSource setup_22.x)", mc.Name, out)
+	if want := fmt.Sprintf("v%d.", common.DefaultNodeMajor); !strings.HasPrefix(out, want) {
+		t.Errorf("[%s] node --version = %q, want %sx (common.DefaultNodeMajor)", mc.Name, out, want)
 	}
 }
 

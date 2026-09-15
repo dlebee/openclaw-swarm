@@ -125,6 +125,9 @@ type Options struct {
 	// accurate verdicts even on a cold --phases node run where
 	// provisioning never populated the cache.
 	HostResolver common.HostResolverFn
+	// NodeMajor is the manifest's node_major, forwarded to install-nodejs.
+	// Zero selects common.DefaultNodeMajor.
+	NodeMajor int
 }
 
 // AddPhase registers the "node" phase.
@@ -142,7 +145,7 @@ func AddPhase(p *scaffold.Plan, targets []scaffold.Target, opts Options) *scaffo
 	}
 	ph.Concurrency = n
 	ph.AddTargets(targets...)
-	commonOpts := common.Options{SSHDial: opts.SSHDial, HostResolver: opts.HostResolver}
+	commonOpts := common.Options{SSHDial: opts.SSHDial, HostResolver: opts.HostResolver, NodeMajor: opts.NodeMajor}
 	ph.AddStep(common.NewInstallNodejsStep(commonOpts))
 	ph.AddStep(common.NewInstallOpenclawStep(commonOpts))
 	ph.AddStep(NewStubGatewayUnitStep(opts))

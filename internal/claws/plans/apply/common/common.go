@@ -33,6 +33,8 @@ type MachineProvider interface {
 type Options struct {
 	SSHDial      SSHDialFunc
 	HostResolver HostResolverFn
+	// NodeMajor is the manifest's node_major. Zero selects DefaultNodeMajor.
+	NodeMajor int
 }
 
 // ---------------------------------------------------------------------------

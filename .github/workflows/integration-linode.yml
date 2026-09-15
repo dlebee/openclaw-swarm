@@ -24,12 +24,13 @@ env:
   LINODE_TOKEN: ${{ secrets.LINODE_TOKEN }}
 
 jobs:
-  # Resolve which OpenClaw versions to exercise. claws supports BOTH the
-  # last 2026.7.x and 2026.8.1 (the roster reshape agents.list -> agents.entries
-  # and the systemd install-identity gate are both handled in the apply steps),
-  # so the default is a matrix over both. A workflow_dispatch run may pin a
-  # single version via the openclaw_version input, in which case only that
-  # version runs.
+  # Resolve which OpenClaw versions to exercise. claws supports the last
+  # 2026.7.x, 2026.8.x (the roster reshape agents.list -> agents.entries and
+  # the systemd install-identity gate are both handled in the apply steps) and
+  # 2026.9.x (needs Node >=24.16; install-nodejs defaults to Node 24), so the
+  # default is a matrix over the latest release of each line. A
+  # workflow_dispatch run may pin a single version via the openclaw_version
+  # input, in which case only that version runs.
   select-versions:
     name: Select OpenClaw versions
     runs-on: ubuntu-latest
@@ -45,8 +46,8 @@ jobs:
             # Explicit override from workflow_dispatch: run just that version.
             VERSIONS="[\"$PINNED\"]"
           else
-            # Default: exercise both supported versions.
-            VERSIONS='["2026.7.1","2026.8.1"]'
+            # Default: exercise every supported release line.
+            VERSIONS='["2026.7.1","2026.8.2","2026.9.3"]'
           fi
           echo "versions=$VERSIONS" >> "$GITHUB_OUTPUT"
           echo "Selected versions: $VERSIONS"
@@ -57,8 +58,8 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 45
     strategy:
-      # Don't cancel the 2026.7.1 leg just because 2026.8.1 fails (or vice
-      # versa) — we want to see the status of both versions in one run.
+      # Don't cancel the other legs just because one version fails — we
+      # want to see the status of every version in one run.
       fail-fast: false
       matrix:
         openclaw_version: ${{ fromJSON(needs.select-versions.outputs.versions) }}

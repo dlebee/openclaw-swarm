@@ -12,6 +12,7 @@ import (
 	"time"
 
 	planapply "github.com/gluwa/openclaw-swarm2/internal/claws/plans/apply"
+	"github.com/gluwa/openclaw-swarm2/internal/claws/plans/apply/common"
 	"github.com/gluwa/openclaw-swarm2/internal/claws/plans/apply/provisioning"
 	"github.com/gluwa/openclaw-swarm2/internal/hosting/linode"
 	manifestdata "github.com/gluwa/openclaw-swarm2/internal/manifests/data"
@@ -285,8 +286,9 @@ func sshRunAsGatewayAgent(t *testing.T, dial provisioning.SSHDialFunc, host stri
 }
 
 // assertNodeInstalled is the prerequisite check for everything else
-// in the gateway phase. Soft-checks v22.x (NodeSource setup_22.x
-// target) but only fails hard on a missing `node` binary entirely.
+// in the gateway phase. The fixtures leave node_major unset, so
+// install-nodejs must have landed common.DefaultNodeMajor; any other
+// major means the step's version check regressed.
 func assertNodeInstalled(t *testing.T, dial provisioning.SSHDialFunc, host string, mc manifestdata.Machine) {
 	t.Helper()
 	out, err := sshRunAsGatewayAgent(t, dial, host, mc, `node --version 2>&1`)
@@ -298,8 +300,8 @@ func assertNodeInstalled(t *testing.T, dial provisioning.SSHDialFunc, host strin
 		t.Errorf("[%s] node --version = %q, want v<major>.<minor>.<patch>", mc.Name, out)
 		return
 	}
-	if !strings.HasPrefix(out, "v22.") {
-		t.Logf("[%s] node version %q (expected v22.x from NodeSource setup_22.x)", mc.Name, out)
+	if want := fmt.Sprintf("v%d.", common.DefaultNodeMajor); !strings.HasPrefix(out, want) {
+		t.Errorf("[%s] node --version = %q, want %sx (common.DefaultNodeMajor)", mc.Name, out, want)
 	}
 }
 
