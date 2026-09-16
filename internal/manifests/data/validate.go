@@ -11,6 +11,9 @@ import (
 // overriding it via the manifest produces an incomplete second workspace.
 const reservedMainAgentID = "main"
 
+// minNodeMajor is the oldest Node.js major line node_major may select.
+const minNodeMajor = 22
+
 // Validate runs a best-effort static check of the manifest that the YAML
 // parser can't enforce on its own. It's intentionally narrow — we only gate
 // the things that are genuinely unsafe to discover at execute time:
@@ -27,6 +30,8 @@ const reservedMainAgentID = "main"
 //   - An agent binding pointing at a channel account its gateway does not
 //     declare (the bindings step writes the route regardless, leaving a
 //     route to an account that has no bot token).
+//   - A node_major below minNodeMajor (OpenClaw has never run on older Node
+//     lines, and NodeSource no longer publishes setup scripts for them).
 //   - A workspace override on the reserved "main" agent (the gateway phase
 //     bootstraps the default workspace before the agents phase runs; setting
 //     a different path here produces an incomplete second workspace while the
@@ -39,6 +44,10 @@ const reservedMainAgentID = "main"
 func ValidateManifest(m *Manifest) error {
 	if m == nil {
 		return nil
+	}
+
+	if m.NodeMajor != 0 && m.NodeMajor < minNodeMajor {
+		return fmt.Errorf("node_major %d is not supported; use %d or newer, or omit it for the default", m.NodeMajor, minNodeMajor)
 	}
 
 	for _, mach := range m.Machines {

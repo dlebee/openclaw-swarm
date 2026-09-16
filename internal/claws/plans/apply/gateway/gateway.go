@@ -61,6 +61,9 @@ type Options struct {
 	// same per-host openclaw.json / devices snapshot the agents and
 	// channels phases already populate.
 	ConfigReader common.ConfigReader
+	// NodeMajor is the manifest's node_major, forwarded to install-nodejs.
+	// Zero selects common.DefaultNodeMajor.
+	NodeMajor int
 }
 
 // AddPhase registers the "gateway" phase with up to 5 concurrent targets.
@@ -78,7 +81,7 @@ func AddPhase(p *scaffold.Plan, targets []scaffold.Target, opts Options) *scaffo
 	}
 	ph.Concurrency = n
 	ph.AddTargets(targets...)
-	ph.AddStep(common.NewInstallNodejsStep(common.Options{SSHDial: common.SSHDialFunc(opts.SSHDial)}))
+	ph.AddStep(common.NewInstallNodejsStep(common.Options{SSHDial: common.SSHDialFunc(opts.SSHDial), NodeMajor: opts.NodeMajor}))
 	ph.AddStep(common.NewInstallOpenclawStep(common.Options{SSHDial: common.SSHDialFunc(opts.SSHDial)}))
 	ph.AddStep(NewBootstrapGatewayStep(opts))
 	ph.AddStep(NewConfigureGatewayStep(opts))

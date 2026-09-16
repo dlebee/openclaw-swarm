@@ -104,7 +104,8 @@ func BuildPlan(o BuildOptions) (*scaffold.Plan, error) {
 	if len(o.Manifest.Gateways) > 0 {
 		gwTargets := gateway.BuildGatewayTargets(o.Manifest.Gateways, o.Manifest.Machines)
 		gateway.AddPhase(p, gwTargets, gateway.Options{
-			SSHDial: gateway.SSHDialFunc(o.SSHDial),
+			SSHDial:   gateway.SSHDialFunc(o.SSHDial),
+			NodeMajor: o.Manifest.NodeMajor,
 		})
 	}
 	if hasChannels(o.Manifest.Gateways) {
@@ -161,6 +162,7 @@ func BuildPlan(o BuildOptions) (*scaffold.Plan, error) {
 		nodePh := node.AddPhase(p, nodeTargets, node.Options{
 			SSHDial:      node.SSHDialFunc(o.SSHDial),
 			HostResolver: hostResolver,
+			NodeMajor:    o.Manifest.NodeMajor,
 		})
 		if len(o.Manifest.Gateways) > 0 {
 			nodePh.ProbeDependsOn = []string{"gateway"}
