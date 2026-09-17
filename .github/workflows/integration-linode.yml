@@ -48,7 +48,7 @@ jobs:
           else
             # Default: exercise every supported release line.
             # Newest first so it reports first under max-parallel: 1.
-            VERSIONS='["2026.9.3","2026.8.2","2026.7.1"]'
+            VERSIONS='["2026.9.4","2026.8.2","2026.7.1"]'
           fi
           echo "versions=$VERSIONS" >> "$GITHUB_OUTPUT"
           echo "Selected versions: $VERSIONS"
