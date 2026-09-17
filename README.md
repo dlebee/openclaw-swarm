@@ -105,6 +105,10 @@ go test -tags=integration_multipass ./test/integration/multipass/... # local VMs
 go test -tags=integration_linode    ./test/integration/linode/...    # real cloud
 ```
 
+The Linode tier runs against a matrix of OpenClaw releases;
+[`docs/compatibility.md`](docs/compatibility.md) records which versions each
+tag was verified against.
+
 ## Documentation map
 
 - **[docs/quickstart.md](docs/quickstart.md)** — get a local two-VM swarm
@@ -115,6 +119,8 @@ go test -tags=integration_linode    ./test/integration/linode/...    # real clou
   runner fit together.
 - **[docs/running-integration-tests.md](docs/running-integration-tests.md)** —
   running the three integration-test tiers.
+- **[docs/compatibility.md](docs/compatibility.md)** — which OpenClaw releases
+  each claws tag was verified against, and the Node.js floors.
 - **[docs/multipass-integration-plan.md](docs/multipass-integration-plan.md)** —
   design notes for the Multipass tier.
 - **[internal/claws/plans/apply/AGENTS.md](internal/claws/plans/apply/AGENTS.md)** —
